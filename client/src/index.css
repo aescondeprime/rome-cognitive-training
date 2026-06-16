@@ -346,19 +346,28 @@
 .rome-border-top,
 .rome-border-bottom {
   position: relative;
+  overflow: hidden;
 }
 .rome-border-top::before,
 .rome-border-bottom::after {
   content: '';
   display: block;
+  position: absolute;
+  left: 0;
+  right: 0;
   width: 100%;
   height: 12px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='12' viewBox='0 0 48 12'%3E%3Cpath d='M0 10 L4 10 L4 2 L14 2 L14 6 L8 6 L8 10 L18 10 L18 2 L22 2 L22 10 L26 10 L26 2 L36 2 L36 6 L30 6 L30 10 L40 10 L40 2 L44 2 L44 10 L48 10' fill='none' stroke='%23a0762a' stroke-width='1.2' stroke-opacity='0.45' stroke-linecap='square'/%3E%3C/svg%3E");
   background-repeat: repeat-x;
   background-position: center;
   opacity: 0.8;
+  pointer-events: none;
+}
+.rome-border-top::before {
+  top: 0;
 }
 .rome-border-bottom::after {
+  bottom: 0;
   transform: scaleY(-1);
 }
 

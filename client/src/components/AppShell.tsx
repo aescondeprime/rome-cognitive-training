@@ -142,7 +142,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </nav>
 
       {/* Main content */}
-      <main className="flex-1 min-w-0 h-full overflow-y-auto">
+      <main className="flex-1 min-w-0 h-full overflow-y-auto overflow-x-hidden">
         <div className="min-h-full p-8">
           {children}
         </div>
