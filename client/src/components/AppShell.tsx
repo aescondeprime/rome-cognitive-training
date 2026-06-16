@@ -7,6 +7,8 @@ import {
   ScrollText,
   BookMarked,
   User,
+  Users,
+  Brain,
   FlaskConical,
   Feather,
   Settings,
@@ -18,14 +20,17 @@ const NAV = [
   { href: "/training",    icon: Swords,          label: "Athena Trials"  },
   { href: "/scenarios",   icon: ScrollText,      label: "Scenarios"       },
   { href: "/vault",       icon: BookMarked,      label: "Memory Vault"    },
+  { href: "/memory",      icon: Brain,           label: "Memory Archive"  },
   { href: "/philosophy",  icon: Feather,         label: "Philosophy"      },
   { href: "/profile",     icon: User,            label: "My Profile"      },
+  { href: "/profiles",    icon: Users,           label: "Profiles"        },
   { href: "/research",    icon: FlaskConical,    label: "Research"        },
 ];
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useHashLocation();
   const { data: user } = useQuery<any>({ queryKey: ["/api/user"] });
+  const { data: activeProfile } = useQuery<any>({ queryKey: ["/api/active-profile"] });
 
   return (
     <div className="flex h-full relative">
@@ -111,6 +116,18 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <span className="text-xs font-medium">Settings</span>
             </Link>
           </div>
+          {/* Active profile indicator */}
+          {activeProfile && (
+            <div className="px-3 py-1.5">
+              <p className="text-[10px] text-muted-foreground/50 uppercase tracking-widest mb-0.5">Profile</p>
+              <p
+                className="text-xs text-gold-400/80 font-semibold truncate"
+                style={{ fontFamily: "'Cinzel', serif" }}
+              >
+                {activeProfile.name}
+              </p>
+            </div>
+          )}
           <div className="flex items-center gap-3 px-3 py-2 rounded-lg">
             <div className="w-5 h-5 rounded-full bg-gold-600/30 border border-gold-500/30 flex items-center justify-center shrink-0">
               <span className="text-[9px] font-roman font-bold text-gold-400">

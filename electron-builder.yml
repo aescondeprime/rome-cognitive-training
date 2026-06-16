@@ -1,0 +1,70 @@
+# electron-builder configuration for ROME Mark II
+# Docs: https://www.electron.build/configuration/configuration
+
+appId: com.rome.cognitivetraining
+productName: ROME
+copyright: "Copyright © 2026 ROME Cognitive Training Lab"
+
+# Main Electron entry (compiled)
+main: dist-electron/main.js
+
+# What to include in the app package
+files:
+  - dist/**/*          # Vite frontend + Express server bundle
+  - dist-electron/**/* # Electron main + preload
+  - package.json
+  - node_modules/better-sqlite3/**/*  # native module
+
+# Rebuild native modules for Electron
+npmRebuild: true
+
+# ── macOS ────────────────────────────────────────────────────────────────
+mac:
+  category: public.app-category.education
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  icon: public/icon.icns
+
+dmg:
+  title: "ROME — Cognitive Training Lab"
+  background: null
+  window:
+    width: 540
+    height: 380
+
+# ── Windows ──────────────────────────────────────────────────────────────
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: public/icon.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: public/icon.ico
+  uninstallerIcon: public/icon.ico
+  installerHeaderIcon: public/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ROME
+
+# ── Linux (optional) ─────────────────────────────────────────────────────
+linux:
+  target: AppImage
+  category: Education
+
+# ── Output directory ─────────────────────────────────────────────────────
+directories:
+  output: release
+  buildResources: public
+
+# ── Auto-update: DISABLED for Mark II (manual installs only) ─────────────
+# Uncomment when ready:
+# publish:
+#   provider: github
+#   owner: aescondeprime
+#   repo: rome-cognitive-training

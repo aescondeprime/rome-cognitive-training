@@ -14,6 +14,9 @@ import ScenarioDeck from "@/pages/ScenarioDeck";
 import Research from "@/pages/Research";
 import PhilosophyChambers from "@/pages/PhilosophyChambers";
 import Onboarding from "@/pages/Onboarding";
+import ProfileManager from "@/pages/ProfileManager";
+import LocalMemory from "@/pages/LocalMemory";
+import Settings from "@/pages/Settings";
 import NotFound from "@/pages/not-found";
 
 export default function App() {
@@ -34,6 +37,9 @@ export default function App() {
                   <Route path="/profile" component={CognitiveProfile} />
                   <Route path="/research" component={Research} />
                   <Route path="/philosophy" component={PhilosophyChambers} />
+                  <Route path="/profiles" component={ProfileManager} />
+                  <Route path="/memory" component={LocalMemory} />
+                  <Route path="/settings" component={Settings} />
                   <Route component={NotFound} />
                 </Switch>
               </AppShell>

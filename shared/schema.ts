@@ -120,3 +120,31 @@ export const notes = sqliteTable("notes", {
 export const insertNoteSchema = createInsertSchema(notes).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertNote = z.infer<typeof insertNoteSchema>;
 export type Note = typeof notes.$inferSelect;
+
+// App config — key/value store (e.g. active_profile_id)
+export const appConfig = sqliteTable("app_config", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  key: text("key").notNull().unique(),
+  value: text("value").notNull(),
+});
+
+export const insertAppConfigSchema = createInsertSchema(appConfig).omit({ id: true });
+export type InsertAppConfig = z.infer<typeof insertAppConfigSchema>;
+export type AppConfig = typeof appConfig.$inferSelect;
+
+// Memory items — local profile-specific cognitive memory
+export const memoryItems = sqliteTable("memory_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull(),
+  type: text("type").notNull().default("reflection"), // reflection|pattern|strength|weakness|goal|insight|preference
+  content: text("content").notNull(),
+  source: text("source").default("manual"), // manual|auto|import
+  confidence: integer("confidence").default(50), // 0-100
+  importance: integer("importance").default(50), // 0-100
+  createdAt: integer("created_at").default(Date.now()),
+  updatedAt: integer("updated_at").default(Date.now()),
+});
+
+export const insertMemoryItemSchema = createInsertSchema(memoryItems).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertMemoryItem = z.infer<typeof insertMemoryItemSchema>;
+export type MemoryItem = typeof memoryItems.$inferSelect;

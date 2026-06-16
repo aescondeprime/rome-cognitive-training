@@ -10,9 +10,14 @@ import {
   type RecallItem, type InsertRecallItem,
   type CalibrationHistory, type InsertCalibration,
   notes, type Note, type InsertNote,
+  appConfig, memoryItems,
+  type MemoryItem, type InsertMemoryItem,
 } from "@shared/schema";
 
-const sqlite = new Database("data.db");
+// ── DB path: use ROME_DB_PATH env var (set by Electron for desktop mode)
+// Falls back to data.db in the project root for web/dev mode.
+const DB_PATH = process.env.ROME_DB_PATH || "data.db";
+const sqlite = new Database(DB_PATH);
 const db = drizzle(sqlite);
 
 // Initialize tables
@@ -94,6 +99,22 @@ sqlite.exec(`
     created_at INTEGER DEFAULT (strftime('%s','now') * 1000),
     updated_at INTEGER DEFAULT (strftime('%s','now') * 1000)
   );
+  CREATE TABLE IF NOT EXISTS app_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,
+    value TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS memory_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    type TEXT NOT NULL DEFAULT 'reflection',
+    content TEXT NOT NULL,
+    source TEXT DEFAULT 'manual',
+    confidence INTEGER DEFAULT 50,
+    importance INTEGER DEFAULT 50,
+    created_at INTEGER DEFAULT (strftime('%s','now') * 1000),
+    updated_at INTEGER DEFAULT (strftime('%s','now') * 1000)
+  );
 `);
 
 export interface IStorage {
@@ -134,6 +155,24 @@ export interface IStorage {
   createNote(data: InsertNote): Note;
   updateNote(id: number, data: Partial<InsertNote>): Note | undefined;
   deleteNote(id: number): void;
+
+  // App config (active profile)
+  getConfig(key: string): string | undefined;
+  setConfig(key: string, value: string): void;
+  getActiveProfileId(): number;
+  setActiveProfileId(id: number): void;
+
+  // Profile management (users table is the profiles table)
+  getAllProfiles(): User[];
+  createProfile(name: string): User;
+  deleteProfile(id: number): void;
+  getProfileStats(id: number): { sessionsCompleted: number; minutesTrained: number };
+
+  // Memory items
+  getMemoryItems(userId: number): MemoryItem[];
+  createMemoryItem(data: InsertMemoryItem): MemoryItem;
+  updateMemoryItem(id: number, data: Partial<InsertMemoryItem>): MemoryItem | undefined;
+  deleteMemoryItem(id: number): void;
 }
 
 class SQLiteStorage implements IStorage {
@@ -289,6 +328,102 @@ class SQLiteStorage implements IStorage {
 
   deleteNote(id: number): void {
     db.delete(notes).where(eq(notes.id, id)).run();
+  }
+
+  // ── App Config ─────────────────────────────────────────────────────
+  getConfig(key: string): string | undefined {
+    const row = db.select().from(appConfig).where(eq(appConfig.key, key)).get();
+    return row?.value;
+  }
+
+  setConfig(key: string, value: string): void {
+    const existing = db.select().from(appConfig).where(eq(appConfig.key, key)).get();
+    if (existing) {
+      db.update(appConfig).set({ value }).where(eq(appConfig.key, key)).run();
+    } else {
+      db.insert(appConfig).values({ key, value }).run();
+    }
+  }
+
+  getActiveProfileId(): number {
+    const val = this.getConfig("active_profile_id");
+    if (val) {
+      const id = parseInt(val, 10);
+      if (!isNaN(id)) return id;
+    }
+    // Fall back to default user
+    const user = this.getDefaultUser();
+    this.setConfig("active_profile_id", String(user.id));
+    return user.id;
+  }
+
+  setActiveProfileId(id: number): void {
+    this.setConfig("active_profile_id", String(id));
+  }
+
+  // ── Profile Management ─────────────────────────────────────────────
+  getAllProfiles(): User[] {
+    return db.select().from(users).orderBy(users.createdAt).all();
+  }
+
+  createProfile(name: string): User {
+    const user = db.insert(users).values({ name }).returning().get();
+    // Initialize domain scores for new profile
+    const domains = ["recall", "working_memory", "focus", "flexibility", "problem_solving", "creativity", "intuition", "metacognition"];
+    for (const domain of domains) {
+      db.insert(domainScores).values({ userId: user.id, domain, score: 50 }).run();
+    }
+    return user;
+  }
+
+  deleteProfile(id: number): void {
+    // Cascade delete in order: memory_items → notes → calibration_history → recall_items → sessions → trials → domain_scores → users
+    db.delete(memoryItems).where(eq(memoryItems.userId, id)).run();
+    db.delete(notes).where(eq(notes.userId, id)).run();
+    db.delete(calibrationHistory).where(eq(calibrationHistory.userId, id)).run();
+    db.delete(recallItems).where(eq(recallItems.userId, id)).run();
+    db.delete(sessions).where(eq(sessions.userId, id)).run();
+    db.delete(trials).where(eq(trials.userId, id)).run();
+    db.delete(domainScores).where(eq(domainScores.userId, id)).run();
+    db.delete(users).where(eq(users.id, id)).run();
+  }
+
+  getProfileStats(id: number): { sessionsCompleted: number; minutesTrained: number } {
+    const result = db.select({
+      sessionsCompleted: sql<number>`COUNT(*)`,
+      minutesTrained: sql<number>`COALESCE(SUM(duration_minutes), 0)`,
+    })
+      .from(sessions)
+      .where(eq(sessions.userId, id))
+      .get();
+    return {
+      sessionsCompleted: result?.sessionsCompleted ?? 0,
+      minutesTrained: result?.minutesTrained ?? 0,
+    };
+  }
+
+  // ── Memory Items ───────────────────────────────────────────────────
+  getMemoryItems(userId: number): MemoryItem[] {
+    return db.select().from(memoryItems)
+      .where(eq(memoryItems.userId, userId))
+      .orderBy(desc(memoryItems.createdAt))
+      .all();
+  }
+
+  createMemoryItem(data: InsertMemoryItem): MemoryItem {
+    const now = Date.now();
+    return db.insert(memoryItems).values({ ...data, createdAt: now, updatedAt: now }).returning().get();
+  }
+
+  updateMemoryItem(id: number, data: Partial<InsertMemoryItem>): MemoryItem | undefined {
+    return db.update(memoryItems)
+      .set({ ...data, updatedAt: Date.now() })
+      .where(eq(memoryItems.id, id))
+      .returning().get();
+  }
+
+  deleteMemoryItem(id: number): void {
+    db.delete(memoryItems).where(eq(memoryItems.id, id)).run();
   }
 }
 
