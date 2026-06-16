@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ROME — Cognitive Training Lab</title>
+  <meta name="description" content="ROME — A serious cognitive training lab built on evidence." />
+
+  <!-- Cinzel (Roman serif) + DM Sans + DM Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700;900&family=Cinzel+Decorative:wght@400;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <!-- Cave background -->
+  <div class="rome-bg" aria-hidden="true"></div>
+
+  <!-- Floating particles canvas -->
+  <canvas id="rome-particles" aria-hidden="true"></canvas>
+
+  <!-- App root -->
+  <div id="root" style="position:relative;"></div>
+
+  <!-- Particle system script (runs before React hydrates) -->
+  <script>
+    (function() {
+      const canvas = document.getElementById('rome-particles');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+
+      function resize() {
+        canvas.width  = window.innerWidth;
+        canvas.height = window.innerHeight;
+      }
+      resize();
+      window.addEventListener('resize', resize);
+
+      // Generate particles
+      const COUNT = 120;
+      const particles = Array.from({ length: COUNT }, () => ({
+        x: Math.random() * window.innerWidth,
+        y: Math.random() * window.innerHeight,
+        r: Math.random() * 1.2 + 0.2,
+        // Gold-tinted white
+        alpha: Math.random() * 0.35 + 0.05,
+        vx: (Math.random() - 0.5) * 0.12,
+        vy: -Math.random() * 0.15 - 0.04,   // drift upward slowly
+        twinkle: Math.random() * Math.PI * 2,
+        twinkleSpeed: Math.random() * 0.015 + 0.005,
+      }));
+
+      function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        particles.forEach(p => {
+          p.x += p.vx;
+          p.y += p.vy;
+          p.twinkle += p.twinkleSpeed;
+
+          // Wrap around
+          if (p.x < -2)  p.x = canvas.width + 2;
+          if (p.x > canvas.width + 2)  p.x = -2;
+          if (p.y < -2)  p.y = canvas.height + 2;
+
+          const alpha = p.alpha * (0.5 + 0.5 * Math.sin(p.twinkle));
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          // Warmer near top-left (near the ray source), cooler elsewhere
+          const warmth = (1 - p.x / canvas.width) * 0.5 + (1 - p.y / canvas.height) * 0.5;
+          const r = Math.round(200 + warmth * 55);
+          const g = Math.round(170 + warmth * 40);
+          const b = Math.round(90  + warmth * 20);
+          ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
+          ctx.fill();
+        });
+
+        requestAnimationFrame(draw);
+      }
+      draw();
+    })();
+  </script>
+
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

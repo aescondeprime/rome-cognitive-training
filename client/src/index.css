@@ -1,0 +1,551 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700;900&family=Cinzel+Decorative:wght@400;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── ROME Design System ──────────────────────────────────────────── */
+@layer base {
+  :root {
+    /* Gold palette */
+    --gold-100: 48 100% 96%;
+    --gold-200: 46 95% 85%;
+    --gold-300: 44 90% 72%;
+    --gold-400: 43 88% 60%;
+    --gold-500: 42 85% 50%;   /* primary gold */
+    --gold-600: 40 80% 40%;
+    --gold-700: 38 75% 30%;
+
+    /* Cave background tones */
+    --cave-950: 220 18% 4%;   /* deepest void */
+    --cave-900: 222 16% 7%;   /* main background */
+    --cave-850: 220 15% 9%;
+    --cave-800: 218 14% 11%;  /* card surface */
+    --cave-750: 216 13% 13%;
+    --cave-700: 214 12% 16%;  /* border / raised */
+    --cave-600: 212 10% 22%;  /* muted surface */
+
+    /* Semantic mappings */
+    --background:    220 18% 4%;
+    --foreground:    46 60% 88%;     /* warm off-white parchment */
+
+    --card:          222 16% 8%;
+    --card-foreground: 46 55% 85%;
+
+    --popover:       222 16% 8%;
+    --popover-foreground: 46 55% 85%;
+
+    --primary:       43 88% 55%;    /* Roman gold */
+    --primary-foreground: 220 18% 6%;
+
+    --secondary:     218 14% 14%;
+    --secondary-foreground: 46 50% 80%;
+
+    --muted:         216 12% 14%;
+    --muted-foreground: 214 20% 50%;
+
+    --accent:        218 14% 14%;
+    --accent-foreground: 43 88% 60%;
+
+    --destructive:   0 72% 51%;
+    --destructive-foreground: 46 60% 88%;
+
+    --border:        216 14% 16%;
+    --input:         216 14% 12%;
+    --ring:          43 88% 55%;
+
+    --radius: 0.75rem;
+
+    /* Roman Crimson */
+    --crimson-900: 0 65% 8%;    /* near-black red */
+    --crimson-800: 0 60% 13%;   /* dark iron red */
+    --crimson-700: 0 58% 20%;   /* deep metallic red */
+    --crimson-600: 0 55% 28%;   /* blood border */
+    --crimson-500: 0 52% 36%;   /* main crimson */
+    --crimson-400: 0 48% 46%;   /* lighter accent */
+    --crimson-300: 0 45% 58%;   /* highlight */
+
+    /* Domain colors — Roman-inspired */
+    --domain-recall:        43 88% 58%;   /* gold */
+    --domain-working:       270 60% 62%;  /* imperial purple */
+    --domain-focus:         165 55% 48%;  /* roman jade */
+    --domain-flexibility:   25 85% 58%;   /* terracotta */
+    --domain-problem:       210 70% 58%;  /* lapis lazuli */
+    --domain-creativity:    35 90% 62%;   /* amber */
+    --domain-intuition:     345 60% 58%;  /* rose marble */
+    --domain-metacognition: 175 55% 48%;  /* patina */
+
+    /* Light ray source — upper-left angle */
+    --ray-x: 20%;
+    --ray-y: 0%;
+  }
+
+  /* Light mode kept as cave for ROME — no light mode */
+  .light {
+    --background:    220 18% 4%;
+    --foreground:    46 60% 88%;
+    --card:          222 16% 8%;
+    --card-foreground: 46 55% 85%;
+    --popover:       222 16% 8%;
+    --popover-foreground: 46 55% 85%;
+    --primary:       43 88% 55%;
+    --primary-foreground: 220 18% 6%;
+    --secondary:     218 14% 14%;
+    --secondary-foreground: 46 50% 80%;
+    --muted:         216 12% 14%;
+    --muted-foreground: 214 20% 50%;
+    --accent:        218 14% 14%;
+    --accent-foreground: 43 88% 60%;
+    --border:        216 14% 16%;
+    --input:         216 14% 12%;
+    --ring:          43 88% 55%;
+  }
+}
+
+/* ─── Global Reset ───────────────────────────────────────────────── */
+@layer base {
+  * { @apply border-border; }
+
+  html, body {
+    @apply bg-background text-foreground;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  #root {
+    height: 100%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: 'Cinzel', 'Georgia', serif;
+    letter-spacing: 0.04em;
+  }
+
+  .font-mono {
+    font-family: 'DM Mono', monospace;
+  }
+}
+
+/* ─── Cave Background + Particle Canvas ─────────────────────────── */
+.rome-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  /* Deep cave gradient */
+  background:
+    radial-gradient(ellipse 80% 60% at var(--ray-x) var(--ray-y),
+      hsl(43 40% 12% / 0.55) 0%,
+      hsl(220 18% 5% / 0) 65%),
+    radial-gradient(ellipse 50% 70% at 80% 100%,
+      hsl(222 20% 3% / 0.8) 0%,
+      transparent 70%),
+    linear-gradient(160deg,
+      hsl(220 20% 6%) 0%,
+      hsl(222 18% 4%) 40%,
+      hsl(220 22% 3%) 100%);
+}
+
+/* Animated light ray from upper-left */
+.rome-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    conic-gradient(
+      from 130deg at 18% -5%,
+      transparent 0deg,
+      hsl(43 60% 45% / 0.04) 8deg,
+      hsl(43 60% 45% / 0.09) 14deg,
+      hsl(43 60% 45% / 0.04) 20deg,
+      transparent 30deg,
+      transparent 360deg
+    );
+  animation: rayPulse 8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Second softer ray */
+.rome-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    conic-gradient(
+      from 140deg at 25% -10%,
+      transparent 0deg,
+      hsl(43 80% 50% / 0.02) 10deg,
+      hsl(43 80% 50% / 0.06) 18deg,
+      hsl(43 80% 50% / 0.02) 26deg,
+      transparent 40deg,
+      transparent 360deg
+    );
+  animation: rayPulse 12s ease-in-out infinite reverse;
+  pointer-events: none;
+}
+
+@keyframes rayPulse {
+  0%, 100% { opacity: 0.7; }
+  50%       { opacity: 1;   }
+}
+
+/* Floating particle canvas */
+#rome-particles {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* ─── Floating Card Depth Effect ─────────────────────────────────── */
+/* Applied to every card/panel to create the "floating in the cave" look */
+.rome-card {
+  position: relative;
+  background: hsl(var(--cave-800));
+  border: 1px solid hsl(43 30% 20% / 0.5);
+  border-radius: var(--radius);
+  /* Multi-layer shadow: ambient occlusion + top-left gold glow */
+  box-shadow:
+    /* depth — bottom right dark */
+    4px 8px 32px hsl(220 25% 2% / 0.7),
+    /* inner top-left gold catch-light from the ray */
+    inset 1px 1px 0 hsl(43 60% 50% / 0.07),
+    /* subtle lift */
+    0 2px 6px hsl(220 20% 2% / 0.6);
+  /* Slight "lift" via translate */
+  transform: translateZ(0);
+  transition: box-shadow 0.25s ease, transform 0.25s ease, border-color 0.25s ease;
+}
+
+.rome-card:hover {
+  box-shadow:
+    6px 12px 40px hsl(220 25% 2% / 0.85),
+    inset 1px 1px 0 hsl(43 60% 50% / 0.15),
+    0 0 0 1px hsl(43 50% 40% / 0.2);
+  border-color: hsl(43 40% 25% / 0.7);
+  transform: translateY(-1px) translateZ(0);
+}
+
+/* Stat / info card variant — no hover lift */
+.rome-card-static {
+  @extend .rome-card;
+  box-shadow:
+    2px 4px 20px hsl(220 25% 2% / 0.6),
+    inset 1px 1px 0 hsl(43 60% 50% / 0.06);
+}
+
+/* Light-catch highlight strip at top of cards (simulates ray hitting the edge) */
+.rome-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 12%;
+  right: 35%;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent,
+    hsl(43 70% 60% / 0.18) 30%,
+    hsl(43 70% 60% / 0.28) 50%,
+    hsl(43 70% 60% / 0.08) 80%,
+    transparent);
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+/* ─── Roman Typography Utilities ─────────────────────────────────── */
+.font-roman {
+  font-family: 'Cinzel', 'Georgia', serif;
+  letter-spacing: 0.06em;
+}
+
+.font-roman-deco {
+  font-family: 'Cinzel Decorative', serif;
+  letter-spacing: 0.08em;
+}
+
+/* ─── Gold Accent Utilities ──────────────────────────────────────── */
+.text-gold {
+  color: hsl(var(--gold-400));
+}
+
+.text-gold-bright {
+  color: hsl(var(--gold-300));
+}
+
+.gold-gradient {
+  background: linear-gradient(135deg,
+    hsl(46 90% 72%) 0%,
+    hsl(43 88% 55%) 40%,
+    hsl(40 80% 42%) 70%,
+    hsl(43 85% 60%) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gold-border {
+  border-color: hsl(43 50% 35% / 0.6);
+}
+
+.gold-glow {
+  box-shadow: 0 0 20px hsl(43 80% 50% / 0.15), 0 0 60px hsl(43 80% 50% / 0.05);
+}
+
+/* ─── Primary Button — Roman Gold ────────────────────────────────── */
+.btn-rome {
+  background: linear-gradient(135deg, hsl(44 85% 55%) 0%, hsl(40 82% 44%) 100%);
+  color: hsl(220 18% 6%);
+  font-family: 'Cinzel', serif;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  border: none;
+  border-radius: var(--radius);
+  box-shadow:
+    0 2px 12px hsl(43 80% 40% / 0.35),
+    inset 0 1px 0 hsl(46 90% 75% / 0.3);
+  transition: all 0.2s ease;
+}
+.btn-rome:hover {
+  background: linear-gradient(135deg, hsl(46 90% 62%) 0%, hsl(42 85% 50%) 100%);
+  box-shadow:
+    0 4px 20px hsl(43 80% 40% / 0.5),
+    inset 0 1px 0 hsl(46 90% 80% / 0.4);
+  transform: translateY(-1px);
+}
+
+/* ─── Sidebar — semi-transparent glass over cave ──────────────────── */
+.rome-sidebar {
+  background: hsl(222 22% 6% / 0.55);
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  /* Crimson right-edge accent — the Roman boundary */
+  border-right: 1px solid hsl(0 52% 32% / 0.55);
+  box-shadow:
+    /* outer glow bleed */
+    2px 0 28px hsl(220 20% 2% / 0.6),
+    /* crimson right edge glow */
+    2px 0 12px hsl(0 55% 25% / 0.35),
+    /* gold catch-light on top */
+    inset 0 1px 0 hsl(43 60% 40% / 0.08);
+}
+
+/* ─── Roman Border Design ──────────────────────────────────────────── */
+/*
+  SVG-based meander (Greek key) pattern encoded as a data URI.
+  Used as a top/bottom border strip on special sections.
+*/
+.rome-border-top,
+.rome-border-bottom {
+  position: relative;
+}
+.rome-border-top::before,
+.rome-border-bottom::after {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 12px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='12' viewBox='0 0 48 12'%3E%3Cpath d='M0 10 L4 10 L4 2 L14 2 L14 6 L8 6 L8 10 L18 10 L18 2 L22 2 L22 10 L26 10 L26 2 L36 2 L36 6 L30 6 L30 10 L40 10 L40 2 L44 2 L44 10 L48 10' fill='none' stroke='%23a0762a' stroke-width='1.2' stroke-opacity='0.45' stroke-linecap='square'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-position: center;
+  opacity: 0.8;
+}
+.rome-border-bottom::after {
+  transform: scaleY(-1);
+}
+
+/* Standalone border strip (used as a divider) */
+.rome-meander {
+  width: 100%;
+  height: 10px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='12' viewBox='0 0 48 12'%3E%3Cpath d='M0 10 L4 10 L4 2 L14 2 L14 6 L8 6 L8 10 L18 10 L18 2 L22 2 L22 10 L26 10 L26 2 L36 2 L36 6 L30 6 L30 10 L40 10 L40 2 L44 2 L44 10 L48 10' fill='none' stroke='%23a0762a' stroke-width='1.2' stroke-opacity='0.5' stroke-linecap='square'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-position: center;
+  flex-shrink: 0;
+}
+
+/* Crimson variant */
+.rome-meander-crimson {
+  width: 100%;
+  height: 10px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='12' viewBox='0 0 48 12'%3E%3Cpath d='M0 10 L4 10 L4 2 L14 2 L14 6 L8 6 L8 10 L18 10 L18 2 L22 2 L22 10 L26 10 L26 2 L36 2 L36 6 L30 6 L30 10 L40 10 L40 2 L44 2 L44 10 L48 10' fill='none' stroke='%238B2020' stroke-width='1.2' stroke-opacity='0.6' stroke-linecap='square'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-position: center;
+  flex-shrink: 0;
+}
+
+/* Card with roman border treatment */
+.rome-card-imperial {
+  position: relative;
+  border-top: 2px solid transparent;
+  border-image: linear-gradient(90deg,
+    transparent 0%,
+    hsl(0 52% 32% / 0.6) 20%,
+    hsl(0 52% 38% / 0.8) 50%,
+    hsl(0 52% 32% / 0.6) 80%,
+    transparent 100%) 1;
+}
+
+/* ─── Crimson Accent Utilities ───────────────────────────────────── */
+.text-crimson        { color: hsl(0 48% 52%); }
+.text-crimson-bright { color: hsl(0 45% 62%); }
+.bg-crimson          { background: hsl(0 55% 28% / 0.18); border-color: hsl(0 50% 32% / 0.4); }
+.border-crimson      { border-color: hsl(0 52% 30% / 0.6); }
+
+.crimson-glow {
+  box-shadow: 0 0 20px hsl(0 60% 30% / 0.2), 0 0 60px hsl(0 60% 20% / 0.08);
+}
+
+/* Metallic red gradient text */
+.crimson-gradient {
+  background: linear-gradient(135deg,
+    hsl(0 50% 55%) 0%,
+    hsl(0 40% 42%) 40%,
+    hsl(0 55% 60%) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─── Domain Score Bar Colors ────────────────────────────────────── */
+.score-bar-recall        { background: linear-gradient(90deg, hsl(43 88% 45%), hsl(43 88% 58%)); }
+.score-bar-working       { background: linear-gradient(90deg, hsl(270 60% 52%), hsl(270 60% 62%)); }
+.score-bar-focus         { background: linear-gradient(90deg, hsl(165 55% 38%), hsl(165 55% 48%)); }
+.score-bar-flexibility   { background: linear-gradient(90deg, hsl(25 85% 48%), hsl(25 85% 58%)); }
+.score-bar-problem       { background: linear-gradient(90deg, hsl(210 70% 48%), hsl(210 70% 58%)); }
+.score-bar-creativity    { background: linear-gradient(90deg, hsl(35 90% 52%), hsl(35 90% 62%)); }
+.score-bar-intuition     { background: linear-gradient(90deg, hsl(345 60% 48%), hsl(345 60% 58%)); }
+.score-bar-metacognition { background: linear-gradient(90deg, hsl(175 55% 38%), hsl(175 55% 48%)); }
+
+/* Domain text colors */
+.text-domain-recall        { color: hsl(43 88% 60%); }
+.text-domain-working       { color: hsl(270 60% 68%); }
+.text-domain-focus         { color: hsl(165 55% 52%); }
+.text-domain-flexibility   { color: hsl(25 85% 62%); }
+.text-domain-problem       { color: hsl(210 70% 65%); }
+.text-domain-creativity    { color: hsl(35 90% 65%); }
+.text-domain-intuition     { color: hsl(345 60% 62%); }
+.text-domain-metacognition { color: hsl(175 55% 52%); }
+
+/* Domain bg (transparent) */
+.bg-domain-recall        { background: hsl(43 88% 58% / 0.12); border-color: hsl(43 88% 58% / 0.3); }
+.bg-domain-working       { background: hsl(270 60% 62% / 0.12); border-color: hsl(270 60% 62% / 0.3); }
+.bg-domain-focus         { background: hsl(165 55% 48% / 0.12); border-color: hsl(165 55% 48% / 0.3); }
+.bg-domain-flexibility   { background: hsl(25 85% 58% / 0.12); border-color: hsl(25 85% 58% / 0.3); }
+.bg-domain-problem       { background: hsl(210 70% 58% / 0.12); border-color: hsl(210 70% 58% / 0.3); }
+.bg-domain-creativity    { background: hsl(35 90% 62% / 0.12); border-color: hsl(35 90% 62% / 0.3); }
+.bg-domain-intuition     { background: hsl(345 60% 58% / 0.12); border-color: hsl(345 60% 58% / 0.3); }
+.bg-domain-metacognition { background: hsl(175 55% 48% / 0.12); border-color: hsl(175 55% 48% / 0.3); }
+
+/* ─── Scrollbar ──────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: hsl(var(--cave-900)); }
+::-webkit-scrollbar-thumb { background: hsl(43 30% 22%); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(43 50% 32%); }
+
+/* ─── Obsidian-style note editor ─────────────────────────────────── */
+.note-editor {
+  font-family: 'DM Sans', sans-serif;
+  color: hsl(var(--foreground));
+  line-height: 1.8;
+  caret-color: hsl(var(--gold-400));
+}
+
+.note-editor:focus { outline: none; }
+
+.note-content h1 { @apply text-2xl font-roman text-gold mb-3 mt-6; }
+.note-content h2 { @apply text-xl font-roman text-gold-bright mb-2 mt-5; }
+.note-content h3 { @apply text-base font-roman text-gold mb-2 mt-4; }
+.note-content p  { @apply text-sm leading-relaxed mb-3; color: hsl(46 40% 78%); }
+.note-content ul { @apply list-disc list-inside text-sm mb-3 space-y-1; color: hsl(46 40% 78%); }
+.note-content ol { @apply list-decimal list-inside text-sm mb-3 space-y-1; color: hsl(46 40% 78%); }
+.note-content blockquote {
+  border-left: 3px solid hsl(43 60% 40%);
+  padding-left: 1rem;
+  margin: 1rem 0;
+  color: hsl(43 50% 62%);
+  font-style: italic;
+}
+.note-content code {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.8em;
+  background: hsl(216 14% 10%);
+  border: 1px solid hsl(216 14% 18%);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  color: hsl(43 70% 65%);
+}
+.note-content pre {
+  background: hsl(216 14% 8%);
+  border: 1px solid hsl(216 14% 16%);
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+.note-content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+.note-content strong { color: hsl(46 70% 80%); font-weight: 600; }
+.note-content em { color: hsl(43 55% 68%); font-style: italic; }
+.note-content a { color: hsl(43 80% 58%); text-decoration: underline; text-underline-offset: 3px; }
+.note-content hr { border-color: hsl(43 25% 18%); margin: 1.5rem 0; }
+
+/* Tag pill */
+.rome-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-family: 'Cinzel', serif;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: hsl(43 40% 14%);
+  border: 1px solid hsl(43 40% 22%);
+  color: hsl(43 70% 62%);
+}
+
+/* ─── Animations ─────────────────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-up {
+  animation: fadeUp 0.35s ease both;
+}
+
+@keyframes goldShimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.gold-shimmer {
+  background: linear-gradient(90deg,
+    hsl(43 60% 50%) 0%,
+    hsl(46 95% 75%) 30%,
+    hsl(43 60% 50%) 60%,
+    hsl(40 70% 42%) 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: goldShimmer 4s linear infinite;
+}
+
+/* ─── Z-layer stack ──────────────────────────────────────────────── */
+.z-bg    { z-index: 0; }
+.z-ray   { z-index: 1; }
+.z-ui    { z-index: 10; }
+.z-modal { z-index: 50; }
