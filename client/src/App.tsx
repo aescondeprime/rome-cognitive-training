@@ -1,4 +1,5 @@
 import { Switch, Route, Router } from "wouter";
+import Taskboard from "@/pages/Taskboard";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
@@ -39,6 +40,7 @@ export default function App() {
                   <Route path="/philosophy" component={PhilosophyChambers} />
                   <Route path="/profiles" component={ProfileManager} />
                   <Route path="/memory" component={LocalMemory} />
+                  <Route path="/taskboard" component={Taskboard} />
                   <Route path="/settings" component={Settings} />
                   <Route component={NotFound} />
                 </Switch>

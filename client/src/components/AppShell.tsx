@@ -12,6 +12,7 @@ import {
   FlaskConical,
   Feather,
   Settings,
+  LayoutGrid,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 
@@ -25,6 +26,7 @@ const NAV = [
   { href: "/profile",     icon: User,            label: "My Profile"      },
   { href: "/profiles",    icon: Users,           label: "Profiles"        },
   { href: "/research",    icon: FlaskConical,    label: "Research"        },
+  { href: "/taskboard",  icon: LayoutGrid,      label: "Taskboard"       },
 ];
 
 export default function AppShell({ children }: { children: React.ReactNode }) {

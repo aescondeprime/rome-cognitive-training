@@ -447,5 +447,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ success: true, profileId: newId, profileName });
   });
 
+  // ── Taskboard Cards ───────────────────────────────────────────────
+  app.get("/api/taskboard", (req, res) => {
+    const userId = storage.getActiveProfileId();
+    res.json(storage.getTaskboardCards(userId));
+  });
+
+  app.post("/api/taskboard", (req, res) => {
+    const userId = storage.getActiveProfileId();
+    const { content = "", color = "gold", posX = 100, posY = 100, width = 200 } = req.body;
+    const card = storage.createTaskboardCard({ userId, content, color, posX, posY, pinned: 0, width });
+    res.json(card);
+  });
+
+  app.patch("/api/taskboard/:id", (req, res) => {
+    const id = parseInt(req.params.id);
+    const updated = storage.updateTaskboardCard(id, req.body);
+    if (!updated) return res.status(404).json({ error: "not found" });
+    res.json(updated);
+  });
+
+  app.delete("/api/taskboard/:id", (req, res) => {
+    storage.deleteTaskboardCard(parseInt(req.params.id));
+    res.json({ success: true });
+  });
+
   return httpServer;
 }

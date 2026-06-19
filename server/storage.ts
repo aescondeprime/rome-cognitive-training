@@ -14,6 +14,21 @@ import {
   type MemoryItem, type InsertMemoryItem,
 } from "@shared/schema";
 
+// Taskboard card types (raw SQLite, not drizzle-schema)
+export interface TaskboardCard {
+  id: number;
+  userId: number;
+  content: string;
+  color: string;
+  posX: number;
+  posY: number;
+  pinned: number;
+  width: number;
+  createdAt: number;
+  updatedAt: number;
+}
+export type InsertTaskboardCard = Omit<TaskboardCard, 'id' | 'createdAt' | 'updatedAt'>;
+
 // ── DB path: use ROME_DB_PATH env var (set by Electron for desktop mode)
 // Falls back to data.db in the project root for web/dev mode.
 const DB_PATH = process.env.ROME_DB_PATH || "data.db";
@@ -104,6 +119,18 @@ sqlite.exec(`
     key TEXT NOT NULL UNIQUE,
     value TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS taskboard_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    color TEXT NOT NULL DEFAULT 'gold',
+    pos_x REAL NOT NULL DEFAULT 100,
+    pos_y REAL NOT NULL DEFAULT 100,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    width REAL NOT NULL DEFAULT 200,
+    created_at INTEGER DEFAULT (strftime('%s','now') * 1000),
+    updated_at INTEGER DEFAULT (strftime('%s','now') * 1000)
+  );
   CREATE TABLE IF NOT EXISTS memory_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -173,6 +200,12 @@ export interface IStorage {
   createMemoryItem(data: InsertMemoryItem): MemoryItem;
   updateMemoryItem(id: number, data: Partial<InsertMemoryItem>): MemoryItem | undefined;
   deleteMemoryItem(id: number): void;
+
+  // Taskboard cards
+  getTaskboardCards(userId: number): TaskboardCard[];
+  createTaskboardCard(data: InsertTaskboardCard): TaskboardCard;
+  updateTaskboardCard(id: number, data: Partial<InsertTaskboardCard>): TaskboardCard | undefined;
+  deleteTaskboardCard(id: number): void;
 }
 
 class SQLiteStorage implements IStorage {
@@ -424,6 +457,45 @@ class SQLiteStorage implements IStorage {
 
   deleteMemoryItem(id: number): void {
     db.delete(memoryItems).where(eq(memoryItems.id, id)).run();
+  }
+
+  // ── Taskboard Cards ────────────────────────────────────────────────
+  getTaskboardCards(userId: number): TaskboardCard[] {
+    const rows = sqlite.prepare(
+      "SELECT id, user_id as userId, content, color, pos_x as posX, pos_y as posY, pinned, width, created_at as createdAt, updated_at as updatedAt FROM taskboard_cards WHERE user_id = ? ORDER BY created_at DESC"
+    ).all(userId) as TaskboardCard[];
+    return rows;
+  }
+
+  createTaskboardCard(data: InsertTaskboardCard): TaskboardCard {
+    const now = Date.now();
+    const result = sqlite.prepare(
+      "INSERT INTO taskboard_cards (user_id, content, color, pos_x, pos_y, pinned, width, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, user_id as userId, content, color, pos_x as posX, pos_y as posY, pinned, width, created_at as createdAt, updated_at as updatedAt"
+    ).get(data.userId, data.content, data.color, data.posX, data.posY, data.pinned, data.width, now, now) as TaskboardCard;
+    return result;
+  }
+
+  updateTaskboardCard(id: number, data: Partial<InsertTaskboardCard>): TaskboardCard | undefined {
+    const now = Date.now();
+    const fields: string[] = [];
+    const values: any[] = [];
+    if (data.content !== undefined) { fields.push("content = ?"); values.push(data.content); }
+    if (data.color !== undefined)   { fields.push("color = ?");   values.push(data.color); }
+    if (data.posX !== undefined)    { fields.push("pos_x = ?");   values.push(data.posX); }
+    if (data.posY !== undefined)    { fields.push("pos_y = ?");   values.push(data.posY); }
+    if (data.pinned !== undefined)  { fields.push("pinned = ?");  values.push(data.pinned); }
+    if (data.width !== undefined)   { fields.push("width = ?");   values.push(data.width); }
+    if (fields.length === 0) return this.getTaskboardCards(0).find(c => c.id === id);
+    fields.push("updated_at = ?");
+    values.push(now, id);
+    const result = sqlite.prepare(
+      `UPDATE taskboard_cards SET ${fields.join(", ")} WHERE id = ? RETURNING id, user_id as userId, content, color, pos_x as posX, pos_y as posY, pinned, width, created_at as createdAt, updated_at as updatedAt`
+    ).get(...values) as TaskboardCard | undefined;
+    return result;
+  }
+
+  deleteTaskboardCard(id: number): void {
+    sqlite.prepare("DELETE FROM taskboard_cards WHERE id = ?").run(id);
   }
 }
 
