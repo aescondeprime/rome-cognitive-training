@@ -1,13 +1,13 @@
-import { Switch, Route, Router } from "wouter";
+import { Switch, Route, Router, Redirect } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import AppShell from "@/components/AppShell";
+import { ConstellationPortal } from "@/components/ConstellationOverlay";
 
 // Pages
-import Home from "@/pages/Home";
 import Dashboard from "@/pages/Dashboard";
 import TrainingMap from "@/pages/TrainingMap";
 import Activity from "@/pages/Activity";
@@ -27,28 +27,34 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
+        {/* Global constellation overlay — toggled by Tab or the ⊕ button */}
+        <ConstellationPortal />
+
         <Router hook={useHashLocation}>
           <Switch>
-            {/* Full-screen routes — no sidebar */}
             <Route path="/onboarding" component={Onboarding} />
-            <Route path="/" component={Home} />
 
-            {/* Standard routes — wrapped in AppShell sidebar */}
+            {/* "/" redirects to dashboard */}
+            <Route path="/">
+              <Redirect to="/dashboard" />
+            </Route>
+
+            {/* All main routes inside AppShell */}
             <Route>
               <AppShell>
                 <Switch>
-                  <Route path="/dashboard"   component={Dashboard} />
-                  <Route path="/training"    component={TrainingMap} />
+                  <Route path="/dashboard"    component={Dashboard} />
+                  <Route path="/training"     component={TrainingMap} />
                   <Route path="/activity/:id" component={Activity} />
-                  <Route path="/scenarios"   component={ScenarioDeck} />
-                  <Route path="/vault"       component={MemoryVault} />
-                  <Route path="/profile"     component={CognitiveProfile} />
-                  <Route path="/research"    component={Research} />
-                  <Route path="/philosophy"  component={PhilosophyChambers} />
-                  <Route path="/profiles"    component={ProfileManager} />
-                  <Route path="/memory"      component={LocalMemory} />
-                  <Route path="/taskboard"   component={Taskboard} />
-                  <Route path="/settings"    component={Settings} />
+                  <Route path="/scenarios"    component={ScenarioDeck} />
+                  <Route path="/vault"        component={MemoryVault} />
+                  <Route path="/profile"      component={CognitiveProfile} />
+                  <Route path="/research"     component={Research} />
+                  <Route path="/philosophy"   component={PhilosophyChambers} />
+                  <Route path="/profiles"     component={ProfileManager} />
+                  <Route path="/memory"       component={LocalMemory} />
+                  <Route path="/taskboard"    component={Taskboard} />
+                  <Route path="/settings"     component={Settings} />
                   <Route component={NotFound} />
                 </Switch>
               </AppShell>

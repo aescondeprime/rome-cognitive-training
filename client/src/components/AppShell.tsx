@@ -1,156 +1,116 @@
-import { Link } from "wouter";
-import { useHashLocation } from "wouter/use-hash-location";
-import { cn } from "@/lib/utils";
-import {
-  LayoutDashboard,
-  Swords,
-  ScrollText,
-  BookMarked,
-  User,
-  Users,
-  Brain,
-  FlaskConical,
-  Feather,
-  Settings,
-  LayoutGrid,
-  Globe2,
-} from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+// AppShell — minimal chrome with no sidebar nav.
+// Navigation is done entirely through the Constellation overlay (Tab / ⊕ button).
 
-const NAV = [
-  { href: "/",            icon: Globe2,          label: "Constellation"  },
-  { href: "/dashboard",   icon: LayoutDashboard, label: "Command Center" },
-  { href: "/training",    icon: Swords,          label: "Athena Trials"  },
-  { href: "/scenarios",   icon: ScrollText,      label: "Scenarios"       },
-  { href: "/vault",       icon: BookMarked,      label: "Memory Vault"    },
-  { href: "/memory",      icon: Brain,           label: "Memory Archive"  },
-  { href: "/philosophy",  icon: Feather,         label: "Philosophy"      },
-  { href: "/profile",     icon: User,            label: "My Profile"      },
-  { href: "/profiles",    icon: Users,           label: "Profiles"        },
-  { href: "/research",    icon: FlaskConical,    label: "Research"        },
-  { href: "/taskboard",  icon: LayoutGrid,      label: "Taskboard"       },
-];
+import { useQuery } from "@tanstack/react-query";
+import { useHashLocation } from "wouter/use-hash-location";
+import { Settings } from "lucide-react";
+import { Link } from "wouter";
+import { cn } from "@/lib/utils";
+import { ConstellationTrigger } from "./ConstellationOverlay";
+
+// Map paths to page titles (used in top bar)
+const PAGE_TITLES: Record<string, string> = {
+  "/dashboard":  "Command Center",
+  "/training":   "Athena Trials",
+  "/scenarios":  "Scenarios",
+  "/vault":      "Memory Vault",
+  "/memory":     "Memory Archive",
+  "/philosophy": "Philosophy Chambers",
+  "/profile":    "My Profile",
+  "/profiles":   "Profiles",
+  "/research":   "Research",
+  "/taskboard":  "Taskboard",
+  "/settings":   "Settings",
+};
+
+function getTitle(path: string): string {
+  if (path.startsWith("/activity/")) return "Training Activity";
+  return PAGE_TITLES[path] ?? "ROME";
+}
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useHashLocation();
-  const { data: user } = useQuery<any>({ queryKey: ["/api/user"] });
   const { data: activeProfile } = useQuery<any>({ queryKey: ["/api/active-profile"] });
 
+  const title = getTitle(location);
+
   return (
-    <div className="flex h-full relative">
-      {/* Sidebar */}
-      <nav
-        className="rome-sidebar flex flex-col w-[200px] shrink-0 h-full overflow-y-auto py-5"
-        aria-label="Main navigation"
+    <div className="flex flex-col h-full">
+      {/* ── Top bar ────────────────────────────────────────────────── */}
+      <header
+        className="shrink-0 flex items-center justify-between px-6 py-3"
+        style={{
+          background: "hsl(222 20% 5% / 0.7)",
+          backdropFilter: "blur(16px)",
+          borderBottom: "1px solid hsl(43 20% 14% / 0.5)",
+          zIndex: 10,
+        }}
       >
-        {/* ROME wordmark */}
-        <div className="px-5 mb-8">
-          <Link href="/">
-            <div className="flex items-center gap-2.5 cursor-pointer group">
-              {/* Laurel SVG icon */}
-              <svg
-                width="28" height="28" viewBox="0 0 28 28" fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-                aria-hidden="true"
-                className="shrink-0"
-              >
-                <circle cx="14" cy="14" r="12" stroke="hsl(43,88%,55%)" strokeWidth="1.2" fill="none"/>
-                {/* Laurel left */}
-                <path d="M7 14 C5 11 6 8 9 8 C8 11 8 13 10 14" stroke="hsl(43,78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
-                <path d="M7 14 C5 16 6 19 9 19 C8 16 8 15 10 14" stroke="hsl(43,78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
-                {/* Laurel right */}
-                <path d="M21 14 C23 11 22 8 19 8 C20 11 20 13 18 14" stroke="hsl(43,78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
-                <path d="M21 14 C23 16 22 19 19 19 C20 16 20 15 18 14" stroke="hsl(43,78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
-                {/* Center column */}
-                <rect x="13" y="9" width="2" height="10" rx="1" fill="hsl(43,88%,55%)" opacity="0.7"/>
-              </svg>
-              <span
-                className="text-lg font-roman font-bold gold-shimmer tracking-[0.12em]"
-                style={{ fontFamily: "'Cinzel', serif" }}
-              >
-                ROME
-              </span>
-            </div>
+        {/* Left — current page label */}
+        <div className="flex items-center gap-3">
+          {/* ROME micro-logo */}
+          <svg width="20" height="20" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <circle cx="14" cy="14" r="12" stroke="hsl(43,88%,55%)" strokeWidth="1.2" fill="none"/>
+            <path d="M7 14 C5 11 6 8 9 8 C8 11 8 13 10 14"  stroke="hsl(43,78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
+            <path d="M7 14 C5 16 6 19 9 19 C8 16 8 15 10 14" stroke="hsl(43,78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
+            <path d="M21 14 C23 11 22 8 19 8 C20 11 20 13 18 14"  stroke="hsl(43,78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
+            <path d="M21 14 C23 16 22 19 19 19 C20 16 20 15 18 14" stroke="hsl(43,78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
+            <rect x="13" y="9" width="2" height="10" rx="1" fill="hsl(43,88%,55%)" opacity="0.7"/>
+          </svg>
+          <h1
+            className="text-xs font-semibold tracking-widest uppercase"
+            style={{
+              fontFamily: "'Cinzel', serif",
+              color: "hsl(43 70% 58%)",
+              letterSpacing: "0.12em",
+            }}
+          >
+            {title}
+          </h1>
+        </div>
+
+        {/* Right — profile chip + settings */}
+        <div className="flex items-center gap-3">
+          {activeProfile && (
+            <span
+              className="text-[10px] tracking-widest uppercase"
+              style={{
+                fontFamily: "DM Mono, monospace",
+                color: "hsl(43 30% 42%)",
+              }}
+            >
+              {activeProfile.name}
+            </span>
+          )}
+          <Link href="/settings">
+            <button className="opacity-30 hover:opacity-70 transition-opacity">
+              <Settings className="w-3.5 h-3.5" style={{ color: "hsl(43 50% 50%)" }} />
+            </button>
           </Link>
         </div>
+      </header>
 
-        {/* Nav items */}
-        <div className="flex-1 flex flex-col gap-0.5 px-3">
-          {NAV.map(({ href, icon: Icon, label }) => {
-            const active = location === href || (href.length > 1 && location.startsWith(href));
-            return (
-              <Link key={href} href={href}>
-                <div
-                  className={cn(
-                    "flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-all duration-200 group",
-                    active
-                      ? "bg-gold-500/8 text-gold-400 border border-gold-500/15 border-l-[2px] border-l-[hsl(0_50%_35%/0.7)]"
-                      : "text-muted-foreground hover:text-foreground hover:bg-cave-750/80"
-                  )}
-                >
-                  <Icon
-                    className={cn(
-                      "w-4 h-4 shrink-0 transition-colors",
-                      active ? "text-gold-400" : "text-muted-foreground group-hover:text-gold-400/70"
-                    )}
-                  />
-                  <span
-                    className={cn(
-                      "text-xs transition-colors",
-                      active ? "font-roman font-semibold tracking-wider" : "font-medium"
-                    )}
-                    style={active ? { fontFamily: "'Cinzel', serif", letterSpacing: "0.08em" } : {}}
-                  >
-                    {label}
-                  </span>
-                </div>
-              </Link>
-            );
-          })}
-        </div>
-
-        {/* Roman meander divider above bottom section */}
-        <div className="mx-3 mt-4 mb-1 rome-meander-crimson opacity-60" />
-
-        {/* Bottom — user + mode toggle */}
-        <div className="px-3 space-y-1">
-          <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-cave-750/80 cursor-pointer transition-all group">
-            <Settings className="w-4 h-4 shrink-0 group-hover:text-gold-400/70 transition-colors" />
-            <Link href="/settings">
-              <span className="text-xs font-medium">Settings</span>
-            </Link>
-          </div>
-          {/* Active profile indicator */}
-          {activeProfile && (
-            <div className="px-3 py-1.5">
-              <p className="text-[10px] text-muted-foreground/50 uppercase tracking-widest mb-0.5">Profile</p>
-              <p
-                className="text-xs text-gold-400/80 font-semibold truncate"
-                style={{ fontFamily: "'Cinzel', serif" }}
-              >
-                {activeProfile.name}
-              </p>
-            </div>
-          )}
-          <div className="flex items-center gap-3 px-3 py-2 rounded-lg">
-            <div className="w-5 h-5 rounded-full bg-gold-600/30 border border-gold-500/30 flex items-center justify-center shrink-0">
-              <span className="text-[9px] font-roman font-bold text-gold-400">
-                {(user?.name || "T")[0].toUpperCase()}
-              </span>
-            </div>
-            <span className="text-xs text-muted-foreground font-medium truncate">
-              {user?.name || "Trainee"}
-            </span>
-          </div>
-        </div>
-      </nav>
-
-      {/* Main content */}
-      <main className="flex-1 min-w-0 h-full overflow-y-auto overflow-x-hidden">
+      {/* ── Main content ───────────────────────────────────────────── */}
+      <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         <div className="min-h-full p-8">
           {children}
         </div>
       </main>
+
+      {/* ── Bottom bar — constellation trigger ─────────────────────── */}
+      <footer
+        className="shrink-0 flex items-center justify-center px-6 py-1"
+        style={{
+          background: "hsl(222 20% 4% / 0.6)",
+          backdropFilter: "blur(12px)",
+          borderTop: "1px solid hsl(43 15% 10% / 0.6)",
+          zIndex: 10,
+        }}
+      >
+        <ConstellationTrigger
+          onOpen={() => (window as any).__romeOpenConstellation?.()}
+        />
+      </footer>
     </div>
   );
 }
