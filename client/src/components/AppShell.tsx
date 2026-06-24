@@ -13,11 +13,13 @@ import {
   Feather,
   Settings,
   LayoutGrid,
+  Globe2,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 
 const NAV = [
-  { href: "/",            icon: LayoutDashboard, label: "Command Center" },
+  { href: "/",            icon: Globe2,          label: "Constellation"  },
+  { href: "/dashboard",   icon: LayoutDashboard, label: "Command Center" },
   { href: "/training",    icon: Swords,          label: "Athena Trials"  },
   { href: "/scenarios",   icon: ScrollText,      label: "Scenarios"       },
   { href: "/vault",       icon: BookMarked,      label: "Memory Vault"    },
@@ -75,7 +77,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         {/* Nav items */}
         <div className="flex-1 flex flex-col gap-0.5 px-3">
           {NAV.map(({ href, icon: Icon, label }) => {
-            const active = location === href || (href !== "/" && location.startsWith(href));
+            const active = location === href || (href.length > 1 && location.startsWith(href));
             return (
               <Link key={href} href={href}>
                 <div
