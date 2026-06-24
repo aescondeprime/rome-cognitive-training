@@ -1,12 +1,13 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { motion, useMotionValue, useSpring, AnimatePresence } from "framer-motion";
+import { useState, useCallback, useEffect, useMemo } from "react";
+import { motion, useMotionValue, useSpring, animate } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
 import ConstellationNode from "./ConstellationNode";
 import DomainDetailPanel from "./DomainDetailPanel";
+import { useRef } from "react";
 
-// ── Particle canvas ────────────────────────────────────────────────────────
+// ── Moving particle canvas ─────────────────────────────────────────────────
 function ParticleCanvas({ width, height }: { width: number; height: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -16,25 +17,39 @@ function ParticleCanvas({ width, height }: { width: number; height: number }) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    let raf: number;
-    const particles = Array.from({ length: 260 }, () => ({
-      x: Math.random() * width,
-      y: Math.random() * height,
-      r: Math.random() * 1.6 + 0.25,
-      alpha: Math.random() * 0.65 + 0.15,
-      speed: Math.random() * 0.015 + 0.004,
-      phase: Math.random() * Math.PI * 2,
-    }));
+    const particles = Array.from({ length: 280 }, () => {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = Math.random() * 0.18 + 0.04;
+      return {
+        x:     Math.random() * width,
+        y:     Math.random() * height,
+        vx:    Math.cos(angle) * speed,
+        vy:    Math.sin(angle) * speed,
+        r:     Math.random() * 1.5 + 0.3,
+        alpha: Math.random() * 0.6 + 0.15,
+        phase: Math.random() * Math.PI * 2,
+        flicker: Math.random() * 0.025 + 0.008,
+      };
+    });
 
     let t = 0;
+    let raf: number;
+
     function draw() {
       ctx!.clearRect(0, 0, width, height);
-      t += 1;
+      t++;
       for (const p of particles) {
-        const flicker = Math.sin(t * p.speed + p.phase) * 0.3 + 0.7;
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.x < -2)        p.x = width + 2;
+        if (p.x > width + 2) p.x = -2;
+        if (p.y < -2)        p.y = height + 2;
+        if (p.y > height + 2) p.y = -2;
+
+        const flicker = Math.sin(t * p.flicker + p.phase) * 0.28 + 0.72;
         ctx!.beginPath();
         ctx!.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx!.fillStyle = `hsla(43, 55%, 78%, ${p.alpha * flicker})`;
+        ctx!.fillStyle = `hsla(43, 55%, 80%, ${p.alpha * flicker})`;
         ctx!.fill();
       }
       raf = requestAnimationFrame(draw);
@@ -48,7 +63,7 @@ function ParticleCanvas({ width, height }: { width: number; height: number }) {
       ref={canvasRef}
       width={width}
       height={height}
-      className="absolute inset-0 pointer-events-none"
+      style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
     />
   );
 }
@@ -58,42 +73,88 @@ interface Props {
   onClose: () => void;
 }
 
+// ── Camera zoom factor when a node is selected ─────────────────────────────
+const ZOOM_SCALE = 7;
+
 // ── Main ───────────────────────────────────────────────────────────────────
 export default function ConstellationMenu({ onClose }: Props) {
   const [hoveredId, setHoveredId]   = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // Use window dimensions directly — reliable regardless of container sizing
-  const [dims, setDims] = useState({
-    w: window.innerWidth,
-    h: window.innerHeight,
+  // Dims
+  const getDims = () => ({
+    w: document.documentElement.clientWidth  || window.innerWidth,
+    h: document.documentElement.clientHeight || window.innerHeight,
   });
+  const [dims, setDims] = useState(getDims);
 
   useEffect(() => {
-    function onResize() {
-      setDims({ w: window.innerWidth, h: window.innerHeight });
-    }
+    const id = requestAnimationFrame(() => setDims(getDims()));
+    function onResize() { setDims(getDims()); }
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    return () => { cancelAnimationFrame(id); window.removeEventListener("resize", onResize); };
   }, []);
 
-  // Parallax spring
+  // Parallax mouse spring (disabled during zoom so it doesn't fight)
   const mx = useMotionValue(0);
   const my = useMotionValue(0);
-  const springX = useSpring(mx, { stiffness: 55, damping: 28 });
-  const springY = useSpring(my, { stiffness: 55, damping: 28 });
+  const springX = useSpring(mx, { stiffness: 50, damping: 25 });
+  const springY = useSpring(my, { stiffness: 50, damping: 25 });
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (selectedId) return; // freeze parallax while zoomed
     const cx = (e.clientX / dims.w) - 0.5;
     const cy = (e.clientY / dims.h) - 0.5;
-    mx.set(cx * 16);
-    my.set(cy * 11);
-  }, [dims, mx, my]);
+    mx.set(cx * 14);
+    my.set(cy * 10);
+  }, [dims, mx, my, selectedId]);
 
-  // Close on Escape
+  // Camera zoom motion values
+  const camScale = useMotionValue(1);
+  const camX     = useMotionValue(0);
+  const camY     = useMotionValue(0);
+  const springScale = useSpring(camScale, { stiffness: 55, damping: 22 });
+  const springCamX  = useSpring(camX,     { stiffness: 55, damping: 22 });
+  const springCamY  = useSpring(camY,     { stiffness: 55, damping: 22 });
+
+  // Node positions
+  const nodePositions = useMemo(() =>
+    Object.fromEntries(
+      CONSTELLATION_NODES.map(n => [
+        n.id,
+        { x: (n.x / 100) * dims.w, y: (n.y / 100) * dims.h },
+      ])
+    ),
+    [dims]
+  );
+
+  // Whenever selectedId changes, animate camera to/from node
+  useEffect(() => {
+    if (selectedId) {
+      const pos = nodePositions[selectedId];
+      if (!pos) return;
+      // Translate so the node sits at screen center after scale
+      // origin of scale is top-left (0,0), so:
+      //   tx = w/2 - pos.x * ZOOM_SCALE
+      //   ty = h/2 - pos.y * ZOOM_SCALE
+      const tx = dims.w / 2 - pos.x * ZOOM_SCALE;
+      const ty = dims.h / 2 - pos.y * ZOOM_SCALE;
+      // Freeze parallax drift
+      mx.set(0); my.set(0);
+      camScale.set(ZOOM_SCALE);
+      camX.set(tx);
+      camY.set(ty);
+    } else {
+      camScale.set(1);
+      camX.set(0);
+      camY.set(0);
+    }
+  }, [selectedId, nodePositions, dims, mx, my, camScale, camX, camY]);
+
+  // ESC to close/deselect
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" || e.key === "Tab") {
+      if (e.key === "Escape") {
         e.preventDefault();
         if (selectedId) setSelectedId(null);
         else onClose();
@@ -109,20 +170,6 @@ export default function ConstellationMenu({ onClose }: Props) {
     queryFn: () => apiRequest("GET", "/api/active-profile").then(r => r.json()),
   });
 
-  // Node pixel positions
-  const nodePositions = useMemo(() =>
-    Object.fromEntries(
-      CONSTELLATION_NODES.map(n => [
-        n.id,
-        {
-          x: (n.x / 100) * dims.w,
-          y: (n.y / 100) * dims.h,
-        },
-      ])
-    ),
-    [dims]
-  );
-
   const connectionPairs = useMemo(() => getConnectionPairs(), []);
   const selectedNode = CONSTELLATION_NODES.find(n => n.id === selectedId) ?? null;
   const activeId = hoveredId ?? selectedId;
@@ -134,87 +181,95 @@ export default function ConstellationMenu({ onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 overflow-hidden"
-      style={{ zIndex: 200 }}
+      style={{
+        position: "fixed", inset: 0, zIndex: 200, overflow: "hidden",
+        width: "100vw", height: "100vh",
+      }}
       onMouseMove={handleMouseMove}
-      onMouseLeave={() => { mx.set(0); my.set(0); }}
+      onMouseLeave={() => { if (!selectedId) { mx.set(0); my.set(0); } }}
     >
       {/* Cave background */}
-      <div className="rome-bg absolute inset-0" />
+      <div className="rome-bg" style={{ position: "absolute", inset: 0 }} />
 
-      {/* Particles */}
+      {/* Particles — not part of zoom layer so they stay ambient */}
       <ParticleCanvas width={dims.w} height={dims.h} />
 
-      {/* Parallax SVG layer */}
+      {/* Camera zoom + parallax layer */}
       <motion.div
-        className="absolute inset-0"
-        style={{ x: springX, y: springY }}
+        style={{
+          position: "absolute", inset: 0,
+          // Parallax offset only active when not zoomed
+          x: springX, y: springY,
+        }}
       >
-        <svg
-          width={dims.w}
-          height={dims.h}
-          viewBox={`0 0 ${dims.w} ${dims.h}`}
-          className="absolute inset-0 overflow-visible"
+        {/* Inner div handles camera zoom; transform-origin top-left */}
+        <motion.div
+          style={{
+            position: "absolute", inset: 0,
+            scale: springScale,
+            x: springCamX,
+            y: springCamY,
+            transformOrigin: "0 0",
+          }}
         >
-          {/* Connection lines */}
-          {connectionPairs.map(([aId, bId]) => {
-            const a = nodePositions[aId];
-            const b = nodePositions[bId];
-            if (!a || !b) return null;
-            const nodeA = CONSTELLATION_NODES.find(n => n.id === aId)!;
-            const lit = activeId === aId || activeId === bId;
-
-            return (
-              <motion.line
-                key={`${aId}-${bId}`}
-                x1={a.x} y1={a.y}
-                x2={b.x} y2={b.y}
-                stroke={lit ? nodeA.accent : "hsl(43 30% 40%)"}
-                strokeWidth={lit ? 1 : 0.35}
-                strokeOpacity={lit ? 0.6 : 0.15}
-                strokeDasharray={lit ? undefined : "3 10"}
-                animate={{
-                  strokeOpacity: lit ? 0.6 : 0.15,
-                  strokeWidth:   lit ? 1 : 0.35,
-                }}
-                transition={{ duration: 0.35 }}
-              />
-            );
-          })}
-
-          {/* Nodes */}
-          {CONSTELLATION_NODES.map((node, i) => {
-            const pos = nodePositions[node.id];
-            if (!pos) return null;
-            return (
-              <motion.g
-                key={node.id}
-                transform={`translate(${pos.x}, ${pos.y})`}
-                initial={{ opacity: 0, scale: 0 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{
-                  delay: 0.05 + i * 0.06,
-                  duration: 0.45,
-                  ease: [0.34, 1.56, 0.64, 1],
-                }}
-              >
-                <ConstellationNode
-                  node={node}
-                  isHovered={hoveredId === node.id}
-                  isSelected={selectedId === node.id}
-                  isActive={activeId !== null}
-                  onHover={setHoveredId}
-                  onSelect={handleSelect}
+          <svg
+            width={dims.w}
+            height={dims.h}
+            style={{ position: "absolute", inset: 0, overflow: "visible" }}
+          >
+            {/* Connection lines */}
+            {connectionPairs.map(([aId, bId]) => {
+              const a = nodePositions[aId];
+              const b = nodePositions[bId];
+              if (!a || !b) return null;
+              const nodeA = CONSTELLATION_NODES.find(n => n.id === aId)!;
+              const lit = activeId === aId || activeId === bId;
+              return (
+                <motion.line
+                  key={`${aId}-${bId}`}
+                  x1={a.x} y1={a.y}
+                  x2={b.x} y2={b.y}
+                  stroke={lit ? nodeA.accent : "hsl(43 30% 40%)"}
+                  strokeWidth={lit ? 1 : 0.35}
+                  strokeOpacity={lit ? 0.6 : 0.14}
+                  strokeDasharray={lit ? undefined : "3 9"}
+                  animate={{ strokeOpacity: lit ? 0.6 : 0.14, strokeWidth: lit ? 1 : 0.35 }}
+                  transition={{ duration: 0.3 }}
                 />
-              </motion.g>
-            );
-          })}
-        </svg>
+              );
+            })}
+
+            {/* Nodes */}
+            {CONSTELLATION_NODES.map((node, i) => {
+              const pos = nodePositions[node.id];
+              if (!pos) return null;
+              return (
+                <g
+                  key={node.id}
+                  transform={`translate(${pos.x}, ${pos.y})`}
+                  style={{
+                    opacity: 0,
+                    animation: `nodeReveal 0.5s cubic-bezier(0.34,1.56,0.64,1) ${0.05 + i * 0.06}s forwards`,
+                  }}
+                >
+                  <ConstellationNode
+                    node={node}
+                    isHovered={hoveredId === node.id}
+                    isSelected={selectedId === node.id}
+                    isActive={activeId !== null}
+                    onHover={setHoveredId}
+                    onSelect={handleSelect}
+                  />
+                </g>
+              );
+            })}
+          </svg>
+        </motion.div>
       </motion.div>
 
-      {/* Detail panel */}
-      <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 10 }}>
-        <div className="relative w-full h-full pointer-events-none">
+      {/* Detail panel — outside zoom layer, always fixed */}
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 20 }}>
+        <div style={{ position: "relative", width: "100%", height: "100%", pointerEvents: "none" }}>
           <DomainDetailPanel
             node={selectedNode}
             onClose={() => setSelectedId(null)}
@@ -223,42 +278,36 @@ export default function ConstellationMenu({ onClose }: Props) {
         </div>
       </div>
 
-      {/* Profile badge — bottom left */}
+      {/* Profile badge */}
       {activeProfile && (
-        <div className="absolute bottom-8 left-8 pointer-events-none" style={{ zIndex: 10 }}>
-          <div className="flex items-center gap-2">
-            <div
-              className="w-5 h-5 rounded-full flex items-center justify-center shrink-0"
-              style={{
-                background: "hsl(43 40% 14%)",
-                border: "1px solid hsl(43 50% 28%)",
-              }}
-            >
-              <span style={{ fontFamily: "'Cinzel', serif", fontSize: 9, color: "hsl(43 80% 60%)", fontWeight: 700 }}>
+        <div style={{ position: "absolute", bottom: 28, left: 28, zIndex: 10, pointerEvents: "none" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{
+              width: 20, height: 20, borderRadius: "50%",
+              background: "hsl(43 40% 12%)", border: "1px solid hsl(43 45% 26%)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              <span style={{ fontFamily: "'Cinzel', serif", fontSize: 8, color: "hsl(43 80% 60%)", fontWeight: 700 }}>
                 {(activeProfile.name || "T")[0].toUpperCase()}
               </span>
             </div>
-            <p style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "hsl(43 35% 42%)", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+            <span style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "hsl(43 30% 40%)", letterSpacing: "0.12em", textTransform: "uppercase" }}>
               {activeProfile.name}
-            </p>
+            </span>
           </div>
         </div>
       )}
 
-      {/* Close hint — bottom center */}
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-none" style={{ zIndex: 10 }}>
-        <p style={{ fontFamily: "DM Mono, monospace", fontSize: 9, color: "hsl(214 20% 32%)", letterSpacing: "0.18em", textTransform: "uppercase" }}>
-          ESC to close · click node to navigate
+      {/* Close hint */}
+      <div style={{ position: "absolute", bottom: 28, left: "50%", transform: "translateX(-50%)", zIndex: 10, pointerEvents: "none" }}>
+        <p style={{ fontFamily: "DM Mono, monospace", fontSize: 9, color: "hsl(214 20% 28%)", letterSpacing: "0.18em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+          ESC · click node to navigate
         </p>
       </div>
 
-      {/* Click-away to deselect panel */}
+      {/* Click-away background to deselect (sits behind detail panel) */}
       {selectedId && (
-        <div
-          className="absolute inset-0"
-          style={{ zIndex: 5 }}
-          onClick={() => setSelectedId(null)}
-        />
+        <div style={{ position: "absolute", inset: 0, zIndex: 5 }} onClick={() => setSelectedId(null)} />
       )}
     </div>
   );

@@ -60,10 +60,8 @@ export default memo(function ConstellationNode({
           filter: lit
             ? `drop-shadow(0 0 ${Math.round(fontSize * 0.38)}px ${node.accent}) drop-shadow(0 0 ${Math.round(fontSize * 0.18)}px ${node.accent})`
             : "none",
-          transform: isSelected ? "scale(1.35)" : isHovered ? "scale(1.12)" : "scale(1)",
-          transformOrigin: "0 0",
-          transition:
-            "fill 0.25s ease, filter 0.25s ease, transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1)",
+          // Node does NOT scale itself — camera zoom handles that
+          transition: "fill 0.25s ease, filter 0.25s ease",
         }}
       >
         {node.symbol}
