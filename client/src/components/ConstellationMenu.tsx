@@ -1,11 +1,10 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { motion, useMotionValue, useSpring, animate } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
 import ConstellationNode from "./ConstellationNode";
 import DomainDetailPanel from "./DomainDetailPanel";
-import { useRef } from "react";
 
 // ── Moving particle canvas ─────────────────────────────────────────────────
 function ParticleCanvas({ width, height }: { width: number; height: number }) {
@@ -109,13 +108,10 @@ export default function ConstellationMenu({ onClose }: Props) {
     my.set(cy * 10);
   }, [dims, mx, my, selectedId]);
 
-  // Camera zoom motion values
+  // Camera zoom motion values — single tween drives all three in sync
   const camScale = useMotionValue(1);
   const camX     = useMotionValue(0);
   const camY     = useMotionValue(0);
-  const springScale = useSpring(camScale, { stiffness: 55, damping: 22 });
-  const springCamX  = useSpring(camX,     { stiffness: 55, damping: 22 });
-  const springCamY  = useSpring(camY,     { stiffness: 55, damping: 22 });
 
   // Node positions
   const nodePositions = useMemo(() =>
@@ -130,24 +126,25 @@ export default function ConstellationMenu({ onClose }: Props) {
 
   // Whenever selectedId changes, animate camera to/from node
   useEffect(() => {
+    const easing = [0.4, 0, 0.2, 1] as const; // material decelerate — smooth and deliberate
+    const duration = 0.55;
+
     if (selectedId) {
       const pos = nodePositions[selectedId];
       if (!pos) return;
-      // Translate so the node sits at screen center after scale
-      // origin of scale is top-left (0,0), so:
-      //   tx = w/2 - pos.x * ZOOM_SCALE
-      //   ty = h/2 - pos.y * ZOOM_SCALE
       const tx = dims.w / 2 - pos.x * ZOOM_SCALE;
       const ty = dims.h / 2 - pos.y * ZOOM_SCALE;
-      // Freeze parallax drift
-      mx.set(0); my.set(0);
-      camScale.set(ZOOM_SCALE);
-      camX.set(tx);
-      camY.set(ty);
+      mx.set(0); my.set(0); // freeze parallax
+      // Animate all three values with identical timing so they stay in sync
+      camScale.set(camScale.get()); // ensure starting from current
+      animate(camScale, ZOOM_SCALE, { duration, ease: easing });
+      animate(camX, tx,             { duration, ease: easing });
+      animate(camY, ty,             { duration, ease: easing });
     } else {
-      camScale.set(1);
-      camX.set(0);
-      camY.set(0);
+      const easeOut = [0.0, 0, 0.4, 1] as const;
+      animate(camScale, 1, { duration: 0.48, ease: easeOut });
+      animate(camX,     0, { duration: 0.48, ease: easeOut });
+      animate(camY,     0, { duration: 0.48, ease: easeOut });
     }
   }, [selectedId, nodePositions, dims, mx, my, camScale, camX, camY]);
 
@@ -206,9 +203,9 @@ export default function ConstellationMenu({ onClose }: Props) {
         <motion.div
           style={{
             position: "absolute", inset: 0,
-            scale: springScale,
-            x: springCamX,
-            y: springCamY,
+            scale: camScale,
+            x: camX,
+            y: camY,
             transformOrigin: "0 0",
           }}
         >
