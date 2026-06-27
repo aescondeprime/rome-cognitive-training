@@ -3,10 +3,13 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useHashLocation } from "wouter/use-hash-location";
-import { Settings } from "lucide-react";
+import { Settings, LogOut } from "lucide-react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import { ConstellationTrigger } from "./ConstellationOverlay";
+import { clearToken } from "@/lib/auth";
+import { queryClient } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 
 // Map paths to page titles (used in top bar)
 const PAGE_TITLES: Record<string, string> = {
@@ -88,10 +91,22 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </Link>
           )}
           <Link href="/settings">
-            <button className="opacity-30 hover:opacity-70 transition-opacity">
+            <button className="opacity-30 hover:opacity-70 transition-opacity" title="Settings">
               <Settings className="w-3.5 h-3.5" style={{ color: "hsl(43 50% 50%)" }} />
             </button>
           </Link>
+          <button
+            className="opacity-30 hover:opacity-70 transition-opacity"
+            title="Sign out"
+            onClick={async () => {
+              try { await apiRequest("POST", "/api/auth/logout"); } catch {}
+              clearToken();
+              queryClient.clear();
+              window.location.reload();
+            }}
+          >
+            <LogOut className="w-3.5 h-3.5" style={{ color: "hsl(43 50% 50%)" }} />
+          </button>
         </div>
       </header>
 

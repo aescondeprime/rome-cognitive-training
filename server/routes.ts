@@ -1,7 +1,22 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { z } from "zod";
+import bcrypt from "bcryptjs";
+import crypto from "crypto";
+
+// ── Auth middleware ────────────────────────────────────────────────────
+async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const token = req.headers["x-session-token"] as string | undefined;
+  if (!token) return res.status(401).json({ error: "Not authenticated" });
+  const session = await storage.getAuthSession(token);
+  if (!session) return res.status(401).json({ error: "Session expired or invalid" });
+  (req as any).userId = session.userId;
+  next();
+}
+
+// 30-day session TTL
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 // ── Schema validation (inline, no drizzle dependency) ─────────────────────
 const insertTrialSchema = z.object({
@@ -64,7 +79,17 @@ function sm2(item: { easeFactor: number; intervalDays: number; repetitions: numb
   return { easeFactor: ef, intervalDays: interval, repetitions: reps };
 }
 
-async function getActiveUser() {
+async function getActiveUser(req?: Request) {
+  if (req) {
+    const token = req.headers["x-session-token"] as string | undefined;
+    if (token) {
+      const session = await storage.getAuthSession(token);
+      if (session) {
+        const user = await storage.getUser(session.userId);
+        if (user) return user;
+      }
+    }
+  }
   const id = await storage.getActiveProfileId();
   return (await storage.getUser(id)) ?? (await storage.getDefaultUser());
 }
@@ -72,9 +97,61 @@ async function getActiveUser() {
 export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
 
+  // Auth routes
+  app.post("/api/auth/register", async (req, res) => {
+    try {
+      const { name, password } = req.body;
+      if (!name?.trim() || !password) return res.status(400).json({ error: "Name and password required" });
+      const existing = await storage.getUserByName(name.trim());
+      if (existing) return res.status(409).json({ error: "A profile with that name already exists" });
+      const user = await storage.createProfile(name.trim());
+      const hash = await bcrypt.hash(password, 12);
+      await storage.setPasswordHash(user.id, hash);
+      const sessionId = crypto.randomBytes(32).toString("hex");
+      await storage.createAuthSession(user.id, sessionId, Date.now() + SESSION_TTL_MS);
+      res.json({ token: sessionId, user });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const { name, password } = req.body;
+      if (!name?.trim() || !password) return res.status(400).json({ error: "Name and password required" });
+      const user = await storage.getUserByName(name.trim());
+      if (!user) return res.status(401).json({ error: "No profile found with that name" });
+      const hash = await storage.getPasswordHash(user.id);
+      if (!hash) return res.status(401).json({ error: "This profile has no password set" });
+      const valid = await bcrypt.compare(password, hash);
+      if (!valid) return res.status(401).json({ error: "Incorrect password" });
+      const sessionId = crypto.randomBytes(32).toString("hex");
+      await storage.createAuthSession(user.id, sessionId, Date.now() + SESSION_TTL_MS);
+      res.json({ token: sessionId, user });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/auth/me", async (req, res) => {
+    try {
+      const token = req.headers["x-session-token"] as string | undefined;
+      if (!token) return res.status(401).json({ error: "Not authenticated" });
+      const session = await storage.getAuthSession(token);
+      if (!session) return res.status(401).json({ error: "Session expired" });
+      const user = await storage.getUser(session.userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      res.json({ user });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/auth/logout", async (req, res) => {
+    try {
+      const token = req.headers["x-session-token"] as string | undefined;
+      if (token) await storage.deleteAuthSession(token);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
   // ── Active Profile ──────────────────────────────────────────────────
   app.get("/api/active-profile", async (req, res) => {
-    try { res.json(await getActiveUser()); } catch (e: any) { res.status(500).json({ error: e.message }); }
+    try { res.json(await getActiveUser(req)); } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   // ── Profiles ────────────────────────────────────────────────────────
@@ -138,12 +215,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ── User ────────────────────────────────────────────────────────────
   app.get("/api/user", async (req, res) => {
-    try { res.json(await getActiveUser()); } catch (e: any) { res.status(500).json({ error: e.message }); }
+    try { res.json(await getActiveUser(req)); } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   app.patch("/api/user", async (req, res) => {
     try {
-      const user = await getActiveUser();
+      const user = await getActiveUser(req);
       res.json(await storage.updateUser(user.id, req.body));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
@@ -151,7 +228,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ── Domain Scores ───────────────────────────────────────────────────
   app.get("/api/domain-scores", async (req, res) => {
     try {
-      const user = await getActiveUser();
+      const user = await getActiveUser(req);
       res.json(await storage.getDomainScores(user.id));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
@@ -159,7 +236,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ── Trials ──────────────────────────────────────────────────────────
   app.post("/api/trials", async (req, res) => {
     try {
-      const user = await getActiveUser();
+      const user = await getActiveUser(req);
       const parsed = insertTrialSchema.safeParse({ ...req.body, userId: user.id });
       if (!parsed.success) return res.status(400).json({ error: parsed.error });
 
@@ -198,7 +275,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/trials/recent", async (req, res) => {
     try {
-      const user = await getActiveUser();
+      const user = await getActiveUser(req);
       res.json(await storage.getRecentTrials(user.id, 100));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
@@ -206,7 +283,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ── Sessions ────────────────────────────────────────────────────────
   app.post("/api/sessions", async (req, res) => {
     try {
-      const user = await getActiveUser();
+      const user = await getActiveUser(req);
       const parsed = insertSessionSchema.safeParse({ ...req.body, userId: user.id });
       if (!parsed.success) return res.status(400).json({ error: parsed.error });
       const session = await storage.createSession(parsed.data);
@@ -220,25 +297,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/sessions", async (req, res) => {
     try {
-      const user = await getActiveUser();
+      const user = await getActiveUser(req);
       res.json(await storage.getRecentSessions(user.id, 20));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   // ── Recall Items ────────────────────────────────────────────────────
   app.get("/api/recall-items", async (req, res) => {
-    try { res.json(await storage.getRecallItems((await getActiveUser()).id)); }
+    try { res.json(await storage.getRecallItems((await getActiveUser(req)).id)); }
     catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   app.get("/api/recall-items/due", async (req, res) => {
-    try { res.json(await storage.getDueRecallItems((await getActiveUser()).id)); }
+    try { res.json(await storage.getDueRecallItems((await getActiveUser(req)).id)); }
     catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   app.post("/api/recall-items", async (req, res) => {
     try {
-      const user = await getActiveUser();
+      const user = await getActiveUser(req);
       const parsed = insertRecallItemSchema.safeParse({ ...req.body, userId: user.id });
       if (!parsed.success) return res.status(400).json({ error: parsed.error });
       res.json(await storage.createRecallItem(parsed.data));
@@ -249,7 +326,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const id = parseInt(req.params.id);
       const { quality } = req.body;
-      const user = await getActiveUser();
+      const user = await getActiveUser(req);
       const items = await storage.getRecallItems(user.id);
       const item = items.find(i => i.id === id);
       if (!item) return res.status(404).json({ error: "Not found" });
@@ -266,14 +343,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ── Calibration ─────────────────────────────────────────────────────
   app.get("/api/calibration", async (req, res) => {
-    try { res.json(await storage.getCalibrationData((await getActiveUser()).id)); }
+    try { res.json(await storage.getCalibrationData((await getActiveUser(req)).id)); }
     catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   // ── Stats ───────────────────────────────────────────────────────────
   app.get("/api/stats", async (req, res) => {
     try {
-      const user = await getActiveUser();
+      const user = await getActiveUser(req);
       const [scores, recentTrials, recentSessions] = await Promise.all([
         storage.getDomainScores(user.id),
         storage.getRecentTrials(user.id, 50),
@@ -290,13 +367,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ── Notes ────────────────────────────────────────────────────────────
   app.get("/api/notes", async (req, res) => {
-    try { res.json(await storage.getNotes((await getActiveUser()).id)); }
+    try { res.json(await storage.getNotes((await getActiveUser(req)).id)); }
     catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   app.post("/api/notes", async (req, res) => {
     try {
-      const user = await getActiveUser();
+      const user = await getActiveUser(req);
       const { title, content, tags } = req.body;
       res.json(await storage.createNote({ userId: user.id, title: title || "Untitled", content: content || "", tags: tags ? JSON.stringify(tags) : "[]", pinned: false as any }));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -324,13 +401,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ── Memory Items ─────────────────────────────────────────────────────
   app.get("/api/memory", async (req, res) => {
-    try { res.json(await storage.getMemoryItems((await getActiveUser()).id)); }
+    try { res.json(await storage.getMemoryItems((await getActiveUser(req)).id)); }
     catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   app.post("/api/memory", async (req, res) => {
     try {
-      const user = await getActiveUser();
+      const user = await getActiveUser(req);
       const parsed = insertMemoryItemSchema.safeParse({ ...req.body, userId: user.id });
       if (!parsed.success) return res.status(400).json({ error: parsed.error });
       res.json(await storage.createMemoryItem(parsed.data));
@@ -353,7 +430,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ── Export / Import ──────────────────────────────────────────────────
   app.get("/api/export", async (req, res) => {
     try {
-      const user = await getActiveUser();
+      const user = await getActiveUser(req);
       const [domainScores, trials, sessions, recallItems, calibrationHistory, notes, memoryItems] = await Promise.all([
         storage.getDomainScores(user.id),
         storage.getRecentTrials(user.id, 10000),

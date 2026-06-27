@@ -119,6 +119,14 @@ export interface TaskboardCard {
 }
 export type InsertTaskboardCard = Omit<TaskboardCard, "id" | "createdAt" | "updatedAt">;
 
+// ── Auth session type ────────────────────────────────────────────────────
+export interface AuthSession {
+  id: string;
+  userId: number;
+  createdAt: number;
+  expiresAt: number;
+}
+
 // ── IStorage interface (unchanged) ────────────────────────────────────────
 export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
@@ -171,6 +179,14 @@ export interface IStorage {
   createTaskboardCard(data: InsertTaskboardCard): Promise<TaskboardCard>;
   updateTaskboardCard(id: number, data: Partial<InsertTaskboardCard>): Promise<TaskboardCard | undefined>;
   deleteTaskboardCard(id: number): Promise<void>;
+
+  // Auth
+  getUserByName(name: string): Promise<User | undefined>;
+  setPasswordHash(userId: number, hash: string): Promise<void>;
+  getPasswordHash(userId: number): Promise<string | undefined>;
+  createAuthSession(userId: number, sessionId: string, expiresAt: number): Promise<AuthSession>;
+  getAuthSession(sessionId: string): Promise<AuthSession | undefined>;
+  deleteAuthSession(sessionId: string): Promise<void>;
 }
 
 // ── Column name mapping (snake_case DB → camelCase app) ───────────────────
@@ -617,6 +633,44 @@ class SupabaseStorage implements IStorage {
 
   async deleteTaskboardCard(id: number): Promise<void> {
     await this.sb.from("taskboard_cards").delete().eq("id", id);
+  }
+
+  // ── Auth ───────────────────────────────────────────────────────────
+  async getUserByName(name: string): Promise<User | undefined> {
+    const { data } = await this.sb.from("users").select("*")
+      .ilike("name", name).limit(1).single();
+    return data ? mapUser(data) : undefined;
+  }
+
+  async setPasswordHash(userId: number, hash: string): Promise<void> {
+    await this.sb.from("users").update({ password_hash: hash }).eq("id", userId);
+  }
+
+  async getPasswordHash(userId: number): Promise<string | undefined> {
+    const { data } = await this.sb.from("users").select("password_hash").eq("id", userId).single();
+    return data?.password_hash ?? undefined;
+  }
+
+  async createAuthSession(userId: number, sessionId: string, expiresAt: number): Promise<AuthSession> {
+    const now = Date.now();
+    const { data } = await this.sb.from("auth_sessions").insert({
+      id: sessionId, user_id: userId, created_at: now, expires_at: expiresAt,
+    }).select().single();
+    return { id: data.id, userId: data.user_id, createdAt: data.created_at, expiresAt: data.expires_at };
+  }
+
+  async getAuthSession(sessionId: string): Promise<AuthSession | undefined> {
+    const { data } = await this.sb.from("auth_sessions").select("*").eq("id", sessionId).single();
+    if (!data) return undefined;
+    if (data.expires_at < Date.now()) {
+      await this.sb.from("auth_sessions").delete().eq("id", sessionId);
+      return undefined;
+    }
+    return { id: data.id, userId: data.user_id, createdAt: data.created_at, expiresAt: data.expires_at };
+  }
+
+  async deleteAuthSession(sessionId: string): Promise<void> {
+    await this.sb.from("auth_sessions").delete().eq("id", sessionId);
   }
 }
 
