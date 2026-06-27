@@ -1,20 +1,110 @@
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import Database from "better-sqlite3";
-import { eq, and, lte, desc, sql } from "drizzle-orm";
-import {
-  users, domainScores, trials, sessions, recallItems, calibrationHistory,
-  type User, type InsertUser,
-  type DomainScore, type InsertDomainScore,
-  type Trial, type InsertTrial,
-  type Session, type InsertSession,
-  type RecallItem, type InsertRecallItem,
-  type CalibrationHistory, type InsertCalibration,
-  notes, type Note, type InsertNote,
-  appConfig, memoryItems,
-  type MemoryItem, type InsertMemoryItem,
-} from "@shared/schema";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-// Taskboard card types (raw SQLite, not drizzle-schema)
+// ── Types (mirrors SQLite schema exactly) ─────────────────────────────────
+export interface User {
+  id: number;
+  name: string;
+  baselineCompleted: number;
+  currentMode: string;
+  totalSessionsCompleted: number;
+  totalMinutesTrained: number;
+  createdAt: number;
+}
+export type InsertUser = Partial<Omit<User, "id" | "createdAt">>;
+
+export interface DomainScore {
+  id: number;
+  userId: number;
+  domain: string;
+  score: number;
+  totalTrials: number;
+  avgAccuracy: number;
+  avgResponseTime: number;
+  avgConfidence: number;
+  updatedAt: number;
+}
+export type InsertDomainScore = Omit<DomainScore, "id" | "updatedAt">;
+
+export interface Trial {
+  id: number;
+  userId: number;
+  domain: string;
+  activityId: string;
+  correct: number;
+  responseTimeMs: number;
+  confidence: number;
+  difficulty: number;
+  errorType: string | null;
+  notes: string | null;
+  createdAt: number;
+}
+export type InsertTrial = Omit<Trial, "id" | "createdAt">;
+
+export interface Session {
+  id: number;
+  userId: number;
+  sessionType: string;
+  durationMinutes: number;
+  trialsCompleted: number;
+  avgAccuracy: number;
+  avgConfidence: number;
+  metacogReflection: string | null;
+  completedAt: number;
+}
+export type InsertSession = Omit<Session, "id" | "completedAt">;
+
+export interface RecallItem {
+  id: number;
+  userId: number;
+  front: string;
+  back: string;
+  tags: string;
+  category: string;
+  nextReviewAt: number;
+  intervalDays: number;
+  easeFactor: number;
+  repetitions: number;
+  lastReviewedAt: number | null;
+  createdAt: number;
+}
+export type InsertRecallItem = Omit<RecallItem, "id" | "createdAt">;
+
+export interface CalibrationHistory {
+  id: number;
+  userId: number;
+  domain: string;
+  confidenceBucket: number;
+  correctCount: number;
+  totalCount: number;
+  updatedAt: number;
+}
+export type InsertCalibration = Omit<CalibrationHistory, "id" | "updatedAt">;
+
+export interface Note {
+  id: number;
+  userId: number;
+  title: string;
+  content: string;
+  tags: string;
+  pinned: number;
+  createdAt: number;
+  updatedAt: number;
+}
+export type InsertNote = Omit<Note, "id" | "createdAt" | "updatedAt">;
+
+export interface MemoryItem {
+  id: number;
+  userId: number;
+  type: string;
+  content: string;
+  source: string;
+  confidence: number;
+  importance: number;
+  createdAt: number;
+  updatedAt: number;
+}
+export type InsertMemoryItem = Omit<MemoryItem, "id" | "createdAt" | "updatedAt">;
+
 export interface TaskboardCard {
   id: number;
   userId: number;
@@ -27,476 +117,507 @@ export interface TaskboardCard {
   createdAt: number;
   updatedAt: number;
 }
-export type InsertTaskboardCard = Omit<TaskboardCard, 'id' | 'createdAt' | 'updatedAt'>;
+export type InsertTaskboardCard = Omit<TaskboardCard, "id" | "createdAt" | "updatedAt">;
 
-// ── DB path: use ROME_DB_PATH env var (set by Electron for desktop mode)
-// Falls back to data.db in the project root for web/dev mode.
-const DB_PATH = process.env.ROME_DB_PATH || "data.db";
-const sqlite = new Database(DB_PATH);
-const db = drizzle(sqlite);
-
-// Initialize tables
-sqlite.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL DEFAULT 'Trainee',
-    baseline_completed INTEGER DEFAULT 0,
-    current_mode TEXT DEFAULT 'standard',
-    total_sessions_completed INTEGER DEFAULT 0,
-    total_minutes_trained INTEGER DEFAULT 0,
-    created_at INTEGER DEFAULT (strftime('%s','now') * 1000)
-  );
-  CREATE TABLE IF NOT EXISTS domain_scores (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    domain TEXT NOT NULL,
-    score REAL NOT NULL DEFAULT 50,
-    total_trials INTEGER DEFAULT 0,
-    avg_accuracy REAL DEFAULT 0,
-    avg_response_time REAL DEFAULT 0,
-    avg_confidence REAL DEFAULT 0,
-    updated_at INTEGER DEFAULT (strftime('%s','now') * 1000)
-  );
-  CREATE TABLE IF NOT EXISTS trials (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    domain TEXT NOT NULL,
-    activity_id TEXT NOT NULL,
-    correct INTEGER NOT NULL,
-    response_time_ms INTEGER DEFAULT 0,
-    confidence INTEGER DEFAULT 50,
-    difficulty INTEGER DEFAULT 1,
-    error_type TEXT,
-    notes TEXT,
-    created_at INTEGER DEFAULT (strftime('%s','now') * 1000)
-  );
-  CREATE TABLE IF NOT EXISTS sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    session_type TEXT NOT NULL DEFAULT 'standard',
-    duration_minutes INTEGER DEFAULT 0,
-    trials_completed INTEGER DEFAULT 0,
-    avg_accuracy REAL DEFAULT 0,
-    avg_confidence REAL DEFAULT 0,
-    metacog_reflection TEXT,
-    completed_at INTEGER DEFAULT (strftime('%s','now') * 1000)
-  );
-  CREATE TABLE IF NOT EXISTS recall_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    front TEXT NOT NULL,
-    back TEXT NOT NULL,
-    tags TEXT DEFAULT '[]',
-    category TEXT DEFAULT 'general',
-    next_review_at INTEGER DEFAULT (strftime('%s','now') * 1000),
-    interval_days REAL DEFAULT 1,
-    ease_factor REAL DEFAULT 2.5,
-    repetitions INTEGER DEFAULT 0,
-    last_reviewed_at INTEGER,
-    created_at INTEGER DEFAULT (strftime('%s','now') * 1000)
-  );
-  CREATE TABLE IF NOT EXISTS calibration_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    domain TEXT NOT NULL,
-    confidence_bucket INTEGER NOT NULL,
-    correct_count INTEGER DEFAULT 0,
-    total_count INTEGER DEFAULT 0,
-    updated_at INTEGER DEFAULT (strftime('%s','now') * 1000)
-  );
-  CREATE TABLE IF NOT EXISTS notes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    title TEXT NOT NULL DEFAULT 'Untitled',
-    content TEXT NOT NULL DEFAULT '',
-    tags TEXT DEFAULT '[]',
-    pinned INTEGER DEFAULT 0,
-    created_at INTEGER DEFAULT (strftime('%s','now') * 1000),
-    updated_at INTEGER DEFAULT (strftime('%s','now') * 1000)
-  );
-  CREATE TABLE IF NOT EXISTS app_config (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    key TEXT NOT NULL UNIQUE,
-    value TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS taskboard_cards (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    color TEXT NOT NULL DEFAULT 'gold',
-    pos_x REAL NOT NULL DEFAULT 100,
-    pos_y REAL NOT NULL DEFAULT 100,
-    pinned INTEGER NOT NULL DEFAULT 0,
-    width REAL NOT NULL DEFAULT 200,
-    created_at INTEGER DEFAULT (strftime('%s','now') * 1000),
-    updated_at INTEGER DEFAULT (strftime('%s','now') * 1000)
-  );
-  CREATE TABLE IF NOT EXISTS memory_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    type TEXT NOT NULL DEFAULT 'reflection',
-    content TEXT NOT NULL,
-    source TEXT DEFAULT 'manual',
-    confidence INTEGER DEFAULT 50,
-    importance INTEGER DEFAULT 50,
-    created_at INTEGER DEFAULT (strftime('%s','now') * 1000),
-    updated_at INTEGER DEFAULT (strftime('%s','now') * 1000)
-  );
-`);
-
+// ── IStorage interface (unchanged) ────────────────────────────────────────
 export interface IStorage {
-  // Users
-  getUser(id: number): User | undefined;
-  getDefaultUser(): User;
-  createUser(data: InsertUser): User;
-  updateUser(id: number, data: Partial<InsertUser>): User | undefined;
+  getUser(id: number): Promise<User | undefined>;
+  getDefaultUser(): Promise<User>;
+  createUser(data: InsertUser): Promise<User>;
+  updateUser(id: number, data: Partial<InsertUser>): Promise<User | undefined>;
 
-  // Domain scores
-  getDomainScores(userId: number): DomainScore[];
-  getDomainScore(userId: number, domain: string): DomainScore | undefined;
-  upsertDomainScore(data: InsertDomainScore): DomainScore;
+  getDomainScores(userId: number): Promise<DomainScore[]>;
+  getDomainScore(userId: number, domain: string): Promise<DomainScore | undefined>;
+  upsertDomainScore(data: InsertDomainScore): Promise<DomainScore>;
 
-  // Trials
-  createTrial(data: InsertTrial): Trial;
-  getRecentTrials(userId: number, limit?: number): Trial[];
-  getTrialsByDomain(userId: number, domain: string, limit?: number): Trial[];
+  createTrial(data: InsertTrial): Promise<Trial>;
+  getRecentTrials(userId: number, limit?: number): Promise<Trial[]>;
+  getTrialsByDomain(userId: number, domain: string, limit?: number): Promise<Trial[]>;
 
-  // Sessions
-  createSession(data: InsertSession): Session;
-  getRecentSessions(userId: number, limit?: number): Session[];
+  createSession(data: InsertSession): Promise<Session>;
+  getRecentSessions(userId: number, limit?: number): Promise<Session[]>;
 
-  // Recall items
-  createRecallItem(data: InsertRecallItem): RecallItem;
-  getRecallItems(userId: number): RecallItem[];
-  getDueRecallItems(userId: number): RecallItem[];
-  updateRecallItem(id: number, data: Partial<InsertRecallItem>): RecallItem | undefined;
-  deleteRecallItem(id: number): void;
+  createRecallItem(data: InsertRecallItem): Promise<RecallItem>;
+  getRecallItems(userId: number): Promise<RecallItem[]>;
+  getDueRecallItems(userId: number): Promise<RecallItem[]>;
+  updateRecallItem(id: number, data: Partial<InsertRecallItem>): Promise<RecallItem | undefined>;
+  deleteRecallItem(id: number): Promise<void>;
 
-  // Calibration
-  getCalibrationData(userId: number): CalibrationHistory[];
-  upsertCalibration(data: InsertCalibration): CalibrationHistory;
+  getCalibrationData(userId: number): Promise<CalibrationHistory[]>;
+  upsertCalibration(data: InsertCalibration): Promise<CalibrationHistory>;
 
-  // Notes (Philosophy Chambers)
-  getNotes(userId: number): Note[];
-  getNote(id: number): Note | undefined;
-  createNote(data: InsertNote): Note;
-  updateNote(id: number, data: Partial<InsertNote>): Note | undefined;
-  deleteNote(id: number): void;
+  getNotes(userId: number): Promise<Note[]>;
+  getNote(id: number): Promise<Note | undefined>;
+  createNote(data: InsertNote): Promise<Note>;
+  updateNote(id: number, data: Partial<InsertNote>): Promise<Note | undefined>;
+  deleteNote(id: number): Promise<void>;
 
-  // App config (active profile)
-  getConfig(key: string): string | undefined;
-  setConfig(key: string, value: string): void;
-  getActiveProfileId(): number;
-  setActiveProfileId(id: number): void;
+  getConfig(key: string): Promise<string | undefined>;
+  setConfig(key: string, value: string): Promise<void>;
+  getActiveProfileId(): Promise<number>;
+  setActiveProfileId(id: number): Promise<void>;
 
-  // Profile management (users table is the profiles table)
-  getAllProfiles(): User[];
-  createProfile(name: string): User;
-  deleteProfile(id: number): void;
-  getProfileStats(id: number): { sessionsCompleted: number; minutesTrained: number };
+  getAllProfiles(): Promise<User[]>;
+  createProfile(name: string): Promise<User>;
+  deleteProfile(id: number): Promise<void>;
+  getProfileStats(id: number): Promise<{ sessionsCompleted: number; minutesTrained: number }>;
 
-  // Memory items
-  getMemoryItems(userId: number): MemoryItem[];
-  createMemoryItem(data: InsertMemoryItem): MemoryItem;
-  updateMemoryItem(id: number, data: Partial<InsertMemoryItem>): MemoryItem | undefined;
-  deleteMemoryItem(id: number): void;
+  getMemoryItems(userId: number): Promise<MemoryItem[]>;
+  createMemoryItem(data: InsertMemoryItem): Promise<MemoryItem>;
+  updateMemoryItem(id: number, data: Partial<InsertMemoryItem>): Promise<MemoryItem | undefined>;
+  deleteMemoryItem(id: number): Promise<void>;
 
-  // Taskboard cards
-  getTaskboardCards(userId: number): TaskboardCard[];
-  createTaskboardCard(data: InsertTaskboardCard): TaskboardCard;
-  updateTaskboardCard(id: number, data: Partial<InsertTaskboardCard>): TaskboardCard | undefined;
-  deleteTaskboardCard(id: number): void;
+  getTaskboardCards(userId: number): Promise<TaskboardCard[]>;
+  createTaskboardCard(data: InsertTaskboardCard): Promise<TaskboardCard>;
+  updateTaskboardCard(id: number, data: Partial<InsertTaskboardCard>): Promise<TaskboardCard | undefined>;
+  deleteTaskboardCard(id: number): Promise<void>;
 }
 
-class SQLiteStorage implements IStorage {
-  getUser(id: number): User | undefined {
-    return db.select().from(users).where(eq(users.id, id)).get();
+// ── Column name mapping (snake_case DB → camelCase app) ───────────────────
+function mapUser(r: any): User {
+  return {
+    id: r.id, name: r.name,
+    baselineCompleted: r.baseline_completed ?? 0,
+    currentMode: r.current_mode ?? "standard",
+    totalSessionsCompleted: r.total_sessions_completed ?? 0,
+    totalMinutesTrained: r.total_minutes_trained ?? 0,
+    createdAt: r.created_at ?? Date.now(),
+  };
+}
+function mapDomainScore(r: any): DomainScore {
+  return {
+    id: r.id, userId: r.user_id, domain: r.domain, score: r.score,
+    totalTrials: r.total_trials ?? 0,
+    avgAccuracy: r.avg_accuracy ?? 0,
+    avgResponseTime: r.avg_response_time ?? 0,
+    avgConfidence: r.avg_confidence ?? 0,
+    updatedAt: r.updated_at ?? Date.now(),
+  };
+}
+function mapTrial(r: any): Trial {
+  return {
+    id: r.id, userId: r.user_id, domain: r.domain, activityId: r.activity_id,
+    correct: r.correct, responseTimeMs: r.response_time_ms ?? 0,
+    confidence: r.confidence ?? 50, difficulty: r.difficulty ?? 1,
+    errorType: r.error_type ?? null, notes: r.notes ?? null,
+    createdAt: r.created_at ?? Date.now(),
+  };
+}
+function mapSession(r: any): Session {
+  return {
+    id: r.id, userId: r.user_id, sessionType: r.session_type ?? "standard",
+    durationMinutes: r.duration_minutes ?? 0,
+    trialsCompleted: r.trials_completed ?? 0,
+    avgAccuracy: r.avg_accuracy ?? 0,
+    avgConfidence: r.avg_confidence ?? 0,
+    metacogReflection: r.metacog_reflection ?? null,
+    completedAt: r.completed_at ?? Date.now(),
+  };
+}
+function mapRecallItem(r: any): RecallItem {
+  return {
+    id: r.id, userId: r.user_id, front: r.front, back: r.back,
+    tags: r.tags ?? "[]", category: r.category ?? "general",
+    nextReviewAt: r.next_review_at ?? Date.now(),
+    intervalDays: r.interval_days ?? 1,
+    easeFactor: r.ease_factor ?? 2.5,
+    repetitions: r.repetitions ?? 0,
+    lastReviewedAt: r.last_reviewed_at ?? null,
+    createdAt: r.created_at ?? Date.now(),
+  };
+}
+function mapCalibration(r: any): CalibrationHistory {
+  return {
+    id: r.id, userId: r.user_id, domain: r.domain,
+    confidenceBucket: r.confidence_bucket,
+    correctCount: r.correct_count ?? 0,
+    totalCount: r.total_count ?? 0,
+    updatedAt: r.updated_at ?? Date.now(),
+  };
+}
+function mapNote(r: any): Note {
+  return {
+    id: r.id, userId: r.user_id, title: r.title ?? "Untitled",
+    content: r.content ?? "", tags: r.tags ?? "[]",
+    pinned: r.pinned ?? 0,
+    createdAt: r.created_at ?? Date.now(),
+    updatedAt: r.updated_at ?? Date.now(),
+  };
+}
+function mapMemoryItem(r: any): MemoryItem {
+  return {
+    id: r.id, userId: r.user_id, type: r.type ?? "reflection",
+    content: r.content, source: r.source ?? "manual",
+    confidence: r.confidence ?? 50, importance: r.importance ?? 50,
+    createdAt: r.created_at ?? Date.now(),
+    updatedAt: r.updated_at ?? Date.now(),
+  };
+}
+function mapTaskboardCard(r: any): TaskboardCard {
+  return {
+    id: r.id, userId: r.user_id, content: r.content ?? "",
+    color: r.color ?? "gold", posX: r.pos_x ?? 100, posY: r.pos_y ?? 100,
+    pinned: r.pinned ?? 0, width: r.width ?? 200,
+    createdAt: r.created_at ?? Date.now(),
+    updatedAt: r.updated_at ?? Date.now(),
+  };
+}
+
+// ── SupabaseStorage ───────────────────────────────────────────────────────
+class SupabaseStorage implements IStorage {
+  private sb: SupabaseClient;
+
+  constructor() {
+    const url = process.env.SUPABASE_URL!;
+    const key = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY!;
+    if (!url || !key) throw new Error("SUPABASE_URL and SUPABASE_SERVICE_KEY/ANON_KEY are required");
+    this.sb = createClient(url, key, { auth: { persistSession: false } });
   }
 
-  getDefaultUser(): User {
-    let user = db.select().from(users).get();
-    if (!user) {
-      user = db.insert(users).values({ name: "Trainee" }).returning().get();
-      // Initialize domain scores
-      const domains = ["recall", "working_memory", "focus", "flexibility", "problem_solving", "creativity", "intuition", "metacognition"];
-      for (const domain of domains) {
-        db.insert(domainScores).values({ userId: user.id, domain, score: 50 }).run();
-      }
-    }
+  // ── Users ───────────────────────────────────────────────────────────
+  async getUser(id: number): Promise<User | undefined> {
+    const { data } = await this.sb.from("users").select("*").eq("id", id).single();
+    return data ? mapUser(data) : undefined;
+  }
+
+  async getDefaultUser(): Promise<User> {
+    const { data } = await this.sb.from("users").select("*").order("id").limit(1).single();
+    if (data) return mapUser(data);
+    // Create default
+    const { data: created } = await this.sb.from("users")
+      .insert({ name: "Trainee", created_at: Date.now() }).select().single();
+    const user = mapUser(created);
+    const domains = ["recall","working_memory","focus","flexibility","problem_solving","creativity","intuition","metacognition"];
+    await this.sb.from("domain_scores").insert(
+      domains.map(d => ({ user_id: user.id, domain: d, score: 50, updated_at: Date.now() }))
+    );
     return user;
   }
 
-  createUser(data: InsertUser): User {
-    return db.insert(users).values(data).returning().get();
+  async createUser(data: InsertUser): Promise<User> {
+    const { data: r } = await this.sb.from("users").insert({
+      name: data.name ?? "Trainee",
+      baseline_completed: data.baselineCompleted ?? 0,
+      current_mode: data.currentMode ?? "standard",
+      total_sessions_completed: data.totalSessionsCompleted ?? 0,
+      total_minutes_trained: data.totalMinutesTrained ?? 0,
+      created_at: Date.now(),
+    }).select().single();
+    return mapUser(r);
   }
 
-  updateUser(id: number, data: Partial<InsertUser>): User | undefined {
-    return db.update(users).set(data).where(eq(users.id, id)).returning().get();
+  async updateUser(id: number, data: Partial<InsertUser>): Promise<User | undefined> {
+    const patch: any = {};
+    if (data.name !== undefined) patch.name = data.name;
+    if (data.baselineCompleted !== undefined) patch.baseline_completed = data.baselineCompleted;
+    if (data.currentMode !== undefined) patch.current_mode = data.currentMode;
+    if (data.totalSessionsCompleted !== undefined) patch.total_sessions_completed = data.totalSessionsCompleted;
+    if (data.totalMinutesTrained !== undefined) patch.total_minutes_trained = data.totalMinutesTrained;
+    const { data: r } = await this.sb.from("users").update(patch).eq("id", id).select().single();
+    return r ? mapUser(r) : undefined;
   }
 
-  getDomainScores(userId: number): DomainScore[] {
-    return db.select().from(domainScores).where(eq(domainScores.userId, userId)).all();
+  // ── Domain Scores ───────────────────────────────────────────────────
+  async getDomainScores(userId: number): Promise<DomainScore[]> {
+    const { data } = await this.sb.from("domain_scores").select("*").eq("user_id", userId);
+    return (data ?? []).map(mapDomainScore);
   }
 
-  getDomainScore(userId: number, domain: string): DomainScore | undefined {
-    return db.select().from(domainScores)
-      .where(and(eq(domainScores.userId, userId), eq(domainScores.domain, domain)))
-      .get();
+  async getDomainScore(userId: number, domain: string): Promise<DomainScore | undefined> {
+    const { data } = await this.sb.from("domain_scores").select("*")
+      .eq("user_id", userId).eq("domain", domain).single();
+    return data ? mapDomainScore(data) : undefined;
   }
 
-  upsertDomainScore(data: InsertDomainScore): DomainScore {
-    const existing = this.getDomainScore(data.userId, data.domain);
+  async upsertDomainScore(data: InsertDomainScore): Promise<DomainScore> {
+    const existing = await this.getDomainScore(data.userId, data.domain);
     if (existing) {
-      return db.update(domainScores)
-        .set({ ...data, updatedAt: Date.now() })
-        .where(eq(domainScores.id, existing.id))
-        .returning().get();
+      const { data: r } = await this.sb.from("domain_scores").update({
+        score: data.score, total_trials: data.totalTrials,
+        avg_accuracy: data.avgAccuracy, avg_response_time: data.avgResponseTime,
+        avg_confidence: data.avgConfidence, updated_at: Date.now(),
+      }).eq("id", existing.id).select().single();
+      return mapDomainScore(r);
     }
-    return db.insert(domainScores).values(data).returning().get();
+    const { data: r } = await this.sb.from("domain_scores").insert({
+      user_id: data.userId, domain: data.domain, score: data.score,
+      total_trials: data.totalTrials ?? 0, avg_accuracy: data.avgAccuracy ?? 0,
+      avg_response_time: data.avgResponseTime ?? 0, avg_confidence: data.avgConfidence ?? 0,
+      updated_at: Date.now(),
+    }).select().single();
+    return mapDomainScore(r);
   }
 
-  createTrial(data: InsertTrial): Trial {
-    return db.insert(trials).values(data).returning().get();
+  // ── Trials ──────────────────────────────────────────────────────────
+  async createTrial(data: InsertTrial): Promise<Trial> {
+    const { data: r } = await this.sb.from("trials").insert({
+      user_id: data.userId, domain: data.domain, activity_id: data.activityId,
+      correct: data.correct, response_time_ms: data.responseTimeMs ?? 0,
+      confidence: data.confidence ?? 50, difficulty: data.difficulty ?? 1,
+      error_type: data.errorType ?? null, notes: data.notes ?? null,
+      created_at: Date.now(),
+    }).select().single();
+    return mapTrial(r);
   }
 
-  getRecentTrials(userId: number, limit = 50): Trial[] {
-    return db.select().from(trials)
-      .where(eq(trials.userId, userId))
-      .orderBy(desc(trials.createdAt))
-      .limit(limit)
-      .all();
+  async getRecentTrials(userId: number, limit = 50): Promise<Trial[]> {
+    const { data } = await this.sb.from("trials").select("*")
+      .eq("user_id", userId).order("created_at", { ascending: false }).limit(limit);
+    return (data ?? []).map(mapTrial);
   }
 
-  getTrialsByDomain(userId: number, domain: string, limit = 20): Trial[] {
-    return db.select().from(trials)
-      .where(and(eq(trials.userId, userId), eq(trials.domain, domain)))
-      .orderBy(desc(trials.createdAt))
-      .limit(limit)
-      .all();
+  async getTrialsByDomain(userId: number, domain: string, limit = 20): Promise<Trial[]> {
+    const { data } = await this.sb.from("trials").select("*")
+      .eq("user_id", userId).eq("domain", domain)
+      .order("created_at", { ascending: false }).limit(limit);
+    return (data ?? []).map(mapTrial);
   }
 
-  createSession(data: InsertSession): Session {
-    return db.insert(sessions).values(data).returning().get();
+  // ── Sessions ────────────────────────────────────────────────────────
+  async createSession(data: InsertSession): Promise<Session> {
+    const { data: r } = await this.sb.from("sessions").insert({
+      user_id: data.userId, session_type: data.sessionType ?? "standard",
+      duration_minutes: data.durationMinutes ?? 0,
+      trials_completed: data.trialsCompleted ?? 0,
+      avg_accuracy: data.avgAccuracy ?? 0, avg_confidence: data.avgConfidence ?? 0,
+      metacog_reflection: data.metacogReflection ?? null,
+      completed_at: Date.now(),
+    }).select().single();
+    return mapSession(r);
   }
 
-  getRecentSessions(userId: number, limit = 10): Session[] {
-    return db.select().from(sessions)
-      .where(eq(sessions.userId, userId))
-      .orderBy(desc(sessions.completedAt))
-      .limit(limit)
-      .all();
+  async getRecentSessions(userId: number, limit = 10): Promise<Session[]> {
+    const { data } = await this.sb.from("sessions").select("*")
+      .eq("user_id", userId).order("completed_at", { ascending: false }).limit(limit);
+    return (data ?? []).map(mapSession);
   }
 
-  createRecallItem(data: InsertRecallItem): RecallItem {
-    return db.insert(recallItems).values(data).returning().get();
+  // ── Recall Items ────────────────────────────────────────────────────
+  async createRecallItem(data: InsertRecallItem): Promise<RecallItem> {
+    const { data: r } = await this.sb.from("recall_items").insert({
+      user_id: data.userId, front: data.front, back: data.back,
+      tags: data.tags ?? "[]", category: data.category ?? "general",
+      next_review_at: data.nextReviewAt ?? Date.now(),
+      interval_days: data.intervalDays ?? 1, ease_factor: data.easeFactor ?? 2.5,
+      repetitions: data.repetitions ?? 0,
+      last_reviewed_at: data.lastReviewedAt ?? null,
+      created_at: Date.now(),
+    }).select().single();
+    return mapRecallItem(r);
   }
 
-  getRecallItems(userId: number): RecallItem[] {
-    return db.select().from(recallItems)
-      .where(eq(recallItems.userId, userId))
-      .orderBy(desc(recallItems.createdAt))
-      .all();
+  async getRecallItems(userId: number): Promise<RecallItem[]> {
+    const { data } = await this.sb.from("recall_items").select("*")
+      .eq("user_id", userId).order("created_at", { ascending: false });
+    return (data ?? []).map(mapRecallItem);
   }
 
-  getDueRecallItems(userId: number): RecallItem[] {
+  async getDueRecallItems(userId: number): Promise<RecallItem[]> {
+    const { data } = await this.sb.from("recall_items").select("*")
+      .eq("user_id", userId).lte("next_review_at", Date.now());
+    return (data ?? []).map(mapRecallItem);
+  }
+
+  async updateRecallItem(id: number, data: Partial<InsertRecallItem>): Promise<RecallItem | undefined> {
+    const patch: any = {};
+    if (data.front !== undefined) patch.front = data.front;
+    if (data.back !== undefined) patch.back = data.back;
+    if (data.tags !== undefined) patch.tags = data.tags;
+    if (data.category !== undefined) patch.category = data.category;
+    if (data.nextReviewAt !== undefined) patch.next_review_at = data.nextReviewAt;
+    if (data.intervalDays !== undefined) patch.interval_days = data.intervalDays;
+    if (data.easeFactor !== undefined) patch.ease_factor = data.easeFactor;
+    if (data.repetitions !== undefined) patch.repetitions = data.repetitions;
+    if (data.lastReviewedAt !== undefined) patch.last_reviewed_at = data.lastReviewedAt;
+    const { data: r } = await this.sb.from("recall_items").update(patch).eq("id", id).select().single();
+    return r ? mapRecallItem(r) : undefined;
+  }
+
+  async deleteRecallItem(id: number): Promise<void> {
+    await this.sb.from("recall_items").delete().eq("id", id);
+  }
+
+  // ── Calibration ─────────────────────────────────────────────────────
+  async getCalibrationData(userId: number): Promise<CalibrationHistory[]> {
+    const { data } = await this.sb.from("calibration_history").select("*").eq("user_id", userId);
+    return (data ?? []).map(mapCalibration);
+  }
+
+  async upsertCalibration(data: InsertCalibration): Promise<CalibrationHistory> {
+    const { data: existing } = await this.sb.from("calibration_history").select("*")
+      .eq("user_id", data.userId).eq("domain", data.domain)
+      .eq("confidence_bucket", data.confidenceBucket).single();
+    if (existing) {
+      const { data: r } = await this.sb.from("calibration_history").update({
+        correct_count: data.correctCount, total_count: data.totalCount, updated_at: Date.now(),
+      }).eq("id", existing.id).select().single();
+      return mapCalibration(r);
+    }
+    const { data: r } = await this.sb.from("calibration_history").insert({
+      user_id: data.userId, domain: data.domain,
+      confidence_bucket: data.confidenceBucket,
+      correct_count: data.correctCount ?? 0, total_count: data.totalCount ?? 0,
+      updated_at: Date.now(),
+    }).select().single();
+    return mapCalibration(r);
+  }
+
+  // ── Notes ───────────────────────────────────────────────────────────
+  async getNotes(userId: number): Promise<Note[]> {
+    const { data } = await this.sb.from("notes").select("*")
+      .eq("user_id", userId).order("updated_at", { ascending: false });
+    return (data ?? []).map(mapNote);
+  }
+
+  async getNote(id: number): Promise<Note | undefined> {
+    const { data } = await this.sb.from("notes").select("*").eq("id", id).single();
+    return data ? mapNote(data) : undefined;
+  }
+
+  async createNote(data: InsertNote): Promise<Note> {
     const now = Date.now();
-    return db.select().from(recallItems)
-      .where(and(eq(recallItems.userId, userId), lte(recallItems.nextReviewAt, now)))
-      .all();
+    const { data: r } = await this.sb.from("notes").insert({
+      user_id: data.userId, title: data.title ?? "Untitled",
+      content: data.content ?? "", tags: data.tags ?? "[]",
+      pinned: data.pinned ?? 0, created_at: now, updated_at: now,
+    }).select().single();
+    return mapNote(r);
   }
 
-  updateRecallItem(id: number, data: Partial<InsertRecallItem>): RecallItem | undefined {
-    return db.update(recallItems).set(data).where(eq(recallItems.id, id)).returning().get();
+  async updateNote(id: number, data: Partial<InsertNote>): Promise<Note | undefined> {
+    const patch: any = { updated_at: Date.now() };
+    if (data.title !== undefined) patch.title = data.title;
+    if (data.content !== undefined) patch.content = data.content;
+    if (data.tags !== undefined) patch.tags = data.tags;
+    if (data.pinned !== undefined) patch.pinned = data.pinned;
+    const { data: r } = await this.sb.from("notes").update(patch).eq("id", id).select().single();
+    return r ? mapNote(r) : undefined;
   }
 
-  deleteRecallItem(id: number): void {
-    db.delete(recallItems).where(eq(recallItems.id, id)).run();
+  async deleteNote(id: number): Promise<void> {
+    await this.sb.from("notes").delete().eq("id", id);
   }
 
-  getCalibrationData(userId: number): CalibrationHistory[] {
-    return db.select().from(calibrationHistory)
-      .where(eq(calibrationHistory.userId, userId))
-      .all();
+  // ── App Config ──────────────────────────────────────────────────────
+  async getConfig(key: string): Promise<string | undefined> {
+    const { data } = await this.sb.from("app_config").select("value").eq("key", key).single();
+    return data?.value;
   }
 
-  upsertCalibration(data: InsertCalibration): CalibrationHistory {
-    const existing = db.select().from(calibrationHistory)
-      .where(and(
-        eq(calibrationHistory.userId, data.userId),
-        eq(calibrationHistory.domain, data.domain),
-        eq(calibrationHistory.confidenceBucket, data.confidenceBucket)
-      )).get();
-    if (existing) {
-      return db.update(calibrationHistory)
-        .set({ ...data, updatedAt: Date.now() })
-        .where(eq(calibrationHistory.id, existing.id))
-        .returning().get();
-    }
-    return db.insert(calibrationHistory).values(data).returning().get();
+  async setConfig(key: string, value: string): Promise<void> {
+    await this.sb.from("app_config").upsert({ key, value }, { onConflict: "key" });
   }
 
-  // ── Notes ──────────────────────────────────────────────────────────
-  getNotes(userId: number): Note[] {
-    return db.select().from(notes)
-      .where(eq(notes.userId, userId))
-      .orderBy(desc(notes.updatedAt))
-      .all();
-  }
-
-  getNote(id: number): Note | undefined {
-    return db.select().from(notes).where(eq(notes.id, id)).get();
-  }
-
-  createNote(data: InsertNote): Note {
-    const now = Date.now();
-    return db.insert(notes).values({ ...data, createdAt: now, updatedAt: now }).returning().get();
-  }
-
-  updateNote(id: number, data: Partial<InsertNote>): Note | undefined {
-    return db.update(notes)
-      .set({ ...data, updatedAt: Date.now() })
-      .where(eq(notes.id, id))
-      .returning().get();
-  }
-
-  deleteNote(id: number): void {
-    db.delete(notes).where(eq(notes.id, id)).run();
-  }
-
-  // ── App Config ─────────────────────────────────────────────────────
-  getConfig(key: string): string | undefined {
-    const row = db.select().from(appConfig).where(eq(appConfig.key, key)).get();
-    return row?.value;
-  }
-
-  setConfig(key: string, value: string): void {
-    const existing = db.select().from(appConfig).where(eq(appConfig.key, key)).get();
-    if (existing) {
-      db.update(appConfig).set({ value }).where(eq(appConfig.key, key)).run();
-    } else {
-      db.insert(appConfig).values({ key, value }).run();
-    }
-  }
-
-  getActiveProfileId(): number {
-    const val = this.getConfig("active_profile_id");
+  async getActiveProfileId(): Promise<number> {
+    const val = await this.getConfig("active_profile_id");
     if (val) {
       const id = parseInt(val, 10);
       if (!isNaN(id)) return id;
     }
-    // Fall back to default user
-    const user = this.getDefaultUser();
-    this.setConfig("active_profile_id", String(user.id));
+    const user = await this.getDefaultUser();
+    await this.setConfig("active_profile_id", String(user.id));
     return user.id;
   }
 
-  setActiveProfileId(id: number): void {
-    this.setConfig("active_profile_id", String(id));
+  async setActiveProfileId(id: number): Promise<void> {
+    await this.setConfig("active_profile_id", String(id));
   }
 
-  // ── Profile Management ─────────────────────────────────────────────
-  getAllProfiles(): User[] {
-    return db.select().from(users).orderBy(users.createdAt).all();
+  // ── Profiles ────────────────────────────────────────────────────────
+  async getAllProfiles(): Promise<User[]> {
+    const { data } = await this.sb.from("users").select("*").order("id");
+    return (data ?? []).map(mapUser);
   }
 
-  createProfile(name: string): User {
-    const user = db.insert(users).values({ name }).returning().get();
-    // Initialize domain scores for new profile
-    const domains = ["recall", "working_memory", "focus", "flexibility", "problem_solving", "creativity", "intuition", "metacognition"];
-    for (const domain of domains) {
-      db.insert(domainScores).values({ userId: user.id, domain, score: 50 }).run();
-    }
+  async createProfile(name: string): Promise<User> {
+    const { data: r } = await this.sb.from("users")
+      .insert({ name, created_at: Date.now() }).select().single();
+    const user = mapUser(r);
+    const domains = ["recall","working_memory","focus","flexibility","problem_solving","creativity","intuition","metacognition"];
+    await this.sb.from("domain_scores").insert(
+      domains.map(d => ({ user_id: user.id, domain: d, score: 50, updated_at: Date.now() }))
+    );
     return user;
   }
 
-  deleteProfile(id: number): void {
-    // Cascade delete in order: memory_items → notes → calibration_history → recall_items → sessions → trials → domain_scores → users
-    db.delete(memoryItems).where(eq(memoryItems.userId, id)).run();
-    db.delete(notes).where(eq(notes.userId, id)).run();
-    db.delete(calibrationHistory).where(eq(calibrationHistory.userId, id)).run();
-    db.delete(recallItems).where(eq(recallItems.userId, id)).run();
-    db.delete(sessions).where(eq(sessions.userId, id)).run();
-    db.delete(trials).where(eq(trials.userId, id)).run();
-    db.delete(domainScores).where(eq(domainScores.userId, id)).run();
-    db.delete(users).where(eq(users.id, id)).run();
+  async deleteProfile(id: number): Promise<void> {
+    // Cascade is handled by FK ON DELETE CASCADE in the schema
+    await this.sb.from("users").delete().eq("id", id);
   }
 
-  getProfileStats(id: number): { sessionsCompleted: number; minutesTrained: number } {
-    const result = db.select({
-      sessionsCompleted: sql<number>`COUNT(*)`,
-      minutesTrained: sql<number>`COALESCE(SUM(duration_minutes), 0)`,
-    })
-      .from(sessions)
-      .where(eq(sessions.userId, id))
-      .get();
-    return {
-      sessionsCompleted: result?.sessionsCompleted ?? 0,
-      minutesTrained: result?.minutesTrained ?? 0,
-    };
+  async getProfileStats(id: number): Promise<{ sessionsCompleted: number; minutesTrained: number }> {
+    const { data } = await this.sb.from("sessions").select("duration_minutes").eq("user_id", id);
+    const sessionsCompleted = data?.length ?? 0;
+    const minutesTrained = data?.reduce((sum, s) => sum + (s.duration_minutes ?? 0), 0) ?? 0;
+    return { sessionsCompleted, minutesTrained };
   }
 
-  // ── Memory Items ───────────────────────────────────────────────────
-  getMemoryItems(userId: number): MemoryItem[] {
-    return db.select().from(memoryItems)
-      .where(eq(memoryItems.userId, userId))
-      .orderBy(desc(memoryItems.createdAt))
-      .all();
+  // ── Memory Items ────────────────────────────────────────────────────
+  async getMemoryItems(userId: number): Promise<MemoryItem[]> {
+    const { data } = await this.sb.from("memory_items").select("*")
+      .eq("user_id", userId).order("created_at", { ascending: false });
+    return (data ?? []).map(mapMemoryItem);
   }
 
-  createMemoryItem(data: InsertMemoryItem): MemoryItem {
+  async createMemoryItem(data: InsertMemoryItem): Promise<MemoryItem> {
     const now = Date.now();
-    return db.insert(memoryItems).values({ ...data, createdAt: now, updatedAt: now }).returning().get();
+    const { data: r } = await this.sb.from("memory_items").insert({
+      user_id: data.userId, type: data.type ?? "reflection",
+      content: data.content, source: data.source ?? "manual",
+      confidence: data.confidence ?? 50, importance: data.importance ?? 50,
+      created_at: now, updated_at: now,
+    }).select().single();
+    return mapMemoryItem(r);
   }
 
-  updateMemoryItem(id: number, data: Partial<InsertMemoryItem>): MemoryItem | undefined {
-    return db.update(memoryItems)
-      .set({ ...data, updatedAt: Date.now() })
-      .where(eq(memoryItems.id, id))
-      .returning().get();
+  async updateMemoryItem(id: number, data: Partial<InsertMemoryItem>): Promise<MemoryItem | undefined> {
+    const patch: any = { updated_at: Date.now() };
+    if (data.type !== undefined) patch.type = data.type;
+    if (data.content !== undefined) patch.content = data.content;
+    if (data.source !== undefined) patch.source = data.source;
+    if (data.confidence !== undefined) patch.confidence = data.confidence;
+    if (data.importance !== undefined) patch.importance = data.importance;
+    const { data: r } = await this.sb.from("memory_items").update(patch).eq("id", id).select().single();
+    return r ? mapMemoryItem(r) : undefined;
   }
 
-  deleteMemoryItem(id: number): void {
-    db.delete(memoryItems).where(eq(memoryItems.id, id)).run();
+  async deleteMemoryItem(id: number): Promise<void> {
+    await this.sb.from("memory_items").delete().eq("id", id);
   }
 
-  // ── Taskboard Cards ────────────────────────────────────────────────
-  getTaskboardCards(userId: number): TaskboardCard[] {
-    const rows = sqlite.prepare(
-      "SELECT id, user_id as userId, content, color, pos_x as posX, pos_y as posY, pinned, width, created_at as createdAt, updated_at as updatedAt FROM taskboard_cards WHERE user_id = ? ORDER BY created_at DESC"
-    ).all(userId) as TaskboardCard[];
-    return rows;
+  // ── Taskboard Cards ─────────────────────────────────────────────────
+  async getTaskboardCards(userId: number): Promise<TaskboardCard[]> {
+    const { data } = await this.sb.from("taskboard_cards").select("*")
+      .eq("user_id", userId).order("created_at", { ascending: false });
+    return (data ?? []).map(mapTaskboardCard);
   }
 
-  createTaskboardCard(data: InsertTaskboardCard): TaskboardCard {
+  async createTaskboardCard(data: InsertTaskboardCard): Promise<TaskboardCard> {
     const now = Date.now();
-    const result = sqlite.prepare(
-      "INSERT INTO taskboard_cards (user_id, content, color, pos_x, pos_y, pinned, width, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, user_id as userId, content, color, pos_x as posX, pos_y as posY, pinned, width, created_at as createdAt, updated_at as updatedAt"
-    ).get(data.userId, data.content, data.color, data.posX, data.posY, data.pinned, data.width, now, now) as TaskboardCard;
-    return result;
+    const { data: r } = await this.sb.from("taskboard_cards").insert({
+      user_id: data.userId, content: data.content ?? "",
+      color: data.color ?? "gold", pos_x: data.posX ?? 100,
+      pos_y: data.posY ?? 100, pinned: data.pinned ?? 0,
+      width: data.width ?? 200, created_at: now, updated_at: now,
+    }).select().single();
+    return mapTaskboardCard(r);
   }
 
-  updateTaskboardCard(id: number, data: Partial<InsertTaskboardCard>): TaskboardCard | undefined {
-    const now = Date.now();
-    const fields: string[] = [];
-    const values: any[] = [];
-    if (data.content !== undefined) { fields.push("content = ?"); values.push(data.content); }
-    if (data.color !== undefined)   { fields.push("color = ?");   values.push(data.color); }
-    if (data.posX !== undefined)    { fields.push("pos_x = ?");   values.push(data.posX); }
-    if (data.posY !== undefined)    { fields.push("pos_y = ?");   values.push(data.posY); }
-    if (data.pinned !== undefined)  { fields.push("pinned = ?");  values.push(data.pinned); }
-    if (data.width !== undefined)   { fields.push("width = ?");   values.push(data.width); }
-    if (fields.length === 0) return this.getTaskboardCards(0).find(c => c.id === id);
-    fields.push("updated_at = ?");
-    values.push(now, id);
-    const result = sqlite.prepare(
-      `UPDATE taskboard_cards SET ${fields.join(", ")} WHERE id = ? RETURNING id, user_id as userId, content, color, pos_x as posX, pos_y as posY, pinned, width, created_at as createdAt, updated_at as updatedAt`
-    ).get(...values) as TaskboardCard | undefined;
-    return result;
+  async updateTaskboardCard(id: number, data: Partial<InsertTaskboardCard>): Promise<TaskboardCard | undefined> {
+    const patch: any = { updated_at: Date.now() };
+    if (data.content !== undefined) patch.content = data.content;
+    if (data.color !== undefined) patch.color = data.color;
+    if (data.posX !== undefined) patch.pos_x = data.posX;
+    if (data.posY !== undefined) patch.pos_y = data.posY;
+    if (data.pinned !== undefined) patch.pinned = data.pinned;
+    if (data.width !== undefined) patch.width = data.width;
+    const { data: r } = await this.sb.from("taskboard_cards").update(patch).eq("id", id).select().single();
+    return r ? mapTaskboardCard(r) : undefined;
   }
 
-  deleteTaskboardCard(id: number): void {
-    sqlite.prepare("DELETE FROM taskboard_cards WHERE id = ?").run(id);
+  async deleteTaskboardCard(id: number): Promise<void> {
+    await this.sb.from("taskboard_cards").delete().eq("id", id);
   }
 }
 
-export const storage = new SQLiteStorage();
+export const storage = new SupabaseStorage();
