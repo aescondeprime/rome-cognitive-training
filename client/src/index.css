@@ -510,6 +510,52 @@
 .note-content a { color: hsl(43 80% 58%); text-decoration: underline; text-underline-offset: 3px; }
 .note-content hr { border-color: hsl(43 25% 18%); margin: 1.5rem 0; }
 
+/* ─── Galvanized / neon-blue highlight ───────────────────────────── */
+@keyframes galvanizedPulse {
+  0%, 100% {
+    text-shadow:
+      0 0 4px hsl(200 100% 75%),
+      0 0 12px hsl(210 100% 60%),
+      0 0 28px hsl(210 100% 50%),
+      0 0 50px hsl(215 100% 40%);
+    opacity: 1;
+  }
+  45% {
+    text-shadow:
+      0 0 2px hsl(200 100% 85%),
+      0 0 8px hsl(210 100% 70%),
+      0 0 18px hsl(210 100% 55%),
+      0 0 35px hsl(215 100% 45%);
+    opacity: 0.88;
+  }
+  50% {
+    text-shadow:
+      0 0 6px hsl(200 100% 90%),
+      0 0 18px hsl(210 100% 65%),
+      0 0 40px hsl(210 100% 50%),
+      0 0 70px hsl(215 100% 38%);
+    opacity: 1;
+  }
+}
+
+@keyframes galvanizedFlicker {
+  0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% { opacity: 1; }
+  20%, 24%, 55% { opacity: 0.82; }
+}
+
+.note-content .galvanized {
+  color: hsl(200 100% 82%);
+  font-weight: 600;
+  animation:
+    galvanizedPulse 2.8s ease-in-out infinite,
+    galvanizedFlicker 6s step-end infinite;
+  display: inline;
+  border-radius: 2px;
+  padding: 0 2px;
+  /* subtle blue underline */
+  border-bottom: 1px solid hsl(210 100% 60% / 0.5);
+}
+
 /* Tag pill */
 .rome-tag {
   display: inline-flex;

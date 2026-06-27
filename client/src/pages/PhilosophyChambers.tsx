@@ -6,7 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Feather, Plus, Search, Trash2, Pin, PinOff, Tag, X,
   Bold, Italic, List, ListOrdered, Quote, Code, Heading1, Heading2,
-  Hash, Clock, FileText, Loader2,
+  Hash, Clock, FileText, Loader2, Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +45,8 @@ function renderMarkdown(md: string): string {
     .replace(/^\* (.+)$/gm, "<li>$1</li>")
     .replace(/^\d+\. (.+)$/gm, "<li>$1</li>")
     .replace(/^---$/gm, "<hr/>")
+    // Galvanized ==text== — must come before bold so it isn't consumed
+    .replace(/==(.+?)==/g, '<span class="galvanized">$1</span>')
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
     .replace(/`([^`]+)`/g, "<code>$1</code>")
@@ -184,6 +186,21 @@ export default function PhilosophyChambers() {
     setTimeout(() => {
       ta.focus();
       ta.setSelectionRange(s + wrap.length, s + wrap.length + (sel || "text").length);
+    }, 10);
+  }
+
+  // Galvanize: wrap selection in ==…== (neon blue animated glow in preview)
+  function insertGalvanize() {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const { selectionStart: s, selectionEnd: e } = ta;
+    const sel = draftContent.slice(s, e) || "galvanized";
+    const replacement = `==${sel}==`;
+    const next = draftContent.slice(0, s) + replacement + draftContent.slice(e);
+    setDraftContent(next);
+    setTimeout(() => {
+      ta.focus();
+      ta.setSelectionRange(s + 2, s + 2 + sel.length);
     }, 10);
   }
 
@@ -330,6 +347,26 @@ export default function PhilosophyChambers() {
                 <Icon className="w-3.5 h-3.5" />
               </button>
             ))}
+
+            {/* Galvanize button — neon blue animated glow */}
+            <div className="w-px h-4 bg-border mx-0.5" />
+            <button
+              onClick={insertGalvanize}
+              title="Galvanize — neon blue glow (==text==)"
+              className="w-7 h-7 rounded flex items-center justify-center transition-all relative group"
+              style={{ color: "hsl(200 100% 70%)" }}
+            >
+              <Zap
+                className="w-3.5 h-3.5"
+                style={{ filter: "drop-shadow(0 0 4px hsl(210 100% 60%)) drop-shadow(0 0 10px hsl(210 100% 50%))" }}
+              />
+              <span
+                className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-[9px] font-mono whitespace-nowrap bg-cave-800 border border-cave-700 px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                style={{ color: "hsl(200 100% 75%)" }}
+              >
+                Galvanize
+              </span>
+            </button>
 
             <div className="w-px h-4 bg-border mx-1" />
 
