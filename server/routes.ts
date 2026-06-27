@@ -2,8 +2,23 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { z } from "zod";
-import bcrypt from "bcryptjs";
 import crypto from "crypto";
+import { promisify } from "util";
+
+const scryptAsync = promisify(crypto.scrypt);
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const buf = (await scryptAsync(password, salt, 64)) as Buffer;
+  return `${buf.toString("hex")}.${salt}`;
+}
+
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const [hashed, salt] = stored.split(".");
+  if (!hashed || !salt) return false;
+  const buf = (await scryptAsync(password, salt, 64)) as Buffer;
+  return crypto.timingSafeEqual(Buffer.from(hashed, "hex"), buf);
+}
 
 // ── Auth middleware ────────────────────────────────────────────────────
 async function requireAuth(req: Request, res: Response, next: NextFunction) {
@@ -105,7 +120,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const existing = await storage.getUserByName(name.trim());
       if (existing) return res.status(409).json({ error: "A profile with that name already exists" });
       const user = await storage.createProfile(name.trim());
-      const hash = await bcrypt.hash(password, 12);
+      const hash = await hashPassword(password);
       await storage.setPasswordHash(user.id, hash);
       const sessionId = crypto.randomBytes(32).toString("hex");
       await storage.createAuthSession(user.id, sessionId, Date.now() + SESSION_TTL_MS);
@@ -121,7 +136,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user) return res.status(401).json({ error: "No profile found with that name" });
       const hash = await storage.getPasswordHash(user.id);
       if (!hash) return res.status(401).json({ error: "This profile has no password set" });
-      const valid = await bcrypt.compare(password, hash);
+      const valid = await verifyPassword(password, hash);
       if (!valid) return res.status(401).json({ error: "Incorrect password" });
       const sessionId = crypto.randomBytes(32).toString("hex");
       await storage.createAuthSession(user.id, sessionId, Date.now() + SESSION_TTL_MS);
