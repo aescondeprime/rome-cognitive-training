@@ -41,6 +41,7 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     subnodes: [
       { id: "s-session",  label: "Begin Session", icon: "⚡", href: "/training",  description: "Start a guided training protocol" },
       { id: "s-profile",  label: "My Profile",    icon: "◎", href: "/profile",   description: "View cognitive domain scores" },
+      { id: "s-profiles", label: "Profiles",       icon: "◉", href: "/profiles",  description: "Switch or create profiles" },
       { id: "s-settings", label: "Settings",       icon: "⌬", href: "/settings",  description: "Configure app preferences" },
     ],
     connections: ["recall", "working_memory", "focus", "problem_solving", "metacognition"],

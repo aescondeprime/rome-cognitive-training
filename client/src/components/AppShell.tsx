@@ -72,15 +72,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         {/* Right — profile chip + settings */}
         <div className="flex items-center gap-3">
           {activeProfile && (
-            <span
-              className="text-[10px] tracking-widest uppercase"
-              style={{
-                fontFamily: "DM Mono, monospace",
-                color: "hsl(43 30% 42%)",
-              }}
-            >
-              {activeProfile.name}
-            </span>
+            <Link href="/profiles">
+              <span
+                className="text-[10px] tracking-widest uppercase cursor-pointer transition-colors"
+                style={{
+                  fontFamily: "DM Mono, monospace",
+                  color: "hsl(43 30% 42%)",
+                }}
+                onMouseEnter={e => (e.currentTarget.style.color = "hsl(43 70% 58%)")}
+                onMouseLeave={e => (e.currentTarget.style.color = "hsl(43 30% 42%)")}
+                title="Switch profile"
+              >
+                ◎ {activeProfile.name}
+              </span>
+            </Link>
           )}
           <Link href="/settings">
             <button className="opacity-30 hover:opacity-70 transition-opacity">
