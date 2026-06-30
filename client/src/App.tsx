@@ -10,29 +10,31 @@ import AppShell from "@/components/AppShell";
 import { ConstellationPortal } from "@/components/ConstellationOverlay";
 import Login from "@/pages/Login";
 
-// Pages
-import Dashboard from "@/pages/Dashboard";
-import TrainingMap from "@/pages/TrainingMap";
-import Activity from "@/pages/Activity";
-import MemoryVault from "@/pages/MemoryVault";
-import CognitiveProfile from "@/pages/CognitiveProfile";
-import ScenarioDeck from "@/pages/ScenarioDeck";
-import Research from "@/pages/Research";
+// Core pages kept
 import PhilosophyChambers from "@/pages/PhilosophyChambers";
-import Onboarding from "@/pages/Onboarding";
 import ProfileManager from "@/pages/ProfileManager";
-import LocalMemory from "@/pages/LocalMemory";
 import Settings from "@/pages/Settings";
 import Taskboard from "@/pages/Taskboard";
 import NotFound from "@/pages/not-found";
 
+// Athena Trials
+import AthenaTrials from "@/pages/AthenaTrials";
+import DualNBack from "@/pages/games/DualNBack";
+import CWM from "@/pages/games/CWM";
+import MentalMath from "@/pages/games/MentalMath";
+import CorsiBlocks from "@/pages/games/CorsiBlocks";
+import MemorySpan from "@/pages/games/MemorySpan";
+import PASAT from "@/pages/games/PASAT";
+
+// Placeholder nodes
+import PlaceholderNode from "@/pages/PlaceholderNode";
+
 function AuthGate({ children }: { children: React.ReactNode }) {
-  const [authed, setAuthed] = useState<boolean | null>(null); // null = loading
+  const [authed, setAuthed] = useState<boolean | null>(null);
 
   useEffect(() => {
     const token = getToken();
     if (!token) { setAuthed(false); return; }
-    // Verify token is still valid
     fetch("/api/auth/me", { headers: authHeaders() })
       .then(r => {
         if (r.ok) setAuthed(true);
@@ -42,7 +44,6 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }, []);
 
   if (authed === null) {
-    // Loading — show blank cave background
     return (
       <div style={{
         position: "fixed", inset: 0,
@@ -60,10 +61,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!authed) {
-    return <Login onLogin={() => setAuthed(true)} />;
-  }
-
+  if (!authed) return <Login onLogin={() => setAuthed(true)} />;
   return <>{children}</>;
 }
 
@@ -72,34 +70,52 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthGate>
-          {/* Global constellation overlay — toggled by Tab or the ⊕ button */}
           <ConstellationPortal />
-
           <Router hook={useHashLocation}>
             <Switch>
-              <Route path="/onboarding" component={Onboarding} />
-
-              {/* "/" redirects to dashboard */}
               <Route path="/">
-                <Redirect to="/dashboard" />
+                <Redirect to="/athena" />
               </Route>
-
-              {/* All main routes inside AppShell */}
               <Route>
                 <AppShell>
                   <Switch>
-                    <Route path="/dashboard"    component={Dashboard} />
-                    <Route path="/training"     component={TrainingMap} />
-                    <Route path="/activity/:id" component={Activity} />
-                    <Route path="/scenarios"    component={ScenarioDeck} />
-                    <Route path="/vault"        component={MemoryVault} />
-                    <Route path="/profile"      component={CognitiveProfile} />
-                    <Route path="/research"     component={Research} />
-                    <Route path="/philosophy"   component={PhilosophyChambers} />
-                    <Route path="/profiles"     component={ProfileManager} />
-                    <Route path="/memory"       component={LocalMemory} />
-                    <Route path="/taskboard"    component={Taskboard} />
-                    <Route path="/settings"     component={Settings} />
+                    {/* Athena Trials */}
+                    <Route path="/athena"             component={AthenaTrials} />
+                    <Route path="/athena/dual-n-back"  component={DualNBack} />
+                    <Route path="/athena/cwm"          component={CWM} />
+                    <Route path="/athena/mental-math"  component={MentalMath} />
+                    <Route path="/athena/corsi"        component={CorsiBlocks} />
+                    <Route path="/athena/memory-span"  component={MemorySpan} />
+                    <Route path="/athena/pasat"        component={PASAT} />
+
+                    {/* Philosophy */}
+                    <Route path="/philosophy" component={PhilosophyChambers} />
+
+                    {/* Strategic — has Taskboard */}
+                    <Route path="/strategic">
+                      <PlaceholderNode title="Strategic" symbol="♛" accent="hsl(43 88% 60%)" description="Planning and execution intelligence. Taskboard is accessible below." />
+                    </Route>
+                    <Route path="/taskboard" component={Taskboard} />
+
+                    {/* Creative */}
+                    <Route path="/creative">
+                      <PlaceholderNode title="Creative" symbol="✦" accent="hsl(35 90% 62%)" description="Divergent thinking and ideation — features coming soon." />
+                    </Route>
+
+                    {/* Investigative */}
+                    <Route path="/investigative">
+                      <PlaceholderNode title="Investigative" symbol="◉" accent="hsl(175 55% 48%)" description="Pattern recognition and deep inquiry — features coming soon." />
+                    </Route>
+
+                    {/* Alchemy Lab */}
+                    <Route path="/alchemy">
+                      <PlaceholderNode title="Alchemy Lab" symbol="⚗" accent="hsl(270 55% 62%)" description="Experimental features and transmutations — coming soon." />
+                    </Route>
+
+                    {/* Profiles + Settings */}
+                    <Route path="/profiles"  component={ProfileManager} />
+                    <Route path="/settings"  component={Settings} />
+
                     <Route component={NotFound} />
                   </Switch>
                 </AppShell>

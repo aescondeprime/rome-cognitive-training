@@ -13,21 +13,25 @@ import { apiRequest } from "@/lib/queryClient";
 
 // Map paths to page titles (used in top bar)
 const PAGE_TITLES: Record<string, string> = {
-  "/dashboard":  "Command Center",
-  "/training":   "Athena Trials",
-  "/scenarios":  "Scenarios",
-  "/vault":      "Memory Vault",
-  "/memory":     "Memory Archive",
-  "/philosophy": "Philosophy Chambers",
-  "/profile":    "My Profile",
-  "/profiles":   "Profiles",
-  "/research":   "Research",
-  "/taskboard":  "Taskboard",
-  "/settings":   "Settings",
+  "/athena":              "Athena Trials",
+  "/athena/dual-n-back":  "Dual N-Back",
+  "/athena/cwm":          "Complex Working Memory",
+  "/athena/mental-math":  "Mental Math",
+  "/athena/corsi":        "Corsi Blocks",
+  "/athena/memory-span":  "Memory Span",
+  "/athena/pasat":        "PASAT",
+  "/philosophy":          "Philosophy Chambers",
+  "/strategic":           "Strategic",
+  "/creative":            "Creative",
+  "/investigative":       "Investigative",
+  "/alchemy":             "Alchemy Lab",
+  "/taskboard":           "Taskboard",
+  "/profiles":            "Profiles",
+  "/settings":            "Settings",
 };
 
 function getTitle(path: string): string {
-  if (path.startsWith("/activity/")) return "Training Activity";
+  if (path.startsWith("/athena/")) return PAGE_TITLES[path] ?? "Athena Trials";
   return PAGE_TITLES[path] ?? "ROME";
 }
 
