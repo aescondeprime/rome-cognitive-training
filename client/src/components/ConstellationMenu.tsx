@@ -71,6 +71,8 @@ function ParticleCanvas({ width, height }: { width: number; height: number }) {
 }
 
 // ── Ray source handle (edit mode only) ────────────────────────────────────
+// Positioned at screen-center + offset mapped to screen coords.
+// Dragging it changes the offset directly — independent of Lissajous animation.
 function RayHandle({
   dims,
   offset,
@@ -80,34 +82,37 @@ function RayHandle({
   offset: { x: number; y: number };
   onDrag: (ox: number, oy: number) => void;
 }) {
-  const dragging = useRef(false);
-  const startMouse = useRef({ x: 0, y: 0 });
+  const isDragging = useRef(false);
+  const startMouse  = useRef({ x: 0, y: 0 });
   const startOffset = useRef({ x: 0, y: 0 });
+  const onDragRef   = useRef(onDrag);
+  onDragRef.current = onDrag; // always fresh
 
-  // Current visual position = lissajous + offset, clamped
-  const rs = getRayState();
-  const posX = Math.max(0.04, Math.min(0.96, rs.srcX)) * dims.w;
-  const posY = Math.max(0.02, Math.min(0.96, rs.srcY)) * dims.h;
+  // Handle sits at center + offset mapped to pixels
+  // offsetX/Y range is ±0.4 of screen dimensions
+  const posX = dims.w * (0.5 + offset.x);
+  const posY = dims.h * (0.28 + offset.y); // 0.28 = natural upper-area resting position
 
   function onMouseDown(e: React.MouseEvent) {
     e.stopPropagation();
-    dragging.current = true;
+    e.preventDefault();
+    isDragging.current  = true;
     startMouse.current  = { x: e.clientX, y: e.clientY };
-    startOffset.current = { ...offset };
+    startOffset.current = { x: offset.x, y: offset.y };
 
-    function onMove(ev: MouseEvent) {
-      if (!dragging.current) return;
+    function handleMove(ev: MouseEvent) {
+      if (!isDragging.current) return;
       const dx = (ev.clientX - startMouse.current.x) / dims.w;
       const dy = (ev.clientY - startMouse.current.y) / dims.h;
-      onDrag(startOffset.current.x + dx, startOffset.current.y + dy);
+      onDragRef.current(startOffset.current.x + dx, startOffset.current.y + dy);
     }
-    function onUp() {
-      dragging.current = false;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+    function handleUp() {
+      isDragging.current = false;
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
     }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
   }
 
   return (
@@ -123,10 +128,10 @@ function RayHandle({
       <circle r={5} fill="hsl(43 95% 70%)" opacity={0.9}
         style={{ filter: "drop-shadow(0 0 5px hsl(43 95% 65%))" }} />
       {/* Cross-hair lines */}
-      <line x1={-11} y1={0} x2={-6} y2={0} stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
-      <line x1={6}   y1={0} x2={11} y2={0} stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
-      <line x1={0} y1={-11} x2={0} y2={-6} stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
-      <line x1={0} y1={6}   x2={0} y2={11} stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
+      <line x1={-11} y1={0} x2={-6}  y2={0}  stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
+      <line x1={6}   y1={0} x2={11}  y2={0}  stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
+      <line x1={0} y1={-11} x2={0}   y2={-6} stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
+      <line x1={0} y1={6}   x2={0}   y2={11} stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
       {/* Label */}
       <text y={28} textAnchor="middle" fontSize={8} fill="hsl(43 70% 60%)" opacity={0.7}
         style={{ fontFamily: "DM Mono, monospace", letterSpacing: "0.1em", userSelect: "none" }}>
@@ -396,16 +401,6 @@ export default function ConstellationMenu({ onClose }: Props) {
     if (editMode) return; // no navigation in edit mode
     setSelectedId(id);
     if (id) setHoveredId(null);
-  }, [editMode]);
-
-  // Re-render ray handle at animation rate in edit mode
-  const [, forceRay] = useState(0);
-  useEffect(() => {
-    if (!editMode) return;
-    let raf: number;
-    function tick() { forceRay(v => v + 1); raf = requestAnimationFrame(tick); }
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
   }, [editMode]);
 
   return (
