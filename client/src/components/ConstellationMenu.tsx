@@ -5,6 +5,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
 import ConstellationNode from "./ConstellationNode";
 import DomainDetailPanel from "./DomainDetailPanel";
+import LightRay from "./LightRay";
 
 // ── Moving particle canvas ─────────────────────────────────────────────────
 function ParticleCanvas({ width, height }: { width: number; height: number }) {
@@ -190,6 +191,9 @@ export default function ConstellationMenu({ onClose }: Props) {
 
       {/* Particles — not part of zoom layer so they stay ambient */}
       <ParticleCanvas width={dims.w} height={dims.h} />
+
+      {/* Light ray — rendered inside constellation overlay so it's visible above the bg */}
+      <LightRay zIndex={5} />
 
       {/* Camera zoom + parallax layer */}
       <motion.div
