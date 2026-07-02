@@ -71,8 +71,8 @@ function ParticleCanvas({ width, height }: { width: number; height: number }) {
 }
 
 // ── Ray source handle (edit mode only) ────────────────────────────────────
-// Positioned at screen-center + offset mapped to screen coords.
-// Dragging it changes the offset directly — independent of Lissajous animation.
+// Plain HTML div — no SVG coordinate space, no transform conflicts.
+// posX/posY are pure screen pixels derived from offset fractions.
 function RayHandle({
   dims,
   offset,
@@ -82,62 +82,73 @@ function RayHandle({
   offset: { x: number; y: number };
   onDrag: (ox: number, oy: number) => void;
 }) {
-  const isDragging = useRef(false);
+  const isDragging  = useRef(false);
   const startMouse  = useRef({ x: 0, y: 0 });
   const startOffset = useRef({ x: 0, y: 0 });
   const onDragRef   = useRef(onDrag);
-  onDragRef.current = onDrag; // always fresh
+  onDragRef.current = onDrag; // always current — no stale closure
 
-  // Handle sits at center + offset mapped to pixels
-  // offsetX/Y range is ±0.4 of screen dimensions
-  const posX = dims.w * (0.5 + offset.x);
-  const posY = dims.h * (0.28 + offset.y); // 0.28 = natural upper-area resting position
+  const posX = dims.w * (0.5  + offset.x);
+  const posY = dims.h * (0.28 + offset.y);
 
   function onMouseDown(e: React.MouseEvent) {
     e.stopPropagation();
     e.preventDefault();
     isDragging.current  = true;
     startMouse.current  = { x: e.clientX, y: e.clientY };
-    startOffset.current = { x: offset.x, y: offset.y };
+    startOffset.current = { x: offset.x,  y: offset.y  };
 
     function handleMove(ev: MouseEvent) {
       if (!isDragging.current) return;
       const dx = (ev.clientX - startMouse.current.x) / dims.w;
       const dy = (ev.clientY - startMouse.current.y) / dims.h;
-      onDragRef.current(startOffset.current.x + dx, startOffset.current.y + dy);
+      onDragRef.current(
+        startOffset.current.x + dx,
+        startOffset.current.y + dy,
+      );
     }
     function handleUp() {
       isDragging.current = false;
       window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
+      window.removeEventListener("mouseup",   handleUp);
     }
     window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
+    window.addEventListener("mouseup",   handleUp);
   }
 
   return (
-    <g
-      transform={`translate(${posX}, ${posY})`}
-      style={{ cursor: "grab" }}
+    <div
       onMouseDown={onMouseDown}
+      style={{
+        position:      "absolute",
+        left:          posX,
+        top:           posY,
+        transform:     "translate(-50%, -50%)",
+        zIndex:        50,
+        cursor:        "grab",
+        userSelect:    "none",
+        pointerEvents: "all",
+      }}
     >
-      {/* Outer ring */}
-      <circle r={18} fill="hsl(43 60% 8% / 0.7)" stroke="hsl(43 90% 62%)" strokeWidth={1.2}
-        strokeOpacity={0.8} style={{ filter: "drop-shadow(0 0 8px hsl(43 88% 55%))" }} />
-      {/* Inner dot */}
-      <circle r={5} fill="hsl(43 95% 70%)" opacity={0.9}
-        style={{ filter: "drop-shadow(0 0 5px hsl(43 95% 65%))" }} />
-      {/* Cross-hair lines */}
-      <line x1={-11} y1={0} x2={-6}  y2={0}  stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
-      <line x1={6}   y1={0} x2={11}  y2={0}  stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
-      <line x1={0} y1={-11} x2={0}   y2={-6} stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
-      <line x1={0} y1={6}   x2={0}   y2={11} stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
-      {/* Label */}
-      <text y={28} textAnchor="middle" fontSize={8} fill="hsl(43 70% 60%)" opacity={0.7}
-        style={{ fontFamily: "DM Mono, monospace", letterSpacing: "0.1em", userSelect: "none" }}>
-        RAY SOURCE
-      </text>
-    </g>
+      <svg width={44} height={54} viewBox="-22 -22 44 54" overflow="visible">
+        <circle r={18} fill="hsl(43 60% 8% / 0.7)" stroke="hsl(43 90% 62%)"
+          strokeWidth={1.2} strokeOpacity={0.85}
+          style={{ filter: "drop-shadow(0 0 8px hsl(43 88% 55%))" }}
+        />
+        <circle r={5} fill="hsl(43 95% 70%)" opacity={0.9}
+          style={{ filter: "drop-shadow(0 0 5px hsl(43 95% 65%))" }}
+        />
+        <line x1={-11} y1={0}   x2={-6}  y2={0}   stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
+        <line x1={6}   y1={0}   x2={11}  y2={0}   stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
+        <line x1={0}   y1={-11} x2={0}   y2={-6}  stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
+        <line x1={0}   y1={6}   x2={0}   y2={11}  stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
+        <text y={30} textAnchor="middle" fontSize={7.5} fill="hsl(43 70% 60%)" opacity={0.65}
+          style={{ fontFamily: "DM Mono, monospace", letterSpacing: "0.1em" }}
+        >
+          RAY SOURCE
+        </text>
+      </svg>
+    </div>
   );
 }
 
@@ -533,17 +544,18 @@ export default function ConstellationMenu({ onClose }: Props) {
               );
             })}
 
-            {/* Ray source handle (edit mode only) */}
-            {editMode && (
-              <RayHandle
-                dims={dims}
-                offset={layout.ray}
-                onDrag={handleRayDrag}
-              />
-            )}
           </svg>
         </motion.div>
       </motion.div>
+
+      {/* Ray source handle — HTML div, outside all SVG/motion coordinate spaces */}
+      {editMode && (
+        <RayHandle
+          dims={dims}
+          offset={layout.ray}
+          onDrag={handleRayDrag}
+        />
+      )}
 
       {/* Detail panel */}
       {!editMode && (
