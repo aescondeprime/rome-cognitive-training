@@ -98,14 +98,22 @@ function FlaskIcon({ color, size }: { color: string; size: number }) {
 export default memo(function ConstellationNode({
   node, isHovered, isSelected, isActive, onHover, onSelect,
 }: Props) {
+  // Idle: dark semi-transparent (just barely visible silhouette)
+  // Hovered: gold highlight from "ray" catching the icon
+  // Selected: same gold ray-shine, no accent color change
   const lit    = isHovered || isSelected;
   const dimmed = isActive && !lit;
   const iconSize = node.size * 2.6;
   const hitRadius = iconSize * 0.55;
 
-  const color = lit ? node.accent : "hsl(220 8% 48%)";
+  // Icon color: idle = very dark translucent charcoal, lit = warm gold catch-light
+  const color = lit
+    ? "hsl(43 75% 72%)"           // warm gold — simulates ray shining on the icon
+    : "hsl(220 12% 22% / 0.55)";  // dark semi-transparent at rest
+
+  // Glow: lit = warm gold beam-scatter (not accent color), idle = none
   const glowFilter = lit
-    ? `drop-shadow(0 0 ${Math.round(iconSize * 0.35)}px ${node.accent}) drop-shadow(0 0 ${Math.round(iconSize * 0.16)}px ${node.accent})`
+    ? `drop-shadow(0 0 ${Math.round(iconSize * 0.32)}px hsl(43 80% 60% / 0.8)) drop-shadow(0 0 ${Math.round(iconSize * 0.14)}px hsl(43 70% 50% / 0.5))`
     : "none";
 
   function renderIcon() {
@@ -155,7 +163,7 @@ export default memo(function ConstellationNode({
       {lit && (
         <circle
           r={hitRadius * 0.95}
-          fill={node.accent}
+          fill="hsl(43 80% 60%)"
           opacity={0.1}
           style={{
             filter: `blur(${Math.round(hitRadius * 0.8)}px)`,
@@ -175,8 +183,8 @@ export default memo(function ConstellationNode({
         y={iconSize * 0.68}
         textAnchor="middle"
         fontSize={8.5}
-        fill={node.accent}
-        opacity={lit ? 0.9 : 0}
+        fill="hsl(43 75% 68%)"
+        opacity={lit ? 0.85 : 0}
         style={{
           fontFamily: "'Cinzel', serif",
           letterSpacing: "0.09em",
@@ -195,8 +203,8 @@ export default memo(function ConstellationNode({
           r={1.6}
           cx={hitRadius * 0.55}
           cy={-hitRadius * 0.55}
-          fill="hsl(220 8% 65%)"
-          opacity={0.5}
+          fill="hsl(220 12% 30%)"
+          opacity={0.4}
           style={{
             animation: `idleDot ${2.2 + node.depth}s ease-in-out infinite`,
           }}

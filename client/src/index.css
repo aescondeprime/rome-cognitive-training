@@ -17,8 +17,8 @@
     --gold-700: 38 75% 30%;
 
     /* Cave background tones */
-    --cave-950: 220 18% 4%;   /* deepest void */
-    --cave-900: 222 16% 7%;   /* main background */
+    --cave-950: 220 16% 5%;   /* deepest void */
+    --cave-900: 222 14% 9%;   /* main background */
     --cave-850: 220 15% 9%;
     --cave-800: 218 14% 11%;  /* card surface */
     --cave-750: 216 13% 13%;
@@ -26,7 +26,7 @@
     --cave-600: 212 10% 22%;  /* muted surface */
 
     /* Semantic mappings */
-    --background:    220 18% 4%;
+    --background:    220 16% 6%;
     --foreground:    46 60% 88%;     /* warm off-white parchment */
 
     --card:          222 16% 8%;
@@ -82,7 +82,7 @@
 
   /* Light mode kept as cave for ROME — no light mode */
   .light {
-    --background:    220 18% 4%;
+    --background:    220 16% 6%;
     --foreground:    46 60% 88%;
     --card:          222 16% 8%;
     --card-foreground: 46 55% 85%;
@@ -139,60 +139,51 @@
   position: fixed;
   inset: 0;
   z-index: 0;
-  /* Deep cave gradient */
+  /* Deep cave gradient — brighter base */
   background:
-    radial-gradient(ellipse 80% 60% at var(--ray-x) var(--ray-y),
-      hsl(43 40% 12% / 0.55) 0%,
-      hsl(220 18% 5% / 0) 65%),
-    radial-gradient(ellipse 50% 70% at 80% 100%,
-      hsl(222 20% 3% / 0.8) 0%,
+    radial-gradient(ellipse 90% 70% at var(--ray-x) var(--ray-y),
+      hsl(43 50% 18% / 0.45) 0%,
+      hsl(43 30% 10% / 0.2) 40%,
+      transparent 70%),
+    radial-gradient(ellipse 60% 80% at 80% 100%,
+      hsl(222 18% 6% / 0.7) 0%,
       transparent 70%),
     linear-gradient(160deg,
-      hsl(220 20% 6%) 0%,
-      hsl(222 18% 4%) 40%,
-      hsl(220 22% 3%) 100%);
+      hsl(220 18% 9%) 0%,
+      hsl(222 16% 7%) 40%,
+      hsl(220 20% 6%) 100%);
 }
 
-/* Animated light ray from upper-left */
+/* Light ray canvas replaces CSS rays — see LightRayCanvas component */
+/* These pseudo-elements are now minimal ambient fill only */
 .rome-bg::before {
   content: '';
   position: absolute;
   inset: 0;
-  background:
-    conic-gradient(
-      from 130deg at 18% -5%,
-      transparent 0deg,
-      hsl(43 60% 45% / 0.04) 8deg,
-      hsl(43 60% 45% / 0.09) 14deg,
-      hsl(43 60% 45% / 0.04) 20deg,
-      transparent 30deg,
-      transparent 360deg
-    );
-  animation: rayPulse 8s ease-in-out infinite;
+  background: radial-gradient(
+    ellipse 60% 50% at var(--ray-x, 20%) var(--ray-y, 0%),
+    hsl(43 55% 48% / 0.08) 0%,
+    transparent 70%
+  );
+  transition: background 0.1s linear;
   pointer-events: none;
 }
 
-/* Second softer ray */
 .rome-bg::after {
   content: '';
   position: absolute;
   inset: 0;
-  background:
-    conic-gradient(
-      from 140deg at 25% -10%,
-      transparent 0deg,
-      hsl(43 80% 50% / 0.02) 10deg,
-      hsl(43 80% 50% / 0.06) 18deg,
-      hsl(43 80% 50% / 0.02) 26deg,
-      transparent 40deg,
-      transparent 360deg
-    );
-  animation: rayPulse 12s ease-in-out infinite reverse;
+  /* Constant warm floor glow for depth */
+  background: radial-gradient(
+    ellipse 80% 40% at 50% 110%,
+    hsl(43 30% 14% / 0.35) 0%,
+    transparent 70%
+  );
   pointer-events: none;
 }
 
 @keyframes rayPulse {
-  0%, 100% { opacity: 0.7; }
+  0%, 100% { opacity: 0.8; }
   50%       { opacity: 1;   }
 }
 
@@ -209,27 +200,24 @@
 .rome-card {
   position: relative;
   background: hsl(var(--cave-800));
-  border: 1px solid hsl(43 30% 20% / 0.5);
+  border: 1px solid hsl(43 30% 22% / 0.55);
   border-radius: var(--radius);
-  /* Multi-layer shadow: ambient occlusion + top-left gold glow */
   box-shadow:
-    /* depth — bottom right dark */
-    4px 8px 32px hsl(220 25% 2% / 0.7),
-    /* inner top-left gold catch-light from the ray */
-    inset 1px 1px 0 hsl(43 60% 50% / 0.07),
-    /* subtle lift */
-    0 2px 6px hsl(220 20% 2% / 0.6);
-  /* Slight "lift" via translate */
+    4px 8px 32px hsl(220 25% 2% / 0.65),
+    inset 1px 1px 0 hsl(43 60% 50% / 0.1),
+    0 2px 6px hsl(220 20% 2% / 0.5);
   transform: translateZ(0);
-  transition: box-shadow 0.25s ease, transform 0.25s ease, border-color 0.25s ease;
+  transition: box-shadow 0.25s ease, transform 0.25s ease, border-color 0.3s ease, outline-color 0.3s ease;
+  /* Ray-facing border highlight — driven by JS updating --ray-x / --ray-y on :root */
+  outline: 1px solid transparent;
 }
 
 .rome-card:hover {
   box-shadow:
-    6px 12px 40px hsl(220 25% 2% / 0.85),
-    inset 1px 1px 0 hsl(43 60% 50% / 0.15),
-    0 0 0 1px hsl(43 50% 40% / 0.2);
-  border-color: hsl(43 40% 25% / 0.7);
+    6px 12px 40px hsl(220 25% 2% / 0.8),
+    inset 1px 1px 0 hsl(43 60% 50% / 0.2),
+    0 0 0 1px hsl(43 50% 40% / 0.25);
+  border-color: hsl(43 40% 28% / 0.75);
   transform: translateY(-1px) translateZ(0);
 }
 
@@ -241,22 +229,24 @@
     inset 1px 1px 0 hsl(43 60% 50% / 0.06);
 }
 
-/* Light-catch highlight strip at top of cards (simulates ray hitting the edge) */
+/* Light-catch highlight strip at top of cards — brighter & ray-aware */
 .rome-card::before {
   content: '';
   position: absolute;
   top: 0;
-  left: 12%;
-  right: 35%;
+  left: 0;
+  right: 0;
   height: 1px;
+  /* The JS-driven ray position shifts the bright peak left/right */
   background: linear-gradient(90deg,
-    transparent,
-    hsl(43 70% 60% / 0.18) 30%,
-    hsl(43 70% 60% / 0.28) 50%,
-    hsl(43 70% 60% / 0.08) 80%,
-    transparent);
+    transparent 0%,
+    hsl(43 80% 65% / calc(var(--card-ray-intensity, 0.18))) 30%,
+    hsl(43 80% 68% / calc(var(--card-ray-intensity, 0.32))) 52%,
+    hsl(43 80% 65% / calc(var(--card-ray-intensity, 0.14))) 72%,
+    transparent 100%);
   border-radius: 999px;
   pointer-events: none;
+  transition: --card-ray-intensity 0.5s ease;
 }
 
 /* ─── Roman Typography Utilities ─────────────────────────────────── */

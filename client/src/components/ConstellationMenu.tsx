@@ -5,6 +5,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
 import ConstellationNode from "./ConstellationNode";
 import DomainDetailPanel from "./DomainDetailPanel";
+import LightRay from "./LightRay";
 
 // ── Moving particle canvas ─────────────────────────────────────────────────
 function ParticleCanvas({ width, height }: { width: number; height: number }) {
@@ -73,7 +74,7 @@ interface Props {
 }
 
 // ── Camera zoom factor when a node is selected ─────────────────────────────
-const ZOOM_SCALE = 7;
+const ZOOM_SCALE = 2.2;
 
 // ── Main ───────────────────────────────────────────────────────────────────
 export default function ConstellationMenu({ onClose }: Props) {
@@ -190,6 +191,9 @@ export default function ConstellationMenu({ onClose }: Props) {
 
       {/* Particles — not part of zoom layer so they stay ambient */}
       <ParticleCanvas width={dims.w} height={dims.h} />
+
+      {/* Light ray — also ambient, not zoomed */}
+      <LightRay zIndex={3} />
 
       {/* Camera zoom + parallax layer */}
       <motion.div
