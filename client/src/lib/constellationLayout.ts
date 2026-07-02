@@ -13,8 +13,8 @@ export interface NodeOverride {
 }
 
 export interface RayOverride {
-  offsetX: number; // fractional offset added on top of Lissajous drift, range –0.4 → +0.4
-  offsetY: number;
+  x: number; // fractional offset added on top of Lissajous drift, range –0.4 → +0.4
+  y: number;
 }
 
 export interface ConstellationLayout {
@@ -23,7 +23,7 @@ export interface ConstellationLayout {
 }
 
 function defaultLayout(): ConstellationLayout {
-  return { nodes: {}, ray: { offsetX: 0, offsetY: 0 } };
+  return { nodes: {}, ray: { x: 0, y: 0 } };
 }
 
 export function loadLayout(): ConstellationLayout {

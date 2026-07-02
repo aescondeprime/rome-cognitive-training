@@ -253,7 +253,7 @@ export default function ConstellationMenu({ onClose }: Props) {
 
   // Apply ray offset to shared ray state whenever it changes
   useEffect(() => {
-    setRayEditOffset(layout.ray.offsetX, layout.ray.offsetY);
+    setRayEditOffset(layout.ray.x ?? 0, layout.ray.y ?? 0);
   }, [layout.ray.offsetX, layout.ray.offsetY]);
 
   // Dims
@@ -386,17 +386,15 @@ export default function ConstellationMenu({ onClose }: Props) {
   }, []);
 
   const handleRayDrag = useCallback((ox: number, oy: number) => {
-    const clamped = {
-      offsetX: Math.max(-0.4, Math.min(0.4, ox)),
-      offsetY: Math.max(-0.4, Math.min(0.4, oy)),
-    };
-    setLayout(prev => ({ ...prev, ray: clamped }));
-    setRayEditOffset(clamped.offsetX, clamped.offsetY);
+    const x = Math.max(-0.4, Math.min(0.4, ox));
+    const y = Math.max(-0.4, Math.min(0.4, oy));
+    setLayout(prev => ({ ...prev, ray: { x, y } }));
+    setRayEditOffset(x, y);
   }, []);
 
   const handleReset = useCallback(() => {
     resetLayout();
-    setLayout({ nodes: {}, ray: { offsetX: 0, offsetY: 0 } });
+    setLayout({ nodes: {}, ray: { x: 0, y: 0 } });
     setRayEditOffset(0, 0);
   }, []);
 
