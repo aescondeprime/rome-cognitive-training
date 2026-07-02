@@ -74,11 +74,9 @@ function ParticleCanvas({ width, height }: { width: number; height: number }) {
 // Plain HTML div — no SVG coordinate space, no transform conflicts.
 // posX/posY are pure screen pixels derived from offset fractions.
 function RayHandle({
-  dims,
   offset,
   onDrag,
 }: {
-  dims: { w: number; h: number };
   offset: { x: number; y: number };
   onDrag: (ox: number, oy: number) => void;
 }) {
@@ -86,10 +84,13 @@ function RayHandle({
   const startMouse  = useRef({ x: 0, y: 0 });
   const startOffset = useRef({ x: 0, y: 0 });
   const onDragRef   = useRef(onDrag);
-  onDragRef.current = onDrag; // always current — no stale closure
+  onDragRef.current = onDrag;
 
-  const posX = dims.w * (0.5  + offset.x);
-  const posY = dims.h * (0.28 + offset.y);
+  // Use window dimensions directly — never zero, no closure staleness
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const posX = W * (0.5  + offset.x);
+  const posY = H * (0.28 + offset.y);
 
   function onMouseDown(e: React.MouseEvent) {
     e.stopPropagation();
@@ -100,8 +101,9 @@ function RayHandle({
 
     function handleMove(ev: MouseEvent) {
       if (!isDragging.current) return;
-      const dx = (ev.clientX - startMouse.current.x) / dims.w;
-      const dy = (ev.clientY - startMouse.current.y) / dims.h;
+      // Read window dimensions fresh each move — always correct
+      const dx = (ev.clientX - startMouse.current.x) / window.innerWidth;
+      const dy = (ev.clientY - startMouse.current.y) / window.innerHeight;
       onDragRef.current(
         startOffset.current.x + dx,
         startOffset.current.y + dy,
@@ -120,11 +122,11 @@ function RayHandle({
     <div
       onMouseDown={onMouseDown}
       style={{
-        position:      "absolute",
+        position:      "fixed",
         left:          posX,
         top:           posY,
         transform:     "translate(-50%, -50%)",
-        zIndex:        50,
+        zIndex:        9999,
         cursor:        "grab",
         userSelect:    "none",
         pointerEvents: "all",
@@ -551,7 +553,6 @@ export default function ConstellationMenu({ onClose }: Props) {
       {/* Ray source handle — HTML div, outside all SVG/motion coordinate spaces */}
       {editMode && (
         <RayHandle
-          dims={dims}
           offset={layout.ray}
           onDrag={handleRayDrag}
         />
