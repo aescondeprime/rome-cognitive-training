@@ -1,10 +1,4 @@
-/**
- * Persistent layout overrides for the constellation.
- * Stores node positions (% of screen), node sizes, and ray source offset
- * in localStorage so edits survive page refreshes.
- */
-
-const STORAGE_KEY = "rome_constellation_layout_v1";
+const STORAGE_KEY = "rome_constellation_layout_v2";
 
 export interface NodeOverride {
   x: number; // percentage 0–100
@@ -13,8 +7,9 @@ export interface NodeOverride {
 }
 
 export interface RayOverride {
-  x: number; // fractional offset added on top of Lissajous drift, range –0.4 → +0.4
+  x: number;           // fractional position offset, range –0.4 → +0.4
   y: number;
+  dirAngle: number | null; // beam direction in radians; null = auto-aim
 }
 
 export interface ConstellationLayout {
@@ -23,14 +18,19 @@ export interface ConstellationLayout {
 }
 
 function defaultLayout(): ConstellationLayout {
-  return { nodes: {}, ray: { x: 0, y: 0 } };
+  return { nodes: {}, ray: { x: 0, y: 0, dirAngle: null } };
 }
 
 export function loadLayout(): ConstellationLayout {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultLayout();
-    return JSON.parse(raw) as ConstellationLayout;
+    const parsed = JSON.parse(raw) as ConstellationLayout;
+    // Backfill dirAngle if missing (upgrading from v1)
+    if (parsed.ray && !("dirAngle" in parsed.ray)) {
+      parsed.ray.dirAngle = null;
+    }
+    return parsed;
   } catch {
     return defaultLayout();
   }
@@ -45,5 +45,7 @@ export function saveLayout(layout: ConstellationLayout) {
 export function resetLayout() {
   try {
     localStorage.removeItem(STORAGE_KEY);
+    // Also clear v1 key
+    localStorage.removeItem("rome_constellation_layout_v1");
   } catch {}
 }

@@ -1,12 +1,13 @@
 /**
- * LightRay — original physics-accurate animated light ray (Mark VII).
+ * LightRay — physics light ray, original Mark VII style.
  *
- * Source drifts on a slow Lissajous path via the shared lightRayState clock
- * so the ray stays perfectly in sync across constellation and domain pages.
+ * Reads state.srcX/srcY (with editor offset already applied) from the shared
+ * clock — so the beam always follows the ray source handle exactly.
+ * Reads state.dirAngle for beam direction (null = auto-aim at screen center).
  */
 
 import { useEffect, useRef } from "react";
-import { getRayState, startRayClock, computeSourcePos } from "@/lib/lightRayState";
+import { getRayState, startRayClock } from "@/lib/lightRayState";
 
 interface Props {
   zIndex?: number;
@@ -33,29 +34,27 @@ export default function LightRay({ zIndex = 2 }: Props) {
 
     const ctx = canvas.getContext("2d")!;
 
-    function updateCardGlow(sx: number, sy: number) {
+    function updateCardGlow(srcXpx: number, srcYpx: number) {
       const cards = document.querySelectorAll<HTMLElement>(".rome-card");
       cards.forEach(card => {
         const rect = card.getBoundingClientRect();
-        const cardCx = (rect.left + rect.right) / 2 / w;
-        const cardCy = (rect.top  + rect.bottom) / 2 / h;
+        const cardCx = (rect.left + rect.right) / 2;
+        const cardCy = (rect.top  + rect.bottom) / 2;
 
-        const dx   = cardCx - sx;
-        const dy   = cardCy - sy;
+        const dx   = (cardCx - srcXpx) / w;
+        const dy   = (cardCy - srcYpx) / h;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
         const falloff   = Math.max(0, 1 - dist * 1.6);
         const intensity = falloff * falloff;
-
-        card.style.setProperty("--card-ray-intensity", (intensity * 0.55 + 0.14).toFixed(3));
 
         const borderAlpha = (intensity * 0.55 + 0.22).toFixed(2);
         card.style.borderColor = `hsl(43 55% 35% / ${borderAlpha})`;
 
         const glowStrength = (intensity * 28).toFixed(0);
         const glowAlpha    = (intensity * 0.22 + 0.04).toFixed(2);
-        const offX = (-dx * 12 * intensity).toFixed(1);
-        const offY = (-dy * 12 * intensity).toFixed(1);
+        const offX = (-dx * 12 * intensity * w).toFixed(1);
+        const offY = (-dy * 12 * intensity * h).toFixed(1);
         card.style.boxShadow = [
           `4px 8px 32px hsl(220 25% 2% / 0.65)`,
           `inset 1px 1px 0 hsl(43 60% 50% / ${(intensity * 0.22 + 0.08).toFixed(2)})`,
@@ -66,24 +65,27 @@ export default function LightRay({ zIndex = 2 }: Props) {
 
     function draw() {
       const rs = getRayState();
-      const { sx, sy } = computeSourcePos(rs.t);
-      const srcX = sx * w;
-      const srcY = sy * h;
+
+      // ── Use the pre-computed position (offset already applied) ──────
+      const srcX = rs.srcX * w;
+      const srcY = rs.srcY * h;
 
       ctx.clearRect(0, 0, w, h);
 
       const halfAngle = (RAY_HALF_ANGLE_DEG * Math.PI) / 180;
 
-      const cxDir     = w * 0.5 - srcX;
-      const cyDir     = h * 0.65 - srcY;
-      const baseAngle = Math.atan2(cyDir, cxDir);
+      // ── Direction: use stored angle, or auto-aim at screen center ───
+      const baseAngle = rs.dirAngle !== null
+        ? rs.dirAngle
+        : Math.atan2(h * 0.65 - srcY, w * 0.5 - srcX);
+
+      const farDist = Math.sqrt(w * w + h * h) * 1.2;
 
       // ── Layered beam ─────────────────────────────────────────────────
       for (let layer = BEAM_STEPS; layer >= 1; layer--) {
         const layerFrac  = layer / BEAM_STEPS;
         const spread     = halfAngle * layerFrac * 1.8;
         const layerAlpha = BASE_ALPHA * (1 - layerFrac * 0.5);
-        const farDist    = Math.sqrt(w * w + h * h) * 1.2;
 
         const left  = baseAngle - spread;
         const right = baseAngle + spread;
@@ -139,7 +141,7 @@ export default function LightRay({ zIndex = 2 }: Props) {
         ctx.fill();
       }
 
-      updateCardGlow(sx, sy);
+      updateCardGlow(srcX, srcY);
       rafRef.current = requestAnimationFrame(draw);
     }
 

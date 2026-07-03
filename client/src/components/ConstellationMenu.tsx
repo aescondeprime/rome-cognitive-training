@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
 import { loadLayout, saveLayout, resetLayout, type ConstellationLayout, type NodeOverride } from "@/lib/constellationLayout";
-import { getRayState, setRayEditOffset } from "@/lib/lightRayState";
+import { getRayState, setRayEditOffset, setRayDirection } from "@/lib/lightRayState";
 import ConstellationNode from "./ConstellationNode";
 import DomainDetailPanel from "./DomainDetailPanel";
 import LightRay from "./LightRay";
@@ -67,6 +67,97 @@ function ParticleCanvas({ width, height }: { width: number; height: number }) {
       height={height}
       style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
     />
+  );
+}
+
+// ── Direction handle — orbits the ray source handle ───────────────────────
+// Drag it around the source circle to set beam direction.
+// Double-click to reset to auto-aim.
+function DirectionHandle({
+  sourceX,    // screen px
+  sourceY,
+  angle,      // current direction in radians (null = auto)
+  onAngle,    // (angle: number | null) => void
+}: {
+  sourceX: number;
+  sourceY: number;
+  angle: number | null;
+  onAngle: (a: number | null) => void;
+}) {
+  const ORBIT_R   = 36; // distance from source center
+  const isDragging = useRef(false);
+  const onAngleRef = useRef(onAngle);
+  onAngleRef.current = onAngle;
+
+  // If no angle set, show at bottom of orbit (π/2 = pointing down = natural default)
+  const displayAngle = angle ?? Math.PI * 0.6;
+  const dotX = sourceX + Math.cos(displayAngle) * ORBIT_R;
+  const dotY = sourceY + Math.sin(displayAngle) * ORBIT_R;
+
+  function onMouseDown(e: React.MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    isDragging.current = true;
+
+    function handleMove(ev: MouseEvent) {
+      if (!isDragging.current) return;
+      const dx = ev.clientX - sourceX;
+      const dy = ev.clientY - sourceY;
+      onAngleRef.current(Math.atan2(dy, dx));
+    }
+    function handleUp() {
+      isDragging.current = false;
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup",   handleUp);
+    }
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup",   handleUp);
+  }
+
+  function onDblClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    onAngleRef.current(null); // reset to auto-aim
+  }
+
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      onDoubleClick={onDblClick}
+      title="Drag to set beam direction · Double-click to reset"
+      style={{
+        position:      "fixed",
+        left:          dotX,
+        top:           dotY,
+        transform:     "translate(-50%, -50%)",
+        zIndex:        9999,
+        cursor:        "crosshair",
+        userSelect:    "none",
+        pointerEvents: "all",
+      }}
+    >
+      <svg width={28} height={28} viewBox="-14 -14 28 28" overflow="visible">
+        {/* Orbit ring — only visible in edit mode, dashed */}
+        <circle r={ORBIT_R}
+          cx={sourceX - dotX} cy={sourceY - dotY}
+          fill="none" stroke="hsl(43 50% 40%)" strokeWidth={0.6}
+          strokeOpacity={0.3} strokeDasharray="3 5"
+        />
+        {/* Direction dot */}
+        <circle r={6} fill="hsl(200 80% 55%)" opacity={0.88}
+          style={{ filter: "drop-shadow(0 0 5px hsl(200 90% 60%))" }}
+        />
+        {/* Arrow pointing outward from center */}
+        <line x1={0} y1={0}
+          x2={Math.cos(displayAngle - Math.atan2(dotY - sourceY, dotX - sourceX)) * 5}
+          y2={Math.sin(displayAngle - Math.atan2(dotY - sourceY, dotX - sourceX)) * 5}
+          stroke="white" strokeWidth={1.2} strokeOpacity={0.7}
+        />
+        {/* Label */}
+        <text y={16} textAnchor="middle" fontSize={6.5} fill="hsl(200 70% 65%)" opacity={0.6}
+          style={{ fontFamily: "DM Mono, monospace", letterSpacing: "0.08em" }}
+        >{angle === null ? "AUTO" : "DIR"}</text>
+      </svg>
+    </div>
   );
 }
 
@@ -254,6 +345,7 @@ export default function ConstellationMenu({ onClose }: Props) {
   // Apply ray offset to shared ray state whenever it changes
   useEffect(() => {
     setRayEditOffset(layout.ray.x ?? 0, layout.ray.y ?? 0);
+    setRayDirection(layout.ray.dirAngle ?? null);
   }, [layout.ray.offsetX, layout.ray.offsetY]);
 
   // Dims
@@ -388,13 +480,19 @@ export default function ConstellationMenu({ onClose }: Props) {
   const handleRayDrag = useCallback((ox: number, oy: number) => {
     const x = Math.max(-0.4, Math.min(0.4, ox));
     const y = Math.max(-0.4, Math.min(0.4, oy));
-    setLayout(prev => ({ ...prev, ray: { x, y } }));
+    setLayout(prev => ({ ...prev, ray: { ...prev.ray, x, y } }));
     setRayEditOffset(x, y);
+  }, []);
+
+  const handleRayDirection = useCallback((angle: number | null) => {
+    setLayout(prev => ({ ...prev, ray: { ...prev.ray, dirAngle: angle } }));
+    setRayDirection(angle);
   }, []);
 
   const handleReset = useCallback(() => {
     resetLayout();
-    setLayout({ nodes: {}, ray: { x: 0, y: 0 } });
+    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null } });
+    setRayDirection(null);
     setRayEditOffset(0, 0);
   }, []);
 
@@ -548,13 +646,27 @@ export default function ConstellationMenu({ onClose }: Props) {
         </motion.div>
       </motion.div>
 
-      {/* Ray source handle — HTML div, outside all SVG/motion coordinate spaces */}
-      {editMode && (
-        <RayHandle
-          offset={layout.ray}
-          onDrag={handleRayDrag}
-        />
-      )}
+      {/* Ray source handle + direction handle — both HTML divs, fixed position */}
+      {editMode && (() => {
+        const W = window.innerWidth;
+        const H = window.innerHeight;
+        const srcScreenX = W * (0.5  + layout.ray.x);
+        const srcScreenY = H * (0.28 + layout.ray.y);
+        return (
+          <>
+            <RayHandle
+              offset={layout.ray}
+              onDrag={handleRayDrag}
+            />
+            <DirectionHandle
+              sourceX={srcScreenX}
+              sourceY={srcScreenY}
+              angle={layout.ray.dirAngle}
+              onAngle={handleRayDirection}
+            />
+          </>
+        );
+      })()}
 
       {/* Detail panel */}
       {!editMode && (
