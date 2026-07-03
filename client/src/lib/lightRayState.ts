@@ -8,12 +8,12 @@ const DRIFT_SPEED = 0.055;
 
 const state = {
   t: 0,
-  // Final computed source position (offset already applied) — USE THESE in LightRay
+  // Final computed source position — USE THESE in LightRay
   srcX: 0.5,
   srcY: 0.12,
-  // Editor position offset (fraction of screen, added on top of Lissajous)
-  editOffsetX: 0,
-  editOffsetY: 0,
+  // When pinned, Lissajous is frozen and source sits exactly here
+  pinnedX: null as number | null,
+  pinnedY: null as number | null,
   // Direction the beam points — radians. null = auto (aim at screen center)
   dirAngle: null as number | null,
   started: false,
@@ -32,12 +32,18 @@ export function startRayClock() {
   function tick(now: number) {
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
-    state.t += dt * DRIFT_SPEED;
 
-    const { sx, sy } = computeSourcePos(state.t);
-    // Apply editor offset — this is what LightRay should use
-    state.srcX = Math.max(0.01, Math.min(0.99, sx + state.editOffsetX));
-    state.srcY = Math.max(0.01, Math.min(0.99, sy + state.editOffsetY));
+    if (state.pinnedX !== null) {
+      // Pinned — source is exactly where the user placed it, no drift
+      state.srcX = state.pinnedX;
+      state.srcY = state.pinnedY!;
+    } else {
+      // Free Lissajous drift
+      state.t += dt * DRIFT_SPEED;
+      const { sx, sy } = computeSourcePos(state.t);
+      state.srcX = Math.max(0.01, Math.min(0.99, sx));
+      state.srcY = Math.max(0.01, Math.min(0.99, sy));
+    }
 
     document.documentElement.style.setProperty("--ray-x", `${(state.srcX * 100).toFixed(1)}%`);
     document.documentElement.style.setProperty("--ray-y", `${(state.srcY * 100).toFixed(1)}%`);
@@ -48,16 +54,25 @@ export function startRayClock() {
   state.rafHandle = requestAnimationFrame(tick);
 }
 
-/** Nudge the source position on top of the Lissajous path. */
-export function setRayEditOffset(ox: number, oy: number) {
-  state.editOffsetX = ox;
-  state.editOffsetY = oy;
+/**
+ * Pin the source to an exact normalised position [0–1].
+ * Freezes the Lissajous drift entirely.
+ * Call with (null, null) to unpin and resume drift.
+ */
+export function pinRaySource(x: number | null, y: number | null) {
+  state.pinnedX = x;
+  state.pinnedY = y;
+  if (x !== null) {
+    state.srcX = Math.max(0.01, Math.min(0.99, x));
+    state.srcY = Math.max(0.01, Math.min(0.99, y!));
+  }
 }
 
-/**
- * Override beam direction angle (radians). Pass null to restore auto-aim
- * (beam auto-aims toward screen center).
- */
+/** @deprecated — use pinRaySource instead */
+export function setRayEditOffset(_ox: number, _oy: number) {
+  // No-op — kept for build compatibility, callers will be updated
+}
+
 export function setRayDirection(angle: number | null) {
   state.dirAngle = angle;
 }

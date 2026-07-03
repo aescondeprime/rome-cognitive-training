@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
 import { loadLayout, saveLayout, resetLayout, type ConstellationLayout, type NodeOverride } from "@/lib/constellationLayout";
-import { getRayState, setRayEditOffset, setRayDirection } from "@/lib/lightRayState";
+import { getRayState, pinRaySource, setRayDirection } from "@/lib/lightRayState";
 import ConstellationNode from "./ConstellationNode";
 import DomainDetailPanel from "./DomainDetailPanel";
 import LightRay from "./LightRay";
@@ -84,7 +84,7 @@ function DirectionHandle({
   angle: number | null;
   onAngle: (a: number | null) => void;
 }) {
-  const ORBIT_R   = 36; // distance from source center
+  const ORBIT_R   = 58; // distance from source center — clears the 18px source ring
   const isDragging = useRef(false);
   const onAngleRef = useRef(onAngle);
   onAngleRef.current = onAngle;
@@ -217,7 +217,7 @@ function RayHandle({
         left:          posX,
         top:           posY,
         transform:     "translate(-50%, -50%)",
-        zIndex:        9999,
+        zIndex:        10000,
         cursor:        "grab",
         userSelect:    "none",
         pointerEvents: "all",
@@ -344,7 +344,17 @@ export default function ConstellationMenu({ onClose }: Props) {
 
   // Apply ray offset to shared ray state whenever it changes
   useEffect(() => {
-    setRayEditOffset(layout.ray.x ?? 0, layout.ray.y ?? 0);
+    // Pin source if user had set a position, otherwise let it drift freely
+    if (layout.ray.x !== 0 || layout.ray.y !== 0) {
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      pinRaySource(
+        Math.max(0.01, Math.min(0.99, 0.5  + layout.ray.x)),
+        Math.max(0.01, Math.min(0.99, 0.28 + layout.ray.y)),
+      );
+    } else {
+      pinRaySource(null, null);
+    }
     setRayDirection(layout.ray.dirAngle ?? null);
   }, [layout.ray.offsetX, layout.ray.offsetY]);
 
@@ -480,8 +490,10 @@ export default function ConstellationMenu({ onClose }: Props) {
   const handleRayDrag = useCallback((ox: number, oy: number) => {
     const x = Math.max(-0.4, Math.min(0.4, ox));
     const y = Math.max(-0.4, Math.min(0.4, oy));
+    const normX = Math.max(0.01, Math.min(0.99, 0.5  + x));
+    const normY = Math.max(0.01, Math.min(0.99, 0.28 + y));
+    pinRaySource(normX, normY);
     setLayout(prev => ({ ...prev, ray: { ...prev.ray, x, y } }));
-    setRayEditOffset(x, y);
   }, []);
 
   const handleRayDirection = useCallback((angle: number | null) => {
@@ -492,6 +504,7 @@ export default function ConstellationMenu({ onClose }: Props) {
   const handleReset = useCallback(() => {
     resetLayout();
     setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null } });
+    pinRaySource(null, null);
     setRayDirection(null);
     setRayEditOffset(0, 0);
   }, []);
