@@ -159,14 +159,33 @@ function FlaskShape({ color, s }: { color: string; s: number }) {
 }
 
 function SwordsShape({ color, s }: { color: string; s: number }) {
+  // Two swords crossed at center — sword 1: top-left to bottom-right
+  //                                sword 2: top-right to bottom-left
   return (
-    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" x={-s/2} y={-s/2}>
-      <path d="M14.5 17.5L3 6V3h3l11.5 11.5"  stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-      <path d="M13 19l6-6"                     stroke={color} strokeWidth="1.6" strokeLinecap="round"/>
-      <path d="M2 2l5 5"                        stroke={color} strokeWidth="1.6" strokeLinecap="round"/>
-      <path d="M20 16l2 2-5 4-2-2"             stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-      <path d="M9.5 4.5L4 10l1.5 1.5"          stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-      <path d="M10 6.5l6-6 2.5 2.5-5.5 5.5"   stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+    <svg width={s} height={s} viewBox="0 0 40 40" fill="none" x={-s/2} y={-s/2}>
+      {/* Sword 1: blade top-left → bottom-right, hilt bottom-right */}
+      {/* Blade */}
+      <line x1="5" y1="5" x2="28" y2="28" stroke={color} strokeWidth="2" strokeLinecap="round"/>
+      {/* Tip sharpening (narrow end) */}
+      <line x1="26" y1="26" x2="30" y2="30" stroke={color} strokeWidth="1.2" strokeLinecap="round"/>
+      {/* Guard (crossguard perpendicular to blade) */}
+      <line x1="29" y1="24" x2="24" y2="29" stroke={color} strokeWidth="2" strokeLinecap="round"/>
+      {/* Grip */}
+      <line x1="31" y1="31" x2="36" y2="36" stroke={color} strokeWidth="1.8" strokeLinecap="round"/>
+      {/* Pommel dot */}
+      <circle cx="36.5" cy="36.5" r="1.4" fill={color}/>
+
+      {/* Sword 2: blade top-right → bottom-left, hilt bottom-left */}
+      {/* Blade */}
+      <line x1="35" y1="5" x2="12" y2="28" stroke={color} strokeWidth="2" strokeLinecap="round"/>
+      {/* Tip */}
+      <line x1="14" y1="26" x2="10" y2="30" stroke={color} strokeWidth="1.2" strokeLinecap="round"/>
+      {/* Guard */}
+      <line x1="11" y1="24" x2="16" y2="29" stroke={color} strokeWidth="2" strokeLinecap="round"/>
+      {/* Grip */}
+      <line x1="9" y1="31" x2="4" y2="36" stroke={color} strokeWidth="1.8" strokeLinecap="round"/>
+      {/* Pommel dot */}
+      <circle cx="3.5" cy="36.5" r="1.4" fill={color}/>
     </svg>
   );
 }
