@@ -56,37 +56,69 @@ function StickyCard({
   useEffect(() => { setPos({ x: card.posX, y: card.posY }); }, [card.posX, card.posY]);
   useEffect(() => { setDraft(card.content); }, [card.content]);
 
+  // Shared drag logic for both mouse and touch
+  const startDrag = useCallback((clientX: number, clientY: number) => {
+    if (!isOnBoard || card.pinned) return;
+    dragState.current = { startX: clientX, startY: clientY, origX: pos.x, origY: pos.y };
+  }, [isOnBoard, card.pinned, pos]);
+
+  const moveDrag = useCallback((clientX: number, clientY: number) => {
+    if (!dragState.current || !boardRef.current) return;
+    const board = boardRef.current.getBoundingClientRect();
+    const dx = clientX - dragState.current.startX;
+    const dy = clientY - dragState.current.startY;
+    const nx = Math.max(0, Math.min(board.width - card.width - 4, dragState.current.origX + dx));
+    const ny = Math.max(0, dragState.current.origY + dy);
+    setPos({ x: nx, y: ny });
+  }, [boardRef, card.width]);
+
+  const endDrag = useCallback((clientX: number, clientY: number) => {
+    if (!dragState.current || !boardRef.current) return;
+    const board = boardRef.current.getBoundingClientRect();
+    const dx = clientX - dragState.current.startX;
+    const dy = clientY - dragState.current.startY;
+    const nx = Math.max(0, Math.min(board.width - card.width - 4, dragState.current.origX + dx));
+    const ny = Math.max(0, dragState.current.origY + dy);
+    dragState.current = null;
+    onUpdate(card.id, { posX: nx, posY: ny });
+  }, [boardRef, card.id, card.width, onUpdate]);
+
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     if (!isOnBoard || card.pinned) return;
     e.preventDefault();
-    dragState.current = { startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y };
+    startDrag(e.clientX, e.clientY);
 
-    const onMove = (ev: MouseEvent) => {
-      if (!dragState.current || !boardRef.current) return;
-      const board = boardRef.current.getBoundingClientRect();
-      const dx = ev.clientX - dragState.current.startX;
-      const dy = ev.clientY - dragState.current.startY;
-      const nx = Math.max(0, Math.min(board.width - card.width - 4, dragState.current.origX + dx));
-      const ny = Math.max(0, dragState.current.origY + dy);
-      setPos({ x: nx, y: ny });
-    };
-
-    const onUp = (ev: MouseEvent) => {
-      if (!dragState.current || !boardRef.current) return;
-      const board = boardRef.current.getBoundingClientRect();
-      const dx = ev.clientX - dragState.current.startX;
-      const dy = ev.clientY - dragState.current.startY;
-      const nx = Math.max(0, Math.min(board.width - card.width - 4, dragState.current.origX + dx));
-      const ny = Math.max(0, dragState.current.origY + dy);
-      dragState.current = null;
-      onUpdate(card.id, { posX: nx, posY: ny });
+    const onMove = (ev: MouseEvent) => moveDrag(ev.clientX, ev.clientY);
+    const onUp   = (ev: MouseEvent) => {
+      endDrag(ev.clientX, ev.clientY);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-  }, [card.id, card.pinned, card.width, pos, onUpdate, boardRef, isOnBoard]);
+  }, [isOnBoard, card.pinned, startDrag, moveDrag, endDrag]);
+
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    if (!isOnBoard || card.pinned) return;
+    // Don't prevent default globally — only prevent scroll if we're actually dragging
+    const touch = e.touches[0];
+    startDrag(touch.clientX, touch.clientY);
+
+    const onMove = (ev: TouchEvent) => {
+      if (!dragState.current) return;
+      ev.preventDefault(); // prevent scroll only once drag is confirmed
+      const t = ev.touches[0];
+      moveDrag(t.clientX, t.clientY);
+    };
+    const onEnd = (ev: TouchEvent) => {
+      const t = ev.changedTouches[0];
+      endDrag(t.clientX, t.clientY);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onEnd);
+    };
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onEnd);
+  }, [isOnBoard, card.pinned, startDrag, moveDrag, endDrag]);
 
   const saveEdit = () => {
     setEditing(false);
@@ -110,6 +142,7 @@ function StickyCard({
           isOnBoard && !card.pinned ? "cursor-grab active:cursor-grabbing" : "cursor-default"
         )}
         onMouseDown={onMouseDown}
+        onTouchStart={onTouchStart}
       >
         <div className="flex items-center gap-1.5">
           {isOnBoard && <GripHorizontal className={cn("w-3 h-3 opacity-40", col.text)} />}
