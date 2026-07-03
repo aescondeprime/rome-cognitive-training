@@ -1,19 +1,45 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Plus, Pin, PinOff, Trash2, GripHorizontal, ArrowUp } from "lucide-react";
+import { Plus, Pin, PinOff, Trash2, GripHorizontal, ArrowUp, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { loadCardData, saveCardData } from "@/lib/cardStore";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 
 // ── Types ──────────────────────────────────────────────────────────────
 interface Card {
-  id: string;
+  id: number;           // server integer id
   content: string;
   color: string;
   posX: number;
   posY: number;
   pinned: boolean;
   width: number;
-  onBoard: boolean; // false = in staging tray
+  onBoard: boolean;
+}
+
+// Server row shape
+interface ServerCard {
+  id: number;
+  content: string;
+  color: string;
+  pos_x: number;
+  pos_y: number;
+  pinned: number | boolean;
+  width: number;
+  on_board: number | boolean;
+}
+
+function fromServer(s: ServerCard): Card {
+  return {
+    id:      s.id,
+    content: s.content ?? "",
+    color:   s.color ?? "gold",
+    posX:    s.pos_x ?? 80,
+    posY:    s.pos_y ?? 80,
+    pinned:  !!s.pinned,
+    width:   s.width ?? 210,
+    onBoard: !!s.on_board,
+  };
 }
 
 const COLORS = [
@@ -25,14 +51,6 @@ const COLORS = [
 
 const colorFor = (id: string) => COLORS.find(c => c.id === id) ?? COLORS[0];
 
-// ── Persistence (via cardStore.ts) ──────────────────────────────────────
-const loadCards = () => loadCardData<Card>();
-const saveCards = (cards: Card[]) => saveCardData<Card>(cards);
-
-function makeId() {
-  return `card_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-}
-
 // ── Sticky Card ────────────────────────────────────────────────────────
 function StickyCard({
   card,
@@ -42,21 +60,21 @@ function StickyCard({
   isOnBoard,
 }: {
   card: Card;
-  onUpdate: (id: string, patch: Partial<Card>) => void;
-  onDelete: (id: string) => void;
+  onUpdate: (id: number, patch: Partial<Card>) => void;
+  onDelete: (id: number) => void;
   boardRef: React.RefObject<HTMLDivElement>;
   isOnBoard: boolean;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(card.content);
-  const [pos, setPos] = useState({ x: card.posX, y: card.posY });
+  const [draft,   setDraft]   = useState(card.content);
+  const [pos,     setPos]     = useState({ x: card.posX, y: card.posY });
   const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const col = colorFor(card.color);
 
   useEffect(() => { setPos({ x: card.posX, y: card.posY }); }, [card.posX, card.posY]);
   useEffect(() => { setDraft(card.content); }, [card.content]);
 
-  // Shared drag logic for both mouse and touch
+  // ── Shared drag logic ─────────────────────────────────────────────
   const startDrag = useCallback((clientX: number, clientY: number) => {
     if (!isOnBoard || card.pinned) return;
     dragState.current = { startX: clientX, startY: clientY, origX: pos.x, origY: pos.y };
@@ -83,41 +101,38 @@ function StickyCard({
     onUpdate(card.id, { posX: nx, posY: ny });
   }, [boardRef, card.id, card.width, onUpdate]);
 
+  // ── Mouse ─────────────────────────────────────────────────────────
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     if (!isOnBoard || card.pinned) return;
     e.preventDefault();
     startDrag(e.clientX, e.clientY);
-
     const onMove = (ev: MouseEvent) => moveDrag(ev.clientX, ev.clientY);
     const onUp   = (ev: MouseEvent) => {
       endDrag(ev.clientX, ev.clientY);
       window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("mouseup",   onUp);
     };
     window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("mouseup",   onUp);
   }, [isOnBoard, card.pinned, startDrag, moveDrag, endDrag]);
 
+  // ── Touch ─────────────────────────────────────────────────────────
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     if (!isOnBoard || card.pinned) return;
-    // Don't prevent default globally — only prevent scroll if we're actually dragging
     const touch = e.touches[0];
     startDrag(touch.clientX, touch.clientY);
-
     const onMove = (ev: TouchEvent) => {
       if (!dragState.current) return;
-      ev.preventDefault(); // prevent scroll only once drag is confirmed
-      const t = ev.touches[0];
-      moveDrag(t.clientX, t.clientY);
+      ev.preventDefault();
+      moveDrag(ev.touches[0].clientX, ev.touches[0].clientY);
     };
     const onEnd = (ev: TouchEvent) => {
-      const t = ev.changedTouches[0];
-      endDrag(t.clientX, t.clientY);
+      endDrag(ev.changedTouches[0].clientX, ev.changedTouches[0].clientY);
       window.removeEventListener("touchmove", onMove);
-      window.removeEventListener("touchend", onEnd);
+      window.removeEventListener("touchend",  onEnd);
     };
     window.addEventListener("touchmove", onMove, { passive: false });
-    window.addEventListener("touchend", onEnd);
+    window.addEventListener("touchend",  onEnd);
   }, [isOnBoard, card.pinned, startDrag, moveDrag, endDrag]);
 
   const saveEdit = () => {
@@ -125,7 +140,7 @@ function StickyCard({
     if (draft !== card.content) onUpdate(card.id, { content: draft });
   };
 
-  const cardEl = (
+  return (
     <div
       className={cn(
         "rounded-lg border shadow-lg select-none",
@@ -146,7 +161,6 @@ function StickyCard({
       >
         <div className="flex items-center gap-1.5">
           {isOnBoard && <GripHorizontal className={cn("w-3 h-3 opacity-40", col.text)} />}
-          {/* Color dots */}
           <div className="flex gap-1">
             {COLORS.map(c => (
               <button
@@ -164,7 +178,6 @@ function StickyCard({
         </div>
 
         <div className="flex items-center gap-1">
-          {/* Move to board button (only in tray) */}
           {!isOnBoard && (
             <button
               onMouseDown={e => e.stopPropagation()}
@@ -175,7 +188,6 @@ function StickyCard({
               <ArrowUp className="w-3 h-3" />
             </button>
           )}
-          {/* Pin (board only) */}
           {isOnBoard && (
             <button
               onMouseDown={e => e.stopPropagation()}
@@ -224,47 +236,116 @@ function StickyCard({
       </div>
     </div>
   );
-
-  return cardEl;
 }
 
 // ── Taskboard Page ─────────────────────────────────────────────────────
 export default function Taskboard() {
-  const [cards, setCards] = useState<Card[]>(() => loadCards());
+  const qc = useQueryClient();
   const boardRef = useRef<HTMLDivElement>(null);
 
-  // Persist on every change
-  useEffect(() => { saveCards(cards); }, [cards]);
+  // ── Fetch cards from server ──────────────────────────────────────
+  const { data: serverCards, isLoading, isError } = useQuery<ServerCard[]>({
+    queryKey: ["/api/taskboard"],
+    queryFn: () => apiRequest("GET", "/api/taskboard").then(r => r.json()),
+  });
 
-  const updateCard = useCallback((id: string, patch: Partial<Card>) => {
-    setCards(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
-  }, []);
+  const cards: Card[] = (serverCards ?? []).map(fromServer);
 
-  const deleteCard = useCallback((id: string) => {
-    setCards(prev => prev.filter(c => c.id !== id));
-  }, []);
+  // ── Mutations ────────────────────────────────────────────────────
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["/api/taskboard"] });
 
+  const createMutation = useMutation({
+    mutationFn: (body: object) =>
+      apiRequest("POST", "/api/taskboard", body).then(r => r.json()),
+    onSuccess: invalidate,
+  });
+
+  // Optimistic update — apply locally first, then PATCH server
+  const updateMutation = useMutation({
+    mutationFn: ({ id, patch }: { id: number; patch: object }) =>
+      apiRequest("PATCH", `/api/taskboard/${id}`, patch).then(r => r.json()),
+    onMutate: async ({ id, patch }) => {
+      await qc.cancelQueries({ queryKey: ["/api/taskboard"] });
+      const prev = qc.getQueryData<ServerCard[]>(["/api/taskboard"]);
+      qc.setQueryData<ServerCard[]>(["/api/taskboard"], old =>
+        (old ?? []).map(c => c.id === id ? { ...c, ...patch } : c)
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["/api/taskboard"], ctx.prev);
+    },
+    onSettled: invalidate,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) =>
+      apiRequest("DELETE", `/api/taskboard/${id}`),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: ["/api/taskboard"] });
+      const prev = qc.getQueryData<ServerCard[]>(["/api/taskboard"]);
+      qc.setQueryData<ServerCard[]>(["/api/taskboard"], old => (old ?? []).filter(c => c.id !== id));
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["/api/taskboard"], ctx.prev);
+    },
+    onSettled: invalidate,
+  });
+
+  // ── Card operations ───────────────────────────────────────────────
   const addCard = useCallback(() => {
-    const newCard: Card = {
-      id: makeId(),
+    const offset = (cards.length % 6) * 24;
+    createMutation.mutate({
       content: "",
-      color: "gold",
-      posX: 80 + (cards.length % 6) * 24,
-      posY: 80 + (cards.length % 6) * 24,
-      pinned: false,
-      width: 210,
-      onBoard: false, // starts in tray
-    };
-    setCards(prev => [...prev, newCard]);
-  }, [cards.length]);
+      color:   "gold",
+      posX:    80 + offset,
+      posY:    80 + offset,
+      pinned:  false,
+      width:   210,
+      onBoard: false,
+    });
+  }, [cards.length, createMutation]);
+
+  const updateCard = useCallback((id: number, patch: Partial<Card>) => {
+    // Map camelCase → snake_case for server
+    const serverPatch: Record<string, unknown> = {};
+    if (patch.content  !== undefined) serverPatch.content   = patch.content;
+    if (patch.color    !== undefined) serverPatch.color     = patch.color;
+    if (patch.posX     !== undefined) serverPatch.pos_x     = patch.posX;
+    if (patch.posY     !== undefined) serverPatch.pos_y     = patch.posY;
+    if (patch.pinned   !== undefined) serverPatch.pinned    = patch.pinned ? 1 : 0;
+    if (patch.width    !== undefined) serverPatch.width     = patch.width;
+    if (patch.onBoard  !== undefined) serverPatch.on_board  = patch.onBoard ? 1 : 0;
+    updateMutation.mutate({ id, patch: serverPatch });
+  }, [updateMutation]);
+
+  const deleteCard = useCallback((id: number) => {
+    deleteMutation.mutate(id);
+  }, [deleteMutation]);
 
   const boardCards = cards.filter(c => c.onBoard);
   const trayCards  = cards.filter(c => !c.onBoard);
 
-  const boardMinHeight = Math.max(
-    520,
-    ...boardCards.map(c => c.posY + 240)
-  );
+  const boardMinHeight = Math.max(520, ...boardCards.map(c => c.posY + 240));
+
+  // ── Render ────────────────────────────────────────────────────────
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="w-6 h-6 animate-spin text-gold-400" />
+        <span className="ml-3 text-sm text-muted-foreground">Loading your board…</span>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex items-center justify-center h-64 text-rose-400 text-sm">
+        Could not load cards — make sure you are logged in.
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-5 animate-fade-in">
@@ -277,8 +358,8 @@ export default function Taskboard() {
             Drag cards anywhere · Double-click to edit · Pin to lock in place
           </p>
         </div>
-        <Button onClick={addCard} size="sm" className="gap-2">
-          <Plus className="w-4 h-4" />
+        <Button onClick={addCard} size="sm" className="gap-2" disabled={createMutation.isPending}>
+          {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
           New Card
         </Button>
       </div>
@@ -289,7 +370,6 @@ export default function Taskboard() {
         className="relative w-full rounded-xl border border-border bg-[hsl(220_15%_6%)] overflow-hidden"
         style={{ minHeight: boardMinHeight }}
       >
-        {/* Subtle dot grid */}
         <div
           className="absolute inset-0 pointer-events-none opacity-[0.045]"
           style={{
@@ -357,7 +437,7 @@ export default function Taskboard() {
       </div>
 
       <p className="text-xs text-muted-foreground text-center">
-        Cards saved locally · {boardCards.length} on board · {trayCards.length} in tray
+        Synced to your profile · {boardCards.length} on board · {trayCards.length} in tray
       </p>
     </div>
   );
