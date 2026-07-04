@@ -525,6 +525,263 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       }
     }
 
+
+    // ════════════════════════════════════════════════════════════════════
+    // BOARDS (multi-board system for Taskboard / Idea Workshop / Component Board)
+    // ════════════════════════════════════════════════════════════════════
+
+    // GET /boards?type=taskboard|idea_workshop|component_board
+    if (route === "/boards" && method === "GET") {
+      const user = await getActiveUser(req, sb);
+      const url  = new URL(req.url!, "http://localhost");
+      const type = url.searchParams.get("type");
+      let q = sb.from("boards").select("*").eq("user_id", user.id).order("updated_at", { ascending: false });
+      if (type) q = q.eq("type", type);
+      const { data } = await q;
+      return json(res, 200, data ?? []);
+    }
+
+    // POST /boards
+    if (route === "/boards" && method === "POST") {
+      const user = await getActiveUser(req, sb);
+      const body = await readBody(req);
+      const now  = Date.now();
+      const { type = "taskboard", title = "Untitled" } = body;
+      const { data: board } = await sb.from("boards").insert({ user_id: user.id, type, title, created_at: now, updated_at: now }).select().single();
+      return json(res, 200, board ?? {});
+    }
+
+    {
+      const m = route.match(/^\/boards\/(\d+)$/);
+      if (m) {
+        const boardId = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          if (body.title !== undefined) patch.title = body.title;
+          await sb.from("boards").update(patch).eq("id", boardId);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("boards").delete().eq("id", boardId);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // TASKBOARD v2 — board-scoped cards
+    // GET  /boards/:id/tasks
+    // POST /boards/:id/tasks
+    // PATCH/DELETE /tasks/:id
+    // ════════════════════════════════════════════════════════════════════
+
+    {
+      const m = route.match(/^\/boards\/(\d+)\/tasks$/);
+      if (m) {
+        const boardId = parseInt(m[1]);
+        if (method === "GET") {
+          const { data } = await sb.from("taskboard_cards").select("*").eq("board_id", boardId).order("created_at", { ascending: false });
+          return json(res, 200, (data ?? []).map(mapTaskboardCard));
+        }
+        if (method === "POST") {
+          const user = await getActiveUser(req, sb);
+          const body = await readBody(req);
+          const now  = Date.now();
+          const { content = "", color = "gold", pos_x = 100, pos_y = 100, width = 210, on_board = 0, pinned = 0 } = body;
+          const { data: card } = await sb.from("taskboard_cards").insert({ board_id: boardId, user_id: user.id, content, color, pos_x, pos_y, pinned, width, on_board, created_at: now, updated_at: now }).select().single();
+          return json(res, 200, card ? mapTaskboardCard(card) : {});
+        }
+      }
+    }
+
+    {
+      const m = route.match(/^\/tasks\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          if (body.content  !== undefined) patch.content  = body.content;
+          if (body.color    !== undefined) patch.color    = body.color;
+          if (body.pos_x    !== undefined) patch.pos_x    = body.pos_x;
+          if (body.pos_y    !== undefined) patch.pos_y    = body.pos_y;
+          if (body.pinned   !== undefined) patch.pinned   = body.pinned;
+          if (body.width    !== undefined) patch.width    = body.width;
+          if (body.on_board !== undefined) patch.on_board = body.on_board;
+          await sb.from("taskboard_cards").update(patch).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("taskboard_cards").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // IDEA WORKSHOP — cards + connections
+    // GET  /boards/:id/ideas
+    // POST /boards/:id/ideas
+    // PATCH/DELETE /ideas/:id
+    // GET  /boards/:id/idea-connections
+    // POST /boards/:id/idea-connections
+    // DELETE /idea-connections/:id
+    // ════════════════════════════════════════════════════════════════════
+
+    {
+      const m = route.match(/^\/boards\/(\d+)\/ideas$/);
+      if (m) {
+        const boardId = parseInt(m[1]);
+        if (method === "GET") {
+          const { data } = await sb.from("idea_cards").select("*").eq("board_id", boardId).order("created_at", { ascending: true });
+          return json(res, 200, data ?? []);
+        }
+        if (method === "POST") {
+          const user = await getActiveUser(req, sb);
+          const body = await readBody(req);
+          const now  = Date.now();
+          const { content = "", color = "violet", pos_x = 100, pos_y = 100, width = 220, tags = "", energy = 3 } = body;
+          const { data: card } = await sb.from("idea_cards").insert({ board_id: boardId, user_id: user.id, content, color, pos_x, pos_y, width, tags, energy, created_at: now, updated_at: now }).select().single();
+          return json(res, 200, card ?? {});
+        }
+      }
+    }
+
+    {
+      const m = route.match(/^\/ideas\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          ["content","color","pos_x","pos_y","width","tags","energy"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          await sb.from("idea_cards").update(patch).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("idea_cards").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    {
+      const m = route.match(/^\/boards\/(\d+)\/idea-connections$/);
+      if (m) {
+        const boardId = parseInt(m[1]);
+        if (method === "GET") {
+          const { data } = await sb.from("idea_connections").select("*").eq("board_id", boardId);
+          return json(res, 200, data ?? []);
+        }
+        if (method === "POST") {
+          const body = await readBody(req);
+          const { from_id, to_id, label = "" } = body;
+          const { data: conn } = await sb.from("idea_connections").insert({ board_id: boardId, from_id, to_id, label, created_at: Date.now() }).select().single();
+          return json(res, 200, conn ?? {});
+        }
+      }
+    }
+
+    {
+      const m = route.match(/^\/idea-connections\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "DELETE") {
+          await sb.from("idea_connections").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          if (body.label !== undefined) await sb.from("idea_connections").update({ label: body.label }).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // COMPONENT BOARD — pins + threads
+    // GET  /boards/:id/pins
+    // POST /boards/:id/pins
+    // PATCH/DELETE /pins/:id
+    // GET  /boards/:id/threads
+    // POST /boards/:id/threads
+    // DELETE /threads/:id
+    // ════════════════════════════════════════════════════════════════════
+
+    {
+      const m = route.match(/^\/boards\/(\d+)\/pins$/);
+      if (m) {
+        const boardId = parseInt(m[1]);
+        if (method === "GET") {
+          const { data } = await sb.from("component_pins").select("*").eq("board_id", boardId).order("created_at", { ascending: true });
+          return json(res, 200, data ?? []);
+        }
+        if (method === "POST") {
+          const user = await getActiveUser(req, sb);
+          const body = await readBody(req);
+          const now  = Date.now();
+          const { content = "", pin_type = "evidence", pos_x = 100, pos_y = 100, width = 200, color = "amber" } = body;
+          const { data: pin } = await sb.from("component_pins").insert({ board_id: boardId, user_id: user.id, content, pin_type, pos_x, pos_y, width, color, created_at: now, updated_at: now }).select().single();
+          return json(res, 200, pin ?? {});
+        }
+      }
+    }
+
+    {
+      const m = route.match(/^\/pins\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          ["content","pin_type","pos_x","pos_y","width","color"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          await sb.from("component_pins").update(patch).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("component_pins").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    {
+      const m = route.match(/^\/boards\/(\d+)\/threads$/);
+      if (m) {
+        const boardId = parseInt(m[1]);
+        if (method === "GET") {
+          const { data } = await sb.from("component_threads").select("*").eq("board_id", boardId);
+          return json(res, 200, data ?? []);
+        }
+        if (method === "POST") {
+          const body = await readBody(req);
+          const { from_id, to_id, label = "", color = "red" } = body;
+          const { data: thread } = await sb.from("component_threads").insert({ board_id: boardId, from_id, to_id, label, color, created_at: Date.now() }).select().single();
+          return json(res, 200, thread ?? {});
+        }
+      }
+    }
+
+    {
+      const m = route.match(/^\/threads\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "DELETE") {
+          await sb.from("component_threads").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = {};
+          if (body.label !== undefined) patch.label = body.label;
+          if (body.color !== undefined) patch.color = body.color;
+          if (Object.keys(patch).length) await sb.from("component_threads").update(patch).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
     // ════════════════════════════════════════════════════════════════════
     // EXPORT / IMPORT
     // ════════════════════════════════════════════════════════════════════
