@@ -6,7 +6,7 @@ import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData
 import { loadLayout, saveLayout, resetLayout, type ConstellationLayout, type NodeOverride } from "@/lib/constellationLayout";
 import { getRayState, pinRaySource, setRayDirection } from "@/lib/lightRayState";
 import ConstellationNode from "./ConstellationNode";
-import DomainDetailPanel from "./DomainDetailPanel";
+import NodeBranchMenu from "./NodeBranchMenu";
 import LightRay from "./LightRay";
 
 // ── Moving particle canvas ─────────────────────────────────────────────────
@@ -519,6 +519,12 @@ export default function ConstellationMenu({ onClose }: Props) {
   const selectedNode = effectiveNodes.find(n => n.id === selectedId) ?? null;
   const activeId     = editMode ? null : (hoveredId ?? selectedId);
 
+  // Track camScale as a plain state so NodeBranchMenu receives a reactive value
+  const [camScaleVal, setCamScaleVal] = useState(1);
+  useEffect(() => {
+    return camScale.on("change", v => setCamScaleVal(v));
+  }, [camScale]);
+
   const handleSelect = useCallback((id: string | null) => {
     if (editMode) return; // no navigation in edit mode
     setSelectedId(id);
@@ -655,6 +661,25 @@ export default function ConstellationMenu({ onClose }: Props) {
               );
             })}
 
+            {/* Branch menu — SVG-native, inherits camera transform */}
+            {!editMode && selectedNode && (() => {
+              const pos = nodePositions[selectedNode.id];
+              if (!pos) return null;
+              return (
+                <NodeBranchMenu
+                  node={selectedNode}
+                  cx={pos.x}
+                  cy={pos.y}
+                  radius={pos.size}
+                  svgW={dims.w}
+                  svgH={dims.h}
+                  camScale={camScaleVal}
+                  onNavigate={onClose}
+                  onClose={() => setSelectedId(null)}
+                />
+              );
+            })()}
+
           </svg>
         </motion.div>
       </motion.div>
@@ -680,19 +705,6 @@ export default function ConstellationMenu({ onClose }: Props) {
           </>
         );
       })()}
-
-      {/* Detail panel */}
-      {!editMode && (
-        <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 20 }}>
-          <div style={{ position: "relative", width: "100%", height: "100%", pointerEvents: "none" }}>
-            <DomainDetailPanel
-              node={selectedNode}
-              onClose={() => setSelectedId(null)}
-              onNavigate={onClose}
-            />
-          </div>
-        </div>
-      )}
 
       {/* Profile badge */}
       {activeProfile && !editMode && (

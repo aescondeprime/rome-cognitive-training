@@ -104,13 +104,15 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     label: "Creative",
     symbol: "✦",
     lucideIcon: "Sparkles",          // 4-point star
-    accent: "hsl(35 90% 62%)",
+    accent: "hsl(270 60% 65%)",
     x: 68, y: 58,
     size: 16,
     depth: 1.0,
     href: "/creative",
     tagline: "Divergent thinking and ideation",
-    subnodes: [],
+    subnodes: [
+      { id: "cr-idea", label: "Idea Workshop", icon: "✦", href: "/idea-workshop", description: "Canvas for ideas, connections, and energy" },
+    ],
     connections: ["investigative"],
   },
 
@@ -126,7 +128,9 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     depth: 1.0,
     href: "/investigative",
     tagline: "Pattern recognition and deep inquiry",
-    subnodes: [],
+    subnodes: [
+      { id: "inv-case", label: "Component Board", icon: "◉", href: "/component-board", description: "Detective caseboard with evidence pins and thread lines" },
+    ],
     connections: [],
   },
 
