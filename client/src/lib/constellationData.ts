@@ -146,7 +146,9 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     depth: 0.88,
     href: "/alchemy",
     tagline: "Experimental features and transmutations",
-    subnodes: [],
+    subnodes: [
+      { id: "alch-nootropics", label: "Nootropics", icon: "⚗", href: "/alchemy-lab", description: "Track cognitive compounds, mechanisms, and effects" },
+    ],
     connections: [],
   },
 ];

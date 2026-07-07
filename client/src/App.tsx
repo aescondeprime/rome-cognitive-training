@@ -16,6 +16,7 @@ import PhilosophyChambers from "@/pages/PhilosophyChambers";
 import ProfileManager from "@/pages/ProfileManager";
 import Settings from "@/pages/Settings";
 import Taskboard from "@/pages/Taskboard";
+import AlchemyLab from "@/pages/AlchemyLab";
 import IdeaWorkshop from "@/pages/IdeaWorkshop";
 import ComponentBoard from "@/pages/ComponentBoard";
 import NotFound from "@/pages/not-found";
@@ -114,8 +115,9 @@ export default function App() {
 
                     {/* Alchemy Lab */}
                     <Route path="/alchemy">
-                      <PlaceholderNode title="Alchemy Lab" symbol="⚗" accent="hsl(270 55% 62%)" description="Experimental features and transmutations — coming soon." />
+                      <PlaceholderNode title="Alchemy Lab" symbol="⚗" accent="hsl(270 55% 62%)" description="Experimental features and cognitive transmutations." subRoute={{ label: "Nootropics", path: "/alchemy-lab" }} />
                     </Route>
+                    <Route path="/alchemy-lab" component={AlchemyLab} />
 
                     {/* Profiles + Settings */}
                     <Route path="/profiles"  component={ProfileManager} />

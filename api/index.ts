@@ -783,6 +783,57 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     }
 
     // ════════════════════════════════════════════════════════════════════
+    // NOOTROPICS
+    // ════════════════════════════════════════════════════════════════════
+
+    // GET /api/nootropics  — list all for user
+    // POST /api/nootropics — create
+    if (route === "/nootropics") {
+      const user = await getActiveUser(req, sb);
+      if (method === "GET") {
+        const { data } = await sb
+          .from("nootropics")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("name", { ascending: true });
+        return json(res, 200, data ?? []);
+      }
+      if (method === "POST") {
+        const body = await readBody(req);
+        const now  = Date.now();
+        const { name = "", category = "other", mechanism = "", effects = "", dosage = "", half_life = "", notes = "" } = body;
+        const { data: row } = await sb
+          .from("nootropics")
+          .insert({ user_id: user.id, name, category, mechanism, effects, dosage, half_life, notes, is_preset: 0, created_at: now, updated_at: now })
+          .select()
+          .single();
+        return json(res, 200, row ?? {});
+      }
+    }
+
+    // PATCH /api/nootropics/:id  — update
+    // DELETE /api/nootropics/:id — delete
+    {
+      const m = route.match(/^\/nootropics\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          ["name","category","mechanism","effects","dosage","half_life","notes"].forEach(k => {
+            if (body[k] !== undefined) patch[k] = body[k];
+          });
+          await sb.from("nootropics").update(patch).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("nootropics").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     // EXPORT / IMPORT
     // ════════════════════════════════════════════════════════════════════
     if (route === "/export" && method === "GET") {
