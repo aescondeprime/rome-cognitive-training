@@ -149,7 +149,8 @@ export default function NodeBranchMenu({
     return () => cancelAnimationFrame(rafRef.current);
   }, [node.id]); // re-run if node changes
 
-  const go = useCallback((href: string) => {
+  const go = useCallback((e: React.MouseEvent, href: string) => {
+    e.stopPropagation();
     onClose();
     onNavigate(href);
     window.location.hash = href;
@@ -221,7 +222,7 @@ export default function NodeBranchMenu({
               <g
                 opacity={anim.labelAlpha}
                 style={{ cursor: "pointer" }}
-                onClick={() => go(branch.href)}
+                onClick={e => go(e, branch.href)}
               >
                 {/* Rect */}
                 <rect
@@ -282,7 +283,7 @@ export default function NodeBranchMenu({
                   width={lw + 8 * inv}
                   height={lh + 8 * inv}
                   fill="transparent"
-                  onClick={() => go(branch.href)}
+                  onClick={e => go(e, branch.href)}
                 />
               </g>
             )}

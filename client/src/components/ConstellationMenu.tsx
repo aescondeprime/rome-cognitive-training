@@ -581,6 +581,7 @@ export default function ConstellationMenu({ onClose }: Props) {
           position: "absolute", inset: 0,
           x: editMode ? 0 : springX,
           y: editMode ? 0 : springY,
+          zIndex: 10,
         }}
       >
         <motion.div
@@ -597,6 +598,14 @@ export default function ConstellationMenu({ onClose }: Props) {
             height={dims.h}
             style={{ position: "absolute", inset: 0, overflow: "visible" }}
           >
+            {/* Large transparent rect extends pointer-event hit area to cover overflow content (branch labels) */}
+            <rect
+              x={-1000} y={-1000}
+              width={dims.w + 2000} height={dims.h + 2000}
+              fill="transparent"
+              onClick={selectedId && !editMode ? () => setSelectedId(null) : undefined}
+              style={{ cursor: selectedId && !editMode ? "default" : "none", pointerEvents: selectedId && !editMode ? "auto" : "none" }}
+            />
             {/* Connection lines */}
             {connectionPairs.map(([aId, bId]) => {
               const a = nodePositions[aId];
@@ -794,10 +803,7 @@ export default function ConstellationMenu({ onClose }: Props) {
         </button>
       </div>
 
-      {/* Click-away background to deselect */}
-      {selectedId && !editMode && (
-        <div style={{ position: "absolute", inset: 0, zIndex: 5 }} onClick={() => setSelectedId(null)} />
-      )}
+      {/* Click-away is now handled by the SVG backdrop rect */}
     </div>
   );
 }
