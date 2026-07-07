@@ -62,7 +62,7 @@ function mapUser(r: any) {
   return { id: r.id, name: r.name, baselineCompleted: r.baseline_completed ?? 0, currentMode: r.current_mode ?? "standard", totalSessionsCompleted: r.total_sessions_completed ?? 0, totalMinutesTrained: r.total_minutes_trained ?? 0, createdAt: r.created_at ?? Date.now() };
 }
 function mapNote(r: any) {
-  return { id: r.id, userId: r.user_id, title: r.title ?? "Untitled", content: r.content ?? "", tags: r.tags ?? "[]", pinned: r.pinned ?? 0, createdAt: r.created_at ?? Date.now(), updatedAt: r.updated_at ?? Date.now() };
+  return { id: r.id, userId: r.user_id, title: r.title ?? "Untitled", content: r.content ?? "", tags: r.tags ?? "[]", pinned: Boolean(r.pinned), createdAt: r.created_at ?? Date.now(), updatedAt: r.updated_at ?? Date.now() };
 }
 function mapDomainScore(r: any) {
   return { id: r.id, userId: r.user_id, domain: r.domain, score: r.score, totalTrials: r.total_trials ?? 0, avgAccuracy: r.avg_accuracy ?? 0, avgResponseTime: r.avg_response_time ?? 0, avgConfidence: r.avg_confidence ?? 0, updatedAt: r.updated_at ?? Date.now() };
