@@ -233,8 +233,8 @@ export default function DualNBack() {
 
           {/* Letter display */}
           <div className="text-center mt-4">
-            <span className="text-5xl font-bold" style={{ fontFamily: "'Cinzel', serif", color: activeLetter ? accentColor : "transparent", filter: activeLetter ? `drop-shadow(0 0 16px ${accentColor})` : "none", transition: "all 0.15s ease" }}>
-              {activeLetter ?? "—"}
+            <span className="text-5xl font-bold" style={{ fontFamily: "'Cinzel', serif", color: "transparent", transition: "all 0.15s ease" }}>
+              {"—"}
             </span>
           </div>
 

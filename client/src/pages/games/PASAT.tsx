@@ -222,10 +222,6 @@ export default function PASAT() {
               {streamIdx > 0 ? `${streamIdx}/${cfg.trials}` : ""}
             </p>
             <div className="flex items-center justify-center gap-6">
-              {prevNum !== null && (
-                <span className="text-3xl font-bold opacity-40" style={{ fontFamily: "'Cinzel', serif", color: accent }}>{prevNum}</span>
-              )}
-              {prevNum !== null && <span className="text-xl opacity-30" style={{ color: accent }}>+</span>}
               <span
                 className="text-7xl font-bold"
                 style={{ fontFamily: "'Cinzel', serif", color: accent, filter: `drop-shadow(0 0 20px ${accent}80)`, transition: "all 0.15s ease" }}
@@ -235,7 +231,7 @@ export default function PASAT() {
             </div>
             {prevNum !== null && (
               <p className="text-[10px] mt-3" style={{ color: "hsl(214 20% 36%)", fontFamily: "DM Mono, monospace" }}>
-                = ?
+                + ?
               </p>
             )}
           </div>
