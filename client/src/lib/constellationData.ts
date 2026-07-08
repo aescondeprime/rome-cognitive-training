@@ -53,7 +53,9 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     depth: 0.9,
     href: "/philosophy",
     tagline: "A private space for reflection and intellectual synthesis",
-    subnodes: [],
+    subnodes: [
+      { id: "phil-reflections", label: "Reflections", icon: "✦", href: "/philosophy", description: "Philosophy Chambers — notes and reflections" },
+    ],
     connections: [],
   },
 

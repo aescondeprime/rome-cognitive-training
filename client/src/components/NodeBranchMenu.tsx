@@ -81,14 +81,6 @@ export default function NodeBranchMenu({
   const primaryAngle = preferredAngle(cx, cy, svgW, svgH);
 
   const branches: Branch[] = [
-    {
-      id:        "__primary__",
-      label:     "Enter Domain",
-      icon:      node.symbol,
-      href:      node.href,
-      isPrimary: true,
-      angle:     primaryAngle,
-    },
     ...node.subnodes.map((sub, i) => ({
       id:        sub.id,
       label:     sub.label,
@@ -99,15 +91,16 @@ export default function NodeBranchMenu({
     })),
   ];
 
-  // Fan subnodes in a ±70° arc on the opposite side of the primary
-  const subCount = branches.length - 1;
+  // Fan all branches evenly toward the screen centre
+  const subCount = branches.length;
   if (subCount > 0) {
-    const oppAngle = primaryAngle + Math.PI;
-    const spread   = Math.min((subCount - 1) * 44, 200) * (Math.PI / 180);
-    const step     = subCount > 1 ? spread / (subCount - 1) : 0;
-    const startA   = oppAngle - spread / 2;
+    const spread = subCount === 1
+      ? 0
+      : Math.min((subCount - 1) * 44, 200) * (Math.PI / 180);
+    const step   = subCount > 1 ? spread / (subCount - 1) : 0;
+    const startA = primaryAngle - spread / 2;
     for (let i = 0; i < subCount; i++) {
-      branches[i + 1].angle = startA + i * step;
+      branches[i].angle = startA + i * step;
     }
   }
 
