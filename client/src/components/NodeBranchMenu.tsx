@@ -103,7 +103,7 @@ export default function NodeBranchMenu({
   const subCount = branches.length - 1;
   if (subCount > 0) {
     const oppAngle = primaryAngle + Math.PI;
-    const spread   = Math.min((subCount - 1) * 38, 130) * (Math.PI / 180);
+    const spread   = Math.min((subCount - 1) * 44, 200) * (Math.PI / 180);
     const step     = subCount > 1 ? spread / (subCount - 1) : 0;
     const startA   = oppAngle - spread / 2;
     for (let i = 0; i < subCount; i++) {
