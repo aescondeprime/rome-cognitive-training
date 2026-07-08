@@ -20,7 +20,7 @@ import { apiRequest } from "@/lib/queryClient";
 import BoardShell, { type Board } from "@/components/BoardShell";
 
 // ── Types ──────────────────────────────────────────────────────────────
-type PinType = "evidence" | "suspect" | "location" | "note";
+type PinType = "fact" | "theory" | "conclusion" | "concept";
 type ThreadColor = "red" | "amber" | "blue" | "green";
 
 interface Pin {
@@ -51,8 +51,8 @@ const PIN_TYPES: Record<PinType, {
   text: string;
   pin: string;
 }> = {
-  evidence: {
-    label: "Evidence",
+  fact: {
+    label: "Fact",
     icon: <FileSearch className="w-3 h-3" />,
     bg: "hsl(38 35% 7%)",
     border: "hsl(38 40% 25%)",
@@ -60,17 +60,17 @@ const PIN_TYPES: Record<PinType, {
     text: "hsl(38 75% 65%)",
     pin: "hsl(38 75% 55%)",
   },
-  suspect: {
-    label: "Suspect",
+  theory: {
+    label: "Theory",
     icon: <User2 className="w-3 h-3" />,
-    bg: "hsl(0 35% 7%)",
-    border: "hsl(0 40% 28%)",
-    header: "hsl(0 35% 11%)",
-    text: "hsl(0 60% 68%)",
-    pin: "hsl(0 60% 50%)",
+    bg: "hsl(270 35% 7%)",
+    border: "hsl(270 40% 28%)",
+    header: "hsl(270 35% 11%)",
+    text: "hsl(270 60% 72%)",
+    pin: "hsl(270 60% 58%)",
   },
-  location: {
-    label: "Location",
+  conclusion: {
+    label: "Conclusion",
     icon: <MapPin className="w-3 h-3" />,
     bg: "hsl(175 30% 6%)",
     border: "hsl(175 35% 24%)",
@@ -78,14 +78,14 @@ const PIN_TYPES: Record<PinType, {
     text: "hsl(175 55% 60%)",
     pin: "hsl(175 55% 45%)",
   },
-  note: {
-    label: "Note",
+  concept: {
+    label: "Concept",
     icon: <StickyNote className="w-3 h-3" />,
-    bg: "hsl(220 18% 8%)",
-    border: "hsl(220 20% 25%)",
-    header: "hsl(220 18% 11%)",
-    text: "hsl(220 30% 68%)",
-    pin: "hsl(220 30% 55%)",
+    bg: "hsl(210 35% 7%)",
+    border: "hsl(210 40% 24%)",
+    header: "hsl(210 35% 10%)",
+    text: "hsl(210 60% 68%)",
+    pin: "hsl(210 60% 52%)",
   },
 };
 
@@ -161,7 +161,7 @@ function PinComponent({ pin, onUpdate, onDelete, onStartThread, isThreading, isT
   const saveEdit = () => { setEditing(false); if (draft !== pin.content) onUpdate(pin.id, { content: draft }); };
 
   // Pin type cycle
-  const PIN_TYPE_ORDER: PinType[] = ["evidence", "suspect", "location", "note"];
+  const PIN_TYPE_ORDER: PinType[] = ["fact", "theory", "conclusion", "concept"];
   const cycleType = (e: React.MouseEvent) => {
     e.stopPropagation();
     const idx = PIN_TYPE_ORDER.indexOf(pin.pin_type);
@@ -471,7 +471,7 @@ function ComponentBoardView({ board }: { board: Board }) {
   };
 
   // ── Add pin ───────────────────────────────────────────────────────────
-  const PIN_TYPE_ORDER: PinType[] = ["evidence", "suspect", "location", "note"];
+  const PIN_TYPE_ORDER: PinType[] = ["fact", "theory", "conclusion", "concept"];
   const addPin = (type: PinType) => {
     const off = (pins.length % 6) * 28;
     createPin.mutate({ content: "", pin_type: type, pos_x: 60 + off, pos_y: 60 + off, width: 200, color: type });
