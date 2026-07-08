@@ -178,12 +178,17 @@ export default function NodeBranchMenu({
         const ftY = cy + Math.sin(branch.angle) * (offset + stemLen);
 
         // Label centre — offset just past tip
-        const labelDist  = stemLen + LABEL_PAD * inv + (LABEL_W * inv) / 2;
+        // Dynamic width — compute before positioning so label centre uses actual width
+        const fontSize_  = 9 * inv;
+        const iconSize_  = 10 * inv;
+        const charW      = fontSize_ * 0.60;
+        const textPx     = branch.label.length * charW;
+        const lw         = iconSize_ * 2 + 8 * inv + textPx + 16 * inv;
+        const lh         = LABEL_H * inv;
+
+        const labelDist  = stemLen + LABEL_PAD * inv + lw / 2;
         const labelCX = cx + Math.cos(branch.angle) * (offset + labelDist);
         const labelCY = cy + Math.sin(branch.angle) * (offset + labelDist);
-
-        const lw = LABEL_W * inv;
-        const lh = LABEL_H * inv;
         const lr = 5 * inv; // border radius
 
         const accentRaw = branch.isPrimary ? node.accent : "hsl(43 60% 55%)";
@@ -193,8 +198,8 @@ export default function NodeBranchMenu({
         const labelBg    = branch.isPrimary ? `${node.accent}18` : "hsl(220 14% 8% / 0.88)";
         const labelBorder= branch.isPrimary ? `${node.accent}45` : "hsl(220 14% 20% / 0.7)";
         const labelText  = branch.isPrimary ? node.accent : "hsl(43 50% 62%)";
-        const fontSize   = 9 * inv;
-        const iconSize   = 10 * inv;
+        const fontSize   = fontSize_;
+        const iconSize   = iconSize_;
 
         return (
           <g key={branch.id}>
