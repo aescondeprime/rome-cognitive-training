@@ -13,7 +13,6 @@ import Login from "@/pages/Login";
 
 // Core pages kept
 import PhilosophyChambers from "@/pages/PhilosophyChambers";
-import ProfileManager from "@/pages/ProfileManager";
 import Settings from "@/pages/Settings";
 import Taskboard from "@/pages/Taskboard";
 import AlchemyLab from "@/pages/AlchemyLab";
@@ -120,7 +119,6 @@ export default function App() {
                     <Route path="/alchemy-lab" component={AlchemyLab} />
 
                     {/* Profiles + Settings */}
-                    <Route path="/profiles"  component={ProfileManager} />
                     <Route path="/settings"  component={Settings} />
 
                     <Route component={NotFound} />

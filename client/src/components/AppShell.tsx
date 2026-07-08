@@ -26,7 +26,6 @@ const PAGE_TITLES: Record<string, string> = {
   "/investigative":       "Investigative",
   "/alchemy":             "Alchemy Lab",
   "/taskboard":           "Taskboard",
-  "/profiles":            "Profiles",
   "/settings":            "Settings",
 };
 
@@ -79,20 +78,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         {/* Right — profile chip + settings */}
         <div className="flex items-center gap-3">
           {activeProfile && (
-            <Link href="/profiles">
-              <span
-                className="text-[10px] tracking-widest uppercase cursor-pointer transition-colors"
-                style={{
-                  fontFamily: "DM Mono, monospace",
-                  color: "hsl(43 30% 42%)",
-                }}
-                onMouseEnter={e => (e.currentTarget.style.color = "hsl(43 70% 58%)")}
-                onMouseLeave={e => (e.currentTarget.style.color = "hsl(43 30% 42%)")}
-                title="Switch profile"
-              >
-                ◎ {activeProfile.name}
-              </span>
-            </Link>
+            <span
+              className="text-[10px] tracking-widest uppercase"
+              style={{ fontFamily: "DM Mono, monospace", color: "hsl(43 30% 42%)" }}
+            >
+              ◎ {activeProfile.name}
+            </span>
           )}
           <Link href="/settings">
             <button className="opacity-30 hover:opacity-70 transition-opacity" title="Settings">
