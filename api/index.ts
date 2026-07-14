@@ -783,6 +783,133 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     }
 
     // ════════════════════════════════════════════════════════════════════
+    // SCIENCE BOARDS — articles + conclusions
+    // ════════════════════════════════════════════════════════════════════
+
+    // GET /boards/:id/articles
+    // POST /boards/:id/articles
+    {
+      const m = route.match(/^\/boards\/(\d+)\/articles$/);
+      if (m) {
+        const boardId = parseInt(m[1]);
+        if (method === "GET") {
+          const { data } = await sb.from("science_articles").select("*").eq("board_id", boardId).order("created_at", { ascending: false });
+          return json(res, 200, data ?? []);
+        }
+        if (method === "POST") {
+          const body = await readBody(req);
+          const user = await getActiveUser(req, sb);
+          const now = Date.now();
+          const { title="", authors="", year="", url="", abstract="", tags="" } = body;
+          const { data: row } = await sb.from("science_articles").insert({ board_id: boardId, user_id: user.id, title, authors, year, url, abstract, tags, created_at: now, updated_at: now }).select().single();
+          await sb.from("boards").update({ updated_at: now }).eq("id", boardId);
+          return json(res, 200, row ?? {});
+        }
+      }
+    }
+
+    // PATCH /articles/:id
+    // DELETE /articles/:id
+    {
+      const m = route.match(/^\/articles\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          ["title","authors","year","url","abstract","tags"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          await sb.from("science_articles").update(patch).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("science_articles").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // GET /boards/:id/conclusions
+    // POST /boards/:id/conclusions
+    {
+      const m = route.match(/^\/boards\/(\d+)\/conclusions$/);
+      if (m) {
+        const boardId = parseInt(m[1]);
+        if (method === "GET") {
+          const { data } = await sb.from("article_conclusions").select("*").eq("board_id", boardId).order("created_at", { ascending: true });
+          return json(res, 200, data ?? []);
+        }
+        if (method === "POST") {
+          const body = await readBody(req);
+          const user = await getActiveUser(req, sb);
+          const now = Date.now();
+          const { article_id, content="", strength="moderate" } = body;
+          const { data: row } = await sb.from("article_conclusions").insert({ article_id, board_id: boardId, user_id: user.id, content, strength, created_at: now, updated_at: now }).select().single();
+          return json(res, 200, row ?? {});
+        }
+      }
+    }
+
+    // PATCH /conclusions/:id
+    // DELETE /conclusions/:id
+    {
+      const m = route.match(/^\/conclusions\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          ["content","strength"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          await sb.from("article_conclusions").update(patch).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("article_conclusions").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // EXPERIMENT BOARDS — sections
+    // ════════════════════════════════════════════════════════════════════
+
+    // GET /boards/:id/experiment-sections
+    // POST /boards/:id/experiment-sections
+    {
+      const m = route.match(/^\/boards\/(\d+)\/experiment-sections$/);
+      if (m) {
+        const boardId = parseInt(m[1]);
+        if (method === "GET") {
+          const { data } = await sb.from("experiment_sections").select("*").eq("board_id", boardId);
+          return json(res, 200, data ?? []);
+        }
+        if (method === "POST") {
+          const body = await readBody(req);
+          const user = await getActiveUser(req, sb);
+          const now = Date.now();
+          const { section_key, content="" } = body;
+          const { data: row } = await sb.from("experiment_sections").insert({ board_id: boardId, user_id: user.id, section_key, content, created_at: now, updated_at: now }).select().single();
+          await sb.from("boards").update({ updated_at: now }).eq("id", boardId);
+          return json(res, 200, row ?? {});
+        }
+      }
+    }
+
+    // PATCH /experiment-sections/:id
+    {
+      const m = route.match(/^\/experiment-sections\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const now = Date.now();
+          await sb.from("experiment_sections").update({ content: body.content ?? "", updated_at: now }).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     // NOOTROPICS
     // ════════════════════════════════════════════════════════════════════
 
