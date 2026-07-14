@@ -131,7 +131,8 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     href: "/investigative",
     tagline: "Pattern recognition and deep inquiry",
     subnodes: [
-      { id: "inv-case", label: "Component Board", icon: "◉", href: "/component-board", description: "Detective caseboard with evidence pins and thread lines" },
+      { id: "inv-case",     label: "Component Board", icon: "◉", href: "/component-board", description: "Detective caseboard with evidence pins and thread lines" },
+      { id: "inv-research", label: "Research Lab",     icon: "⊕", href: "/research-lab",    description: "Evidence-based cognitive training research brief" },
     ],
     connections: [],
   },

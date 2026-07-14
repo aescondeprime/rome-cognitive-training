@@ -16,6 +16,7 @@ import PhilosophyChambers from "@/pages/PhilosophyChambers";
 import Settings from "@/pages/Settings";
 import Taskboard from "@/pages/Taskboard";
 import AlchemyLab from "@/pages/AlchemyLab";
+import ResearchLab from "@/pages/ResearchLab";
 import IdeaWorkshop from "@/pages/IdeaWorkshop";
 import ComponentBoard from "@/pages/ComponentBoard";
 import NotFound from "@/pages/not-found";
@@ -111,6 +112,7 @@ export default function App() {
                       <PlaceholderNode title="Investigative" symbol="◉" accent="hsl(175 55% 48%)" description="Pattern recognition and deep inquiry. Open your Component Board below." subRoute={{ label: "Component Board", path: "/component-board" }} />
                     </Route>
                     <Route path="/component-board" component={ComponentBoard} />
+                    <Route path="/research-lab" component={ResearchLab} />
 
                     {/* Alchemy Lab */}
                     <Route path="/alchemy">
