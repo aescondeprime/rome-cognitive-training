@@ -53,7 +53,7 @@ const RESEARCH_SECTIONS = [
       },
       {
         term: "This app's approach",
-        body: "WM training is framed as a tool for improving attentional control strategies, not a "make you smarter" hack. The real-world n-back uses domain-relevant stimuli and is one component of a broader cognitive training system.",
+        body: "WM training is framed as a tool for improving attentional control strategies, not a 'make you smarter' hack. The real-world n-back uses domain-relevant stimuli and is one component of a broader cognitive training system.",
       },
     ],
     sources: [
@@ -166,7 +166,7 @@ const RESEARCH_SECTIONS = [
       },
       {
         term: "This app's honest position",
-        body: "The strongest components are retrieval practice, spaced repetition, and metacognitive reflection. WM and EF training are included because they have near-transfer value and may support attentional strategies. No component of this app is claimed to \"make you smarter\" broadly — it trains specific, measurable cognitive behaviors.",
+        body: "The strongest components are retrieval practice, spaced repetition, and metacognitive reflection. WM and EF training are included because they have near-transfer value and may support attentional strategies. No component of this app is claimed to 'make you smarter' broadly — it trains specific, measurable cognitive behaviors.",
       },
     ],
     sources: [
