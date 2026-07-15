@@ -30,6 +30,7 @@ interface Pin {
   pos_x: number;
   pos_y: number;
   width: number;
+  height: number;
   color: string;
 }
 
@@ -107,38 +108,62 @@ interface PinProps {
   boardRef: React.RefObject<HTMLDivElement>;
 }
 
+type Corner = "nw" | "ne" | "sw" | "se";
+const CORNER_POS: Record<Corner, React.CSSProperties> = {
+  nw: { top: -4,    left: -4,    cursor: "nw-resize" },
+  ne: { top: -4,    right: -4,   cursor: "ne-resize" },
+  sw: { bottom: -4, left: -4,    cursor: "sw-resize" },
+  se: { bottom: -4, right: -4,   cursor: "se-resize" },
+};
+function PinResizeHandles({ onStart, color }: { onStart: (c: Corner, e: React.MouseEvent) => void; color: string }) {
+  return (
+    <>
+      {(["nw","ne","sw","se"] as Corner[]).map(c => (
+        <div
+          key={c}
+          className="absolute w-3 h-3 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"
+          style={{ ...CORNER_POS[c], background: "hsl(220 15% 14%)", border: `1.5px solid ${color}`, zIndex: 50 }}
+          onMouseDown={e => { e.stopPropagation(); onStart(c, e); }}
+        />
+      ))}
+    </>
+  );
+}
+
 function PinComponent({ pin, onUpdate, onDelete, onStartThread, isThreading, isThreadTarget, boardRef }: PinProps) {
   const [editing, setEditing] = useState(false);
   const [draft,   setDraft]   = useState(pin.content);
   const [pos,     setPos]     = useState({ x: pin.pos_x, y: pin.pos_y });
-  const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  const [size,    setSize]    = useState({ w: pin.width, h: pin.height ?? 0 });
+  const dragRef   = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  const resizeRef = useRef<{ sx: number; sy: number; ow: number; oh: number; ox: number; oy: number; corner: Corner } | null>(null);
   const conf = PIN_TYPES[pin.pin_type] ?? PIN_TYPES.evidence;
+  const MIN_W = 160, MIN_H = 100;
 
   useEffect(() => { setPos({ x: pin.pos_x, y: pin.pos_y }); }, [pin.pos_x, pin.pos_y]);
+  useEffect(() => { setSize({ w: pin.width, h: pin.height ?? 0 }); }, [pin.width, pin.height]);
   useEffect(() => { setDraft(pin.content); }, [pin.content]);
 
+  // ── move ──
   const startDrag = (cx: number, cy: number) => {
     if (editing || isThreading) return;
     dragRef.current = { sx: cx, sy: cy, ox: pos.x, oy: pos.y };
   };
-
   const moveDrag = (cx: number, cy: number) => {
     if (!dragRef.current || !boardRef.current) return;
     const b = boardRef.current.getBoundingClientRect();
-    const nx = Math.max(0, Math.min(b.width - pin.width - 4, dragRef.current.ox + cx - dragRef.current.sx));
+    const nx = Math.max(0, Math.min(b.width - size.w - 4, dragRef.current.ox + cx - dragRef.current.sx));
     const ny = Math.max(0, dragRef.current.oy + cy - dragRef.current.sy);
     setPos({ x: nx, y: ny });
   };
-
   const endDrag = (cx: number, cy: number) => {
     if (!dragRef.current || !boardRef.current) return;
     const b = boardRef.current.getBoundingClientRect();
-    const nx = Math.max(0, Math.min(b.width - pin.width - 4, dragRef.current.ox + cx - dragRef.current.sx));
+    const nx = Math.max(0, Math.min(b.width - size.w - 4, dragRef.current.ox + cx - dragRef.current.sx));
     const ny = Math.max(0, dragRef.current.oy + cy - dragRef.current.sy);
     dragRef.current = null;
     onUpdate(pin.id, { pos_x: nx, pos_y: ny });
   };
-
   const onMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -148,7 +173,6 @@ function PinComponent({ pin, onUpdate, onDelete, onStartThread, isThreading, isT
     window.addEventListener("mousemove", mm);
     window.addEventListener("mouseup", mu);
   };
-
   const onTouchStart = (e: React.TouchEvent) => {
     if (isThreading) return;
     startDrag(e.touches[0].clientX, e.touches[0].clientY);
@@ -156,6 +180,40 @@ function PinComponent({ pin, onUpdate, onDelete, onStartThread, isThreading, isT
     const tu = (ev: TouchEvent) => { endDrag(ev.changedTouches[0].clientX, ev.changedTouches[0].clientY); window.removeEventListener("touchmove", tm); window.removeEventListener("touchend", tu); };
     window.addEventListener("touchmove", tm, { passive: false });
     window.addEventListener("touchend", tu);
+  };
+
+  // ── resize ──
+  const startResize = (corner: Corner, e: React.MouseEvent) => {
+    e.preventDefault();
+    const initH = size.h > 0 ? size.h : (boardRef.current?.querySelector(`[data-pin-id="${pin.id}"]`) as HTMLElement)?.offsetHeight ?? 160;
+    resizeRef.current = { sx: e.clientX, sy: e.clientY, ow: size.w, oh: initH, ox: pos.x, oy: pos.y, corner };
+    const mm = (ev: MouseEvent) => {
+      if (!resizeRef.current) return;
+      const { sx, sy, ow, oh, ox, oy, corner } = resizeRef.current;
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      let nw = ow, nh = oh, nx = ox, ny = oy;
+      if (corner === "se") { nw = Math.max(MIN_W, ow + dx); nh = Math.max(MIN_H, oh + dy); }
+      if (corner === "sw") { const nwt = Math.max(MIN_W, ow - dx); nx = ox + (ow - nwt); nw = nwt; nh = Math.max(MIN_H, oh + dy); }
+      if (corner === "ne") { nw = Math.max(MIN_W, ow + dx); const nht = Math.max(MIN_H, oh - dy); ny = oy + (oh - nht); nh = nht; }
+      if (corner === "nw") { const nwt = Math.max(MIN_W, ow - dx); nx = ox + (ow - nwt); nw = nwt; const nht = Math.max(MIN_H, oh - dy); ny = oy + (oh - nht); nh = nht; }
+      setSize({ w: nw, h: nh });
+      setPos({ x: Math.max(0, nx), y: Math.max(0, ny) });
+    };
+    const mu = () => {
+      if (!resizeRef.current) return;
+      resizeRef.current = null;
+      setSize(s => {
+        setPos(p => {
+          onUpdate(pin.id, { width: s.w, height: s.h, pos_x: p.x, pos_y: p.y });
+          return p;
+        });
+        return s;
+      });
+      window.removeEventListener("mousemove", mm);
+      window.removeEventListener("mouseup", mu);
+    };
+    window.addEventListener("mousemove", mm);
+    window.addEventListener("mouseup", mu);
   };
 
   const saveEdit = () => { setEditing(false); if (draft !== pin.content) onUpdate(pin.id, { content: draft }); };
@@ -169,17 +227,21 @@ function PinComponent({ pin, onUpdate, onDelete, onStartThread, isThreading, isT
     onUpdate(pin.id, { pin_type: next });
   };
 
+  const hasH = size.h > 0;
+
   return (
     <div
+      data-pin-id={pin.id}
       className={cn(
-        "absolute rounded-xl border select-none transition-shadow",
+        "absolute rounded-xl border select-none transition-shadow group flex flex-col",
         isThreading && "cursor-crosshair",
         !isThreading && !editing && "cursor-grab active:cursor-grabbing"
       )}
       style={{
         left: pos.x,
         top:  pos.y,
-        width: pin.width,
+        width: size.w,
+        height: hasH ? size.h : undefined,
         background: conf.bg,
         borderColor: isThreadTarget ? "hsl(0 70% 55%)" : conf.border,
         zIndex: editing ? 100 : 10,
@@ -189,6 +251,9 @@ function PinComponent({ pin, onUpdate, onDelete, onStartThread, isThreading, isT
       onTouchStart={isThreading ? undefined : onTouchStart}
       onClick={isThreading ? () => onStartThread(pin.id) : undefined}
     >
+      {/* Resize handles */}
+      {!isThreading && <PinResizeHandles onStart={startResize} color={conf.border} />}
+
       {/* Pin marker dot (top centre) */}
       <div
         className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full border border-black/30"
@@ -197,7 +262,7 @@ function PinComponent({ pin, onUpdate, onDelete, onStartThread, isThreading, isT
 
       {/* Header */}
       <div
-        className="flex items-center justify-between px-2.5 py-2 rounded-t-xl"
+        className="flex items-center justify-between px-2.5 py-2 rounded-t-xl shrink-0"
         style={{ background: conf.header, borderBottom: `1px solid ${conf.border}` }}
       >
         {/* Type badge */}
@@ -234,7 +299,10 @@ function PinComponent({ pin, onUpdate, onDelete, onStartThread, isThreading, isT
       </div>
 
       {/* Body */}
-      <div className="p-2.5" onDoubleClick={() => { if (!isThreading) setEditing(true); }}>
+      <div
+        className="p-2.5 flex-1 overflow-auto"
+        onDoubleClick={() => { if (!isThreading) setEditing(true); }}
+      >
         {editing ? (
           <textarea
             autoFocus

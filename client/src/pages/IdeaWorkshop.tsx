@@ -28,6 +28,7 @@ interface IdeaCard {
   pos_x: number;
   pos_y: number;
   width: number;
+  height: number;
   tags: string;
   energy: number;
 }
@@ -122,38 +123,63 @@ interface IdeaCardProps {
   boardRef: React.RefObject<HTMLDivElement>;
 }
 
+// ── Corner resize handles ──────────────────────────────────────────────
+type Corner = "nw" | "ne" | "sw" | "se";
+const CORNER_POS: Record<Corner, React.CSSProperties> = {
+  nw: { top: -4,    left: -4,    cursor: "nw-resize" },
+  ne: { top: -4,    right: -4,   cursor: "ne-resize" },
+  sw: { bottom: -4, left: -4,    cursor: "sw-resize" },
+  se: { bottom: -4, right: -4,   cursor: "se-resize" },
+};
+function ResizeHandles({ onStart, color }: { onStart: (c: Corner, e: React.MouseEvent) => void; color: string }) {
+  return (
+    <>
+      {(["nw","ne","sw","se"] as Corner[]).map(c => (
+        <div
+          key={c}
+          className="absolute w-3 h-3 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"
+          style={{ ...CORNER_POS[c], background: "hsl(220 15% 14%)", border: `1.5px solid ${color}`, zIndex: 50 }}
+          onMouseDown={e => { e.stopPropagation(); onStart(c, e); }}
+        />
+      ))}
+    </>
+  );
+}
+
 function IdeaCardComponent({ card, onUpdate, onDelete, onStartLink, isLinking, isLinkTarget, boardRef }: IdeaCardProps) {
   const [editing, setEditing] = useState(false);
   const [draft,   setDraft]   = useState(card.content);
   const [pos,     setPos]     = useState({ x: card.pos_x, y: card.pos_y });
-  const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  const [size,    setSize]    = useState({ w: card.width, h: card.height ?? 0 });
+  const dragRef   = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  const resizeRef = useRef<{ sx: number; sy: number; ow: number; oh: number; ox: number; oy: number; corner: Corner } | null>(null);
   const col = colorFor(card.color);
+  const MIN_W = 160, MIN_H = 120;
 
   useEffect(() => { setPos({ x: card.pos_x, y: card.pos_y }); }, [card.pos_x, card.pos_y]);
+  useEffect(() => { setSize({ w: card.width, h: card.height ?? 0 }); }, [card.width, card.height]);
   useEffect(() => { setDraft(card.content); }, [card.content]);
 
+  // ── move ──
   const startDrag = (cx: number, cy: number) => {
     if (editing) return;
     dragRef.current = { sx: cx, sy: cy, ox: pos.x, oy: pos.y };
   };
-
   const moveDrag = (cx: number, cy: number) => {
     if (!dragRef.current || !boardRef.current) return;
     const b = boardRef.current.getBoundingClientRect();
-    const nx = Math.max(0, Math.min(b.width - card.width - 4, dragRef.current.ox + cx - dragRef.current.sx));
+    const nx = Math.max(0, Math.min(b.width - size.w - 4, dragRef.current.ox + cx - dragRef.current.sx));
     const ny = Math.max(0, dragRef.current.oy + cy - dragRef.current.sy);
     setPos({ x: nx, y: ny });
   };
-
   const endDrag = (cx: number, cy: number) => {
     if (!dragRef.current || !boardRef.current) return;
     const b = boardRef.current.getBoundingClientRect();
-    const nx = Math.max(0, Math.min(b.width - card.width - 4, dragRef.current.ox + cx - dragRef.current.sx));
+    const nx = Math.max(0, Math.min(b.width - size.w - 4, dragRef.current.ox + cx - dragRef.current.sx));
     const ny = Math.max(0, dragRef.current.oy + cy - dragRef.current.sy);
     dragRef.current = null;
     onUpdate(card.id, { pos_x: nx, pos_y: ny });
   };
-
   const onMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -163,7 +189,6 @@ function IdeaCardComponent({ card, onUpdate, onDelete, onStartLink, isLinking, i
     window.addEventListener("mousemove", mm);
     window.addEventListener("mouseup", mu);
   };
-
   const onTouchStart = (e: React.TouchEvent) => {
     startDrag(e.touches[0].clientX, e.touches[0].clientY);
     const tm = (ev: TouchEvent) => { if (!dragRef.current) return; ev.preventDefault(); moveDrag(ev.touches[0].clientX, ev.touches[0].clientY); };
@@ -172,12 +197,49 @@ function IdeaCardComponent({ card, onUpdate, onDelete, onStartLink, isLinking, i
     window.addEventListener("touchend", tu);
   };
 
+  // ── resize ──
+  const startResize = (corner: Corner, e: React.MouseEvent) => {
+    e.preventDefault();
+    const initH = size.h > 0 ? size.h : (boardRef.current?.querySelector(`[data-card-id="${card.id}"]`) as HTMLElement)?.offsetHeight ?? 200;
+    resizeRef.current = { sx: e.clientX, sy: e.clientY, ow: size.w, oh: initH, ox: pos.x, oy: pos.y, corner };
+    const mm = (ev: MouseEvent) => {
+      if (!resizeRef.current) return;
+      const { sx, sy, ow, oh, ox, oy, corner } = resizeRef.current;
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      let nw = ow, nh = oh, nx = ox, ny = oy;
+      if (corner === "se") { nw = Math.max(MIN_W, ow + dx); nh = Math.max(MIN_H, oh + dy); }
+      if (corner === "sw") { const nwt = Math.max(MIN_W, ow - dx); nx = ox + (ow - nwt); nw = nwt; nh = Math.max(MIN_H, oh + dy); }
+      if (corner === "ne") { nw = Math.max(MIN_W, ow + dx); const nht = Math.max(MIN_H, oh - dy); ny = oy + (oh - nht); nh = nht; }
+      if (corner === "nw") { const nwt = Math.max(MIN_W, ow - dx); nx = ox + (ow - nwt); nw = nwt; const nht = Math.max(MIN_H, oh - dy); ny = oy + (oh - nht); nh = nht; }
+      setSize({ w: nw, h: nh });
+      setPos({ x: Math.max(0, nx), y: Math.max(0, ny) });
+    };
+    const mu = () => {
+      if (!resizeRef.current) return;
+      resizeRef.current = null;
+      // capture final state synchronously via callback form
+      setSize(s => {
+        setPos(p => {
+          onUpdate(card.id, { width: s.w, height: s.h, pos_x: p.x, pos_y: p.y });
+          return p;
+        });
+        return s;
+      });
+      window.removeEventListener("mousemove", mm);
+      window.removeEventListener("mouseup", mu);
+    };
+    window.addEventListener("mousemove", mm);
+    window.addEventListener("mouseup", mu);
+  };
+
   const saveEdit = () => { setEditing(false); if (draft !== card.content) onUpdate(card.id, { content: draft }); };
 
+  const hasH = size.h > 0;
   const cardStyle: React.CSSProperties = {
     left: pos.x,
     top:  pos.y,
-    width: card.width,
+    width: size.w,
+    height: hasH ? size.h : undefined,
     background: col.bg,
     borderColor: isLinkTarget ? "hsl(270 80% 65%)" : col.border,
     zIndex: editing ? 100 : 10,
@@ -186,8 +248,9 @@ function IdeaCardComponent({ card, onUpdate, onDelete, onStartLink, isLinking, i
 
   return (
     <div
+      data-card-id={card.id}
       className={cn(
-        "absolute rounded-xl border select-none transition-shadow",
+        "absolute rounded-xl border select-none transition-shadow group flex flex-col",
         isLinking && "cursor-crosshair",
         !isLinking && !editing && "cursor-grab active:cursor-grabbing"
       )}
@@ -196,9 +259,12 @@ function IdeaCardComponent({ card, onUpdate, onDelete, onStartLink, isLinking, i
       onTouchStart={isLinking ? undefined : onTouchStart}
       onClick={isLinking ? () => onStartLink(card.id) : undefined}
     >
+      {/* Resize handles */}
+      {!isLinking && <ResizeHandles onStart={startResize} color={col.border} />}
+
       {/* Header */}
       <div
-        className="flex items-center justify-between px-2.5 py-2 rounded-t-xl"
+        className="flex items-center justify-between px-2.5 py-2 rounded-t-xl shrink-0"
         style={{ background: col.header, borderBottom: `1px solid ${col.border}` }}
       >
         {/* Color dots */}
@@ -236,7 +302,10 @@ function IdeaCardComponent({ card, onUpdate, onDelete, onStartLink, isLinking, i
       </div>
 
       {/* Body */}
-      <div className="p-2.5 space-y-2.5" onDoubleClick={() => { if (!isLinking) setEditing(true); }}>
+      <div
+        className="p-2.5 space-y-2.5 flex-1 overflow-auto"
+        onDoubleClick={() => { if (!isLinking) setEditing(true); }}
+      >
         {editing ? (
           <textarea
             autoFocus

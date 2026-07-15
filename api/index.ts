@@ -655,7 +655,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
-          ["content","color","pos_x","pos_y","width","tags","energy"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          ["content","color","pos_x","pos_y","width","height","tags","energy"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
           await sb.from("idea_cards").update(patch).eq("id", id);
           return json(res, 200, { ok: true });
         }
@@ -735,7 +735,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
-          ["content","pin_type","pos_x","pos_y","width","color"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          ["content","pin_type","pos_x","pos_y","width","height","color"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
           await sb.from("component_pins").update(patch).eq("id", id);
           return json(res, 200, { ok: true });
         }
