@@ -1,23 +1,26 @@
 /**
  * ResearchLab — Investigative node research collection tool.
  *
- * Two board types accessible from the same sidebar:
+ * Sidebar: renamable/collapsible folders; each folder holds any mix of
+ *   Science Boards and Experiment Boards.
  *
- * Science Board  — link research articles, pull key conclusions from each,
+ * Science Board  — link research articles, draw conclusions per article,
  *                  tag by evidence strength.
  *
- * Experiment Board — structured experiment process:
- *   Question → Hypothesis → Variables → Method →
- *   Materials → Procedure → Results → Analysis → Conclusion
+ * Experiment Board — freeform canvas (like ComponentBoard) with draggable,
+ *   resizable cards for each experiment component.
+ *   Components: Question · Hypothesis · IV · DV · CV ·
+ *               Materials · Method · Results · Analysis ·
+ *               Conclusion · Limitations · References
  */
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import {
   Plus, Trash2, PenLine, ChevronLeft, Check, Loader2,
   BookOpen, FlaskConical, ExternalLink, X, ChevronDown,
-  ChevronRight, Link2, Lightbulb, Microscope,
+  ChevronRight, Link2, FolderOpen, Folder, FolderPlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
@@ -59,11 +62,24 @@ interface ExpSection {
   board_id: number;
   section_key: string;
   content: string;
+  pos_x: number;
+  pos_y: number;
+  width: number;
+  height: number;
+}
+
+// Folder structure stored in localStorage
+interface LabFolder {
+  id: string;
+  name: string;
+  boardIds: number[];
+  open: boolean;
 }
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const ACCENT_SCIENCE    = "hsl(210 65% 62%)";
 const ACCENT_EXPERIMENT = "hsl(145 55% 50%)";
+const FOLDERS_KEY       = "rome_research_folders_v1";
 
 const STRENGTH_CONFIG: Record<Strength, { label: string; color: string; bg: string; border: string }> = {
   strong:     { label: "Strong",      color: "hsl(145 55% 55%)", bg: "hsl(145 30% 7%)",  border: "hsl(145 30% 20%)" },
@@ -72,68 +88,220 @@ const STRENGTH_CONFIG: Record<Strength, { label: string; color: string; bg: stri
   speculative:{ label: "Speculative", color: "hsl(270 55% 62%)", bg: "hsl(270 25% 7%)",  border: "hsl(270 25% 20%)" },
 };
 
-const EXPERIMENT_SECTIONS = [
-  { key: "question",     label: "Research Question",     placeholder: "What are you trying to find out?" },
-  { key: "hypothesis",   label: "Hypothesis",            placeholder: "State your testable prediction (If… then… because…)" },
-  { key: "iv",           label: "Independent Variable",  placeholder: "What you will deliberately change or manipulate" },
-  { key: "dv",           label: "Dependent Variable",    placeholder: "What you will measure or observe as a result" },
-  { key: "cv",           label: "Controlled Variables",  placeholder: "What you will keep constant to ensure a fair test" },
-  { key: "materials",    label: "Materials",             placeholder: "List everything needed to run the experiment" },
-  { key: "method",       label: "Method / Procedure",    placeholder: "Step-by-step description of how you'll run the experiment" },
-  { key: "results",      label: "Results",               placeholder: "Record raw data, observations, measurements" },
-  { key: "analysis",     label: "Analysis",              placeholder: "Interpret the data — patterns, statistics, comparisons" },
-  { key: "conclusion",   label: "Conclusion",            placeholder: "Did the results support your hypothesis? What does it mean?" },
-  { key: "limitations",  label: "Limitations",           placeholder: "What could have affected the results? How could this be improved?" },
-  { key: "references",   label: "References",            placeholder: "Link to any papers, sources, or prior work that informed this experiment" },
-];
+// Experiment card types — each is a draggable card on the canvas
+const EXP_TYPES: Record<string, { label: string; shortLabel: string; color: string; bg: string; border: string; header: string }> = {
+  question:    { label: "Research Question", shortLabel: "Question",    color: "hsl(210 65% 68%)", bg: "hsl(210 35% 7%)",  border: "hsl(210 40% 24%)", header: "hsl(210 35% 11%)" },
+  hypothesis:  { label: "Hypothesis",        shortLabel: "Hypothesis",  color: "hsl(270 60% 72%)", bg: "hsl(270 35% 7%)",  border: "hsl(270 40% 24%)", header: "hsl(270 35% 11%)" },
+  iv:          { label: "Independent Var.",  shortLabel: "Indep. Var.", color: "hsl(38 80% 65%)",  bg: "hsl(38 35% 7%)",   border: "hsl(38 40% 24%)",  header: "hsl(38 35% 11%)"  },
+  dv:          { label: "Dependent Var.",    shortLabel: "Dep. Var.",   color: "hsl(0 60% 65%)",   bg: "hsl(0 35% 7%)",    border: "hsl(0 40% 24%)",   header: "hsl(0 35% 11%)"   },
+  cv:          { label: "Controlled Vars.",  shortLabel: "Control",     color: "hsl(175 55% 58%)", bg: "hsl(175 30% 6%)",  border: "hsl(175 35% 22%)", header: "hsl(175 30% 10%)" },
+  materials:   { label: "Materials",         shortLabel: "Materials",   color: "hsl(43 70% 62%)",  bg: "hsl(43 30% 6%)",   border: "hsl(43 35% 22%)",  header: "hsl(43 30% 10%)"  },
+  method:      { label: "Method",            shortLabel: "Method",      color: "hsl(145 55% 55%)", bg: "hsl(145 28% 6%)",  border: "hsl(145 32% 20%)", header: "hsl(145 28% 9%)"  },
+  results:     { label: "Results",           shortLabel: "Results",     color: "hsl(195 60% 60%)", bg: "hsl(195 30% 6%)",  border: "hsl(195 35% 20%)", header: "hsl(195 30% 9%)"  },
+  analysis:    { label: "Analysis",          shortLabel: "Analysis",    color: "hsl(240 50% 70%)", bg: "hsl(240 30% 7%)",  border: "hsl(240 35% 22%)", header: "hsl(240 30% 10%)" },
+  conclusion:  { label: "Conclusion",        shortLabel: "Conclusion",  color: "hsl(145 60% 60%)", bg: "hsl(145 30% 7%)",  border: "hsl(145 36% 22%)", header: "hsl(145 30% 10%)" },
+  limitations: { label: "Limitations",       shortLabel: "Limits",      color: "hsl(20 65% 62%)",  bg: "hsl(20 30% 7%)",   border: "hsl(20 35% 22%)",  header: "hsl(20 30% 10%)"  },
+  references:  { label: "References",        shortLabel: "References",  color: "hsl(220 45% 65%)", bg: "hsl(220 28% 7%)",  border: "hsl(220 32% 22%)", header: "hsl(220 28% 10%)" },
+};
+
+const EXP_TYPE_ORDER = Object.keys(EXP_TYPES);
+
+const PLACEHOLDERS: Record<string, string> = {
+  question:    "What are you trying to find out?",
+  hypothesis:  "If… then… because… (testable prediction)",
+  iv:          "What you will deliberately change or manipulate",
+  dv:          "What you will measure or observe as a result",
+  cv:          "What you will keep constant to ensure a fair test",
+  materials:   "List everything needed to run the experiment",
+  method:      "Step-by-step description of how you'll run it",
+  results:     "Record raw data, observations, measurements",
+  analysis:    "Interpret the data — patterns, statistics, comparisons",
+  conclusion:  "Did results support the hypothesis? What does it mean?",
+  limitations: "What could have affected results? How to improve?",
+  references:  "Papers, sources, or prior work that informed this",
+};
 
 // ── Shared helpers ─────────────────────────────────────────────────────────
 const inputCls = "w-full bg-[hsl(220_15%_5%)] border border-[hsl(220_15%_15%)] rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-[hsl(210_40%_30%)] transition-colors placeholder:text-muted-foreground/35";
 const labelCls = "block text-[9px] font-mono tracking-widest uppercase text-muted-foreground mb-1.5";
 
-// ── Sidebar ────────────────────────────────────────────────────────────────
+// ── Folder persistence ─────────────────────────────────────────────────────
+function loadFolders(): LabFolder[] {
+  try { return JSON.parse(localStorage.getItem(FOLDERS_KEY) ?? "[]"); } catch { return []; }
+}
+function saveFolders(folders: LabFolder[]) {
+  localStorage.setItem(FOLDERS_KEY, JSON.stringify(folders));
+}
+function genId() { return Math.random().toString(36).slice(2, 10); }
+
+// ── Corner resize ──────────────────────────────────────────────────────────
+type Corner = "nw" | "ne" | "sw" | "se";
+const CORNER_POS: Record<Corner, React.CSSProperties> = {
+  nw: { top: -4, left: -4, cursor: "nw-resize" },
+  ne: { top: -4, right: -4, cursor: "ne-resize" },
+  sw: { bottom: -4, left: -4, cursor: "sw-resize" },
+  se: { bottom: -4, right: -4, cursor: "se-resize" },
+};
+function ResizeHandles({ onStart, color }: { onStart: (c: Corner, e: React.MouseEvent) => void; color: string }) {
+  return (
+    <>
+      {(["nw","ne","sw","se"] as Corner[]).map(c => (
+        <div
+          key={c}
+          className="absolute w-3 h-3 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"
+          style={{ ...CORNER_POS[c], background: "hsl(220 15% 14%)", border: `1.5px solid ${color}`, zIndex: 50 }}
+          onMouseDown={e => { e.stopPropagation(); onStart(c, e); }}
+        />
+      ))}
+    </>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// SIDEBAR
+// ══════════════════════════════════════════════════════════════════════════
 interface SidebarProps {
   boards: Board[];
   isLoading: boolean;
   activeBoardId: number | null;
   onSelect: (id: number) => void;
-  onNew: (type: BoardType) => void;
+  onNew: (type: BoardType, folderId: string) => void;
   creating: boolean;
 }
 
 function Sidebar({ boards, isLoading, activeBoardId, onSelect, onNew, creating }: SidebarProps) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed]   = useState(false);
+  const [folders,   setFolders]     = useState<LabFolder[]>(loadFolders);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameVal,  setRenameVal]  = useState("");
+  // board rename
+  const [boardRenameId, setBoardRenameId] = useState<number | null>(null);
+  const [boardRenameVal, setBoardRenameVal] = useState("");
+  // which folder's "add" menu is open
+  const [addMenuFolderId, setAddMenuFolderId] = useState<string | null>(null);
+
   const qc = useQueryClient();
 
   const renameBoard = useMutation({
-    mutationFn: ({ id, title }: { id: number; title: string }) =>
-      apiRequest("PATCH", `/api/boards/${id}`, { title }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/research-boards"] });
-    },
+    mutationFn: ({ id, title }: { id: number; title: string }) => apiRequest("PATCH", `/api/boards/${id}`, { title }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["/research-boards"] }),
   });
-
   const deleteBoard = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/boards/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["/research-boards"] }),
   });
 
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editTitle, setEditTitle] = useState("");
+  const persist = (next: LabFolder[]) => { setFolders(next); saveFolders(next); };
 
-  const startRename = (b: Board) => { setEditingId(b.id); setEditTitle(b.title); };
-  const commitRename = () => {
-    if (editingId && editTitle.trim()) renameBoard.mutate({ id: editingId, title: editTitle.trim() });
-    setEditingId(null);
+  const addFolder = () => {
+    const folder: LabFolder = { id: genId(), name: "New Folder", boardIds: [], open: true };
+    const next = [...folders, folder];
+    persist(next);
+    setRenamingId(folder.id);
+    setRenameVal(folder.name);
   };
 
-  const sciBoards = boards.filter(b => b.type === "science_board");
-  const expBoards = boards.filter(b => b.type === "experiment_board");
+  const deleteFolder = (id: string) => {
+    persist(folders.filter(f => f.id !== id));
+  };
 
-  const BoardRow = ({ board }: { board: Board }) => {
+  const commitRename = (id: string) => {
+    persist(folders.map(f => f.id === id ? { ...f, name: renameVal.trim() || f.name } : f));
+    setRenamingId(null);
+  };
+
+  const toggleOpen = (id: string) => {
+    persist(folders.map(f => f.id === id ? { ...f, open: !f.open } : f));
+  };
+
+  const removeBoardFromFolder = (folderId: string, boardId: number) => {
+    persist(folders.map(f => f.id === folderId ? { ...f, boardIds: f.boardIds.filter(b => b !== boardId) } : f));
+  };
+
+  // Boards not in any folder
+  const boardsInFolders = new Set(folders.flatMap(f => f.boardIds));
+  const unfoldered = boards.filter(b => !boardsInFolders.has(b.id));
+
+  const handleNewBoard = (type: BoardType, folderId: string) => {
+    setAddMenuFolderId(null);
+    onNew(type, folderId);
+  };
+
+  const BoardRow = ({ board, folderId }: { board: Board; folderId: string }) => {
     const isScience = board.type === "science_board";
     const accent = isScience ? ACCENT_SCIENCE : ACCENT_EXPERIMENT;
     const isActive = activeBoardId === board.id;
+
+    const commitBoardRename = () => {
+      if (boardRenameId && boardRenameVal.trim()) renameBoard.mutate({ id: boardRenameId, title: boardRenameVal.trim() });
+      setBoardRenameId(null);
+    };
+
+    return (
+      <div
+        className={cn(
+          "group flex items-center gap-1.5 pl-5 pr-2 py-1.5 rounded-lg cursor-pointer transition-colors",
+          isActive ? "text-foreground" : "hover:bg-[hsl(220_15%_8%)] text-muted-foreground hover:text-foreground"
+        )}
+        style={{ background: isActive ? `${accent}18` : undefined }}
+        onClick={() => onSelect(board.id)}
+      >
+        {isScience
+          ? <BookOpen className="w-3 h-3 shrink-0" style={{ color: isActive ? accent : undefined }} />
+          : <FlaskConical className="w-3 h-3 shrink-0" style={{ color: isActive ? accent : undefined }} />
+        }
+        {boardRenameId === board.id ? (
+          <input
+            autoFocus
+            value={boardRenameVal}
+            onChange={e => setBoardRenameVal(e.target.value)}
+            onBlur={commitBoardRename}
+            onKeyDown={e => { if (e.key === "Enter") commitBoardRename(); if (e.key === "Escape") setBoardRenameId(null); }}
+            onClick={e => e.stopPropagation()}
+            className="flex-1 bg-transparent outline-none text-xs min-w-0"
+            style={{ color: accent }}
+          />
+        ) : (
+          <span className="flex-1 text-xs truncate">{board.title}</span>
+        )}
+        <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); setBoardRenameId(board.id); setBoardRenameVal(board.title); }}
+            className="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <PenLine className="w-2.5 h-2.5" />
+          </button>
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); removeBoardFromFolder(folderId, board.id); }}
+            className="p-0.5 rounded text-muted-foreground hover:text-amber-400 transition-colors"
+            title="Remove from folder"
+          >
+            <FolderOpen className="w-2.5 h-2.5" />
+          </button>
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); deleteBoard.mutate(board.id); }}
+            className="p-0.5 rounded text-muted-foreground hover:text-rose-400 transition-colors"
+          >
+            <Trash2 className="w-2.5 h-2.5" />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const UnfolderedBoardRow = ({ board }: { board: Board }) => {
+    const isScience = board.type === "science_board";
+    const accent = isScience ? ACCENT_SCIENCE : ACCENT_EXPERIMENT;
+    const isActive = activeBoardId === board.id;
+
+    const commitBoardRename = () => {
+      if (boardRenameId && boardRenameVal.trim()) renameBoard.mutate({ id: boardRenameId, title: boardRenameVal.trim() });
+      setBoardRenameId(null);
+    };
+
     return (
       <div
         className={cn(
@@ -147,13 +315,13 @@ function Sidebar({ boards, isLoading, activeBoardId, onSelect, onNew, creating }
           ? <BookOpen className="w-3 h-3 shrink-0" style={{ color: isActive ? accent : undefined }} />
           : <FlaskConical className="w-3 h-3 shrink-0" style={{ color: isActive ? accent : undefined }} />
         }
-        {editingId === board.id ? (
+        {boardRenameId === board.id ? (
           <input
             autoFocus
-            value={editTitle}
-            onChange={e => setEditTitle(e.target.value)}
-            onBlur={commitRename}
-            onKeyDown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") setEditingId(null); }}
+            value={boardRenameVal}
+            onChange={e => setBoardRenameVal(e.target.value)}
+            onBlur={commitBoardRename}
+            onKeyDown={e => { if (e.key === "Enter") commitBoardRename(); if (e.key === "Escape") setBoardRenameId(null); }}
             onClick={e => e.stopPropagation()}
             className="flex-1 bg-transparent outline-none text-xs min-w-0"
             style={{ color: accent }}
@@ -161,11 +329,19 @@ function Sidebar({ boards, isLoading, activeBoardId, onSelect, onNew, creating }
         ) : (
           <span className="flex-1 text-xs truncate">{board.title}</span>
         )}
-        <div className="hidden group-hover:flex items-center gap-0.5">
-          <button onClick={e => { e.stopPropagation(); startRename(board); }} className="p-0.5 rounded hover:text-foreground transition-colors">
+        <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); setBoardRenameId(board.id); setBoardRenameVal(board.title); }}
+            className="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+          >
             <PenLine className="w-2.5 h-2.5" />
           </button>
-          <button onClick={e => { e.stopPropagation(); deleteBoard.mutate(board.id); }} className="p-0.5 rounded hover:text-rose-400 transition-colors">
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); deleteBoard.mutate(board.id); }}
+            className="p-0.5 rounded text-muted-foreground hover:text-rose-400 transition-colors"
+          >
             <Trash2 className="w-2.5 h-2.5" />
           </button>
         </div>
@@ -173,86 +349,486 @@ function Sidebar({ boards, isLoading, activeBoardId, onSelect, onNew, creating }
     );
   };
 
-  return (
-    <div className={cn("flex flex-col border-r border-border bg-[hsl(220_15%_5%)] transition-all duration-300 shrink-0", collapsed ? "w-10" : "w-60")}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-3 border-b border-border">
-        {!collapsed && <span className="text-[10px] font-mono tracking-widest uppercase text-muted-foreground">Research Lab</span>}
-        <button onClick={() => setCollapsed(v => !v)} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors ml-auto">
-          <ChevronLeft className={cn("w-3.5 h-3.5 transition-transform", collapsed && "rotate-180")} />
-        </button>
-      </div>
-
-      {!collapsed && (
-        <>
-          <div className="flex-1 overflow-y-auto py-2 px-2 space-y-3">
-            {isLoading ? (
-              <div className="flex justify-center py-6"><Loader2 className="w-4 h-4 animate-spin text-muted-foreground opacity-50" /></div>
-            ) : (
-              <>
-                {/* Science boards */}
-                <div>
-                  <p className="text-[9px] font-mono tracking-widest uppercase px-2 py-1" style={{ color: ACCENT_SCIENCE + "99" }}>
-                    Science Boards
-                  </p>
-                  {sciBoards.length === 0
-                    ? <p className="text-[10px] text-muted-foreground px-2 pb-1 opacity-50">None yet</p>
-                    : sciBoards.map(b => <BoardRow key={b.id} board={b} />)
-                  }
-                </div>
-                {/* Experiment boards */}
-                <div>
-                  <p className="text-[9px] font-mono tracking-widest uppercase px-2 py-1" style={{ color: ACCENT_EXPERIMENT + "99" }}>
-                    Experiment Boards
-                  </p>
-                  {expBoards.length === 0
-                    ? <p className="text-[10px] text-muted-foreground px-2 pb-1 opacity-50">None yet</p>
-                    : expBoards.map(b => <BoardRow key={b.id} board={b} />)
-                  }
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* New board buttons */}
-          <div className="p-2 border-t border-border space-y-1.5">
-            <button
-              onClick={() => onNew("science_board")}
-              disabled={creating}
-              className="w-full flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-dashed transition-all"
-              style={{ color: ACCENT_SCIENCE, borderColor: ACCENT_SCIENCE + "35", background: "transparent" }}
-            >
-              {creating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
-              New Science Board
-            </button>
-            <button
-              onClick={() => onNew("experiment_board")}
-              disabled={creating}
-              className="w-full flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-dashed transition-all"
-              style={{ color: ACCENT_EXPERIMENT, borderColor: ACCENT_EXPERIMENT + "35", background: "transparent" }}
-            >
-              {creating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
-              New Experiment Board
-            </button>
-          </div>
-        </>
-      )}
-
-      {collapsed && (
-        <div className="p-1 border-t border-border space-y-1">
-          <button onClick={() => onNew("science_board")} className="w-full flex justify-center p-2 rounded transition-colors hover:bg-[hsl(220_15%_8%)]" style={{ color: ACCENT_SCIENCE }} title="New Science Board">
-            <BookOpen className="w-3.5 h-3.5" />
-          </button>
-          <button onClick={() => onNew("experiment_board")} className="w-full flex justify-center p-2 rounded transition-colors hover:bg-[hsl(220_15%_8%)]" style={{ color: ACCENT_EXPERIMENT }} title="New Experiment Board">
-            <FlaskConical className="w-3.5 h-3.5" />
+  if (collapsed) {
+    return (
+      <div className="flex flex-col w-10 border-r border-border bg-[hsl(220_15%_5%)] shrink-0">
+        <div className="flex justify-center py-3 border-b border-border">
+          <button onClick={() => setCollapsed(false)} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors">
+            <ChevronLeft className="w-3.5 h-3.5 rotate-180" />
           </button>
         </div>
-      )}
+        <div className="p-1 space-y-1 mt-1">
+          <button onClick={addFolder} className="w-full flex justify-center p-2 rounded hover:bg-[hsl(220_15%_8%)] text-muted-foreground hover:text-foreground transition-colors" title="New Folder">
+            <FolderPlus className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col w-64 border-r border-border bg-[hsl(220_15%_5%)] shrink-0 transition-all duration-300">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-3 border-b border-border">
+        <span className="text-[10px] font-mono tracking-widest uppercase text-muted-foreground">Research Lab</span>
+        <div className="flex items-center gap-1">
+          <button onClick={addFolder} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors" title="New folder">
+            <FolderPlus className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={() => setCollapsed(true)} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors">
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto py-2 px-2 space-y-1">
+        {isLoading ? (
+          <div className="flex justify-center py-6"><Loader2 className="w-4 h-4 animate-spin text-muted-foreground opacity-30" /></div>
+        ) : (
+          <>
+            {/* Folders */}
+            {folders.map(folder => {
+              const folderBoards = folder.boardIds.map(id => boards.find(b => b.id === id)).filter(Boolean) as Board[];
+              return (
+                <div key={folder.id}>
+                  {/* Folder header */}
+                  <div className="group flex items-center gap-1.5 px-2 py-1.5 rounded-lg">
+                    <button
+                      onClick={() => toggleOpen(folder.id)}
+                      className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
+                    >
+                      {folder.open
+                        ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" />
+                        : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
+                      }
+                      {folder.open
+                        ? <FolderOpen className="w-3 h-3 text-muted-foreground shrink-0" />
+                        : <Folder className="w-3 h-3 text-muted-foreground shrink-0" />
+                      }
+                      {renamingId === folder.id ? (
+                        <input
+                          autoFocus
+                          value={renameVal}
+                          onChange={e => setRenameVal(e.target.value)}
+                          onBlur={() => commitRename(folder.id)}
+                          onKeyDown={e => { if (e.key === "Enter") commitRename(folder.id); if (e.key === "Escape") setRenamingId(null); }}
+                          onClick={e => e.stopPropagation()}
+                          className="flex-1 bg-transparent outline-none text-xs text-foreground min-w-0"
+                        />
+                      ) : (
+                        <span className="flex-1 text-xs text-foreground/70 truncate">{folder.name}</span>
+                      )}
+                    </button>
+                    <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+                      <button
+                        onClick={() => { setRenamingId(folder.id); setRenameVal(folder.name); }}
+                        className="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <PenLine className="w-2.5 h-2.5" />
+                      </button>
+                      {/* Add board to folder */}
+                      <div className="relative">
+                        <button
+                          onClick={() => setAddMenuFolderId(addMenuFolderId === folder.id ? null : folder.id)}
+                          className="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+                          title="Add board to folder"
+                        >
+                          <Plus className="w-2.5 h-2.5" />
+                        </button>
+                        {addMenuFolderId === folder.id && (
+                          <div
+                            className="absolute left-0 top-6 rounded-lg border border-[hsl(220_15%_16%)] py-1 z-50 w-44"
+                            style={{ background: "hsl(220 15% 9%)" }}
+                          >
+                            <button
+                              onClick={() => handleNewBoard("science_board", folder.id)}
+                              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[hsl(220_15%_13%)] transition-colors"
+                              style={{ color: ACCENT_SCIENCE }}
+                            >
+                              <BookOpen className="w-3 h-3" />
+                              New Science Board
+                            </button>
+                            <button
+                              onClick={() => handleNewBoard("experiment_board", folder.id)}
+                              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[hsl(220_15%_13%)] transition-colors"
+                              style={{ color: ACCENT_EXPERIMENT }}
+                            >
+                              <FlaskConical className="w-3 h-3" />
+                              New Experiment Board
+                            </button>
+                            {/* Move existing boards into folder */}
+                            {unfoldered.length > 0 && (
+                              <>
+                                <div className="border-t border-[hsl(220_15%_14%)] my-1" />
+                                <p className="px-3 py-1 text-[9px] font-mono tracking-widest uppercase text-muted-foreground opacity-50">Add existing</p>
+                                {unfoldered.map(b => (
+                                  <button
+                                    key={b.id}
+                                    onClick={() => {
+                                      persist(folders.map(f => f.id === folder.id ? { ...f, boardIds: [...f.boardIds, b.id] } : f));
+                                      setAddMenuFolderId(null);
+                                    }}
+                                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[hsl(220_15%_13%)] transition-colors text-muted-foreground hover:text-foreground"
+                                  >
+                                    {b.type === "science_board"
+                                      ? <BookOpen className="w-3 h-3 shrink-0" style={{ color: ACCENT_SCIENCE }} />
+                                      : <FlaskConical className="w-3 h-3 shrink-0" style={{ color: ACCENT_EXPERIMENT }} />
+                                    }
+                                    <span className="truncate">{b.title}</span>
+                                  </button>
+                                ))}
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => deleteFolder(folder.id)}
+                        className="p-0.5 rounded text-muted-foreground hover:text-rose-400 transition-colors"
+                      >
+                        <Trash2 className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Folder boards */}
+                  {folder.open && (
+                    <div className="mb-1">
+                      {folderBoards.length === 0 ? (
+                        <p className="pl-8 text-[10px] text-muted-foreground opacity-30 py-1">Empty folder</p>
+                      ) : (
+                        folderBoards.map(b => <BoardRow key={b.id} board={b} folderId={folder.id} />)
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Unfoldered boards */}
+            {unfoldered.length > 0 && (
+              <div>
+                {folders.length > 0 && (
+                  <p className="text-[9px] font-mono tracking-widest uppercase px-2 py-1 text-muted-foreground opacity-40">Unfiled</p>
+                )}
+                {unfoldered.map(b => <UnfolderedBoardRow key={b.id} board={b} />)}
+              </div>
+            )}
+
+            {folders.length === 0 && unfoldered.length === 0 && !isLoading && (
+              <p className="text-[10px] text-muted-foreground opacity-30 text-center py-6">No boards yet</p>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Bottom: create unfoldered boards */}
+      <div className="p-2 border-t border-border space-y-1.5">
+        <div className="relative">
+          <button
+            onClick={() => setAddMenuFolderId(addMenuFolderId === "__root__" ? null : "__root__")}
+            disabled={creating}
+            className="w-full flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-dashed transition-all text-muted-foreground hover:text-foreground"
+            style={{ borderColor: "hsl(220 15% 22%)" }}
+          >
+            {creating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+            New Board
+          </button>
+          {addMenuFolderId === "__root__" && (
+            <div
+              className="absolute bottom-10 left-0 right-0 rounded-lg border border-[hsl(220_15%_16%)] py-1 z-50"
+              style={{ background: "hsl(220 15% 9%)" }}
+            >
+              <button
+                onClick={() => { onNew("science_board", ""); setAddMenuFolderId(null); }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-[hsl(220_15%_13%)] transition-colors"
+                style={{ color: ACCENT_SCIENCE }}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                Science Board
+              </button>
+              <button
+                onClick={() => { onNew("experiment_board", ""); setAddMenuFolderId(null); }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-[hsl(220_15%_13%)] transition-colors"
+                style={{ color: ACCENT_EXPERIMENT }}
+              >
+                <FlaskConical className="w-3.5 h-3.5" />
+                Experiment Board
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-// ── Article form ───────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// EXPERIMENT CARD (draggable + resizable)
+// ══════════════════════════════════════════════════════════════════════════
+interface ExpCardProps {
+  sec: ExpSection;
+  onUpdate: (id: number, patch: Partial<ExpSection>) => void;
+  onDelete: (id: number) => void;
+  boardRef: React.RefObject<HTMLDivElement>;
+}
+
+function ExpCard({ sec, onUpdate, onDelete, boardRef }: ExpCardProps) {
+  const conf = EXP_TYPES[sec.section_key] ?? EXP_TYPES.question;
+  const [editing, setEditing]     = useState(false);
+  const [draft,   setDraft]       = useState(sec.content);
+  const [pos,     setPos]         = useState({ x: sec.pos_x, y: sec.pos_y });
+  const [size,    setSize]        = useState({ w: sec.width || 260, h: sec.height || 0 });
+  const dragRef   = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  const resizeRef = useRef<{ sx: number; sy: number; ow: number; oh: number; ox: number; oy: number; corner: Corner } | null>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const MIN_W = 180, MIN_H = 100;
+
+  useEffect(() => { setPos({ x: sec.pos_x, y: sec.pos_y }); }, [sec.pos_x, sec.pos_y]);
+  useEffect(() => { setSize({ w: sec.width || 260, h: sec.height || 0 }); }, [sec.width, sec.height]);
+  useEffect(() => { setDraft(sec.content); }, [sec.content]);
+
+  const handleContentChange = (val: string) => {
+    setDraft(val);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => { onUpdate(sec.id, { content: val }); }, 700);
+  };
+
+  // ── move ──
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0 || editing) return;
+    e.preventDefault();
+    dragRef.current = { sx: e.clientX, sy: e.clientY, ox: pos.x, oy: pos.y };
+    const mm = (ev: MouseEvent) => {
+      if (!dragRef.current || !boardRef.current) return;
+      const b = boardRef.current.getBoundingClientRect();
+      const nx = Math.max(0, Math.min(b.width - size.w - 4, dragRef.current.ox + ev.clientX - dragRef.current.sx));
+      const ny = Math.max(0, dragRef.current.oy + ev.clientY - dragRef.current.sy);
+      setPos({ x: nx, y: ny });
+    };
+    const mu = (ev: MouseEvent) => {
+      if (!dragRef.current || !boardRef.current) return;
+      const b = boardRef.current.getBoundingClientRect();
+      const nx = Math.max(0, Math.min(b.width - size.w - 4, dragRef.current.ox + ev.clientX - dragRef.current.sx));
+      const ny = Math.max(0, dragRef.current.oy + ev.clientY - dragRef.current.sy);
+      dragRef.current = null;
+      onUpdate(sec.id, { pos_x: nx, pos_y: ny });
+      window.removeEventListener("mousemove", mm);
+      window.removeEventListener("mouseup", mu);
+    };
+    window.addEventListener("mousemove", mm);
+    window.addEventListener("mouseup", mu);
+  };
+
+  // ── resize ──
+  const startResize = (corner: Corner, e: React.MouseEvent) => {
+    e.preventDefault();
+    const initH = size.h > 0 ? size.h : (e.currentTarget.closest("[data-exp-id]") as HTMLElement)?.offsetHeight ?? 160;
+    resizeRef.current = { sx: e.clientX, sy: e.clientY, ow: size.w, oh: initH, ox: pos.x, oy: pos.y, corner };
+    const mm = (ev: MouseEvent) => {
+      if (!resizeRef.current) return;
+      const { sx, sy, ow, oh, ox, oy, corner } = resizeRef.current;
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      let nw = ow, nh = oh, nx = ox, ny = oy;
+      if (corner === "se") { nw = Math.max(MIN_W, ow + dx); nh = Math.max(MIN_H, oh + dy); }
+      if (corner === "sw") { const t = Math.max(MIN_W, ow - dx); nx = ox + (ow - t); nw = t; nh = Math.max(MIN_H, oh + dy); }
+      if (corner === "ne") { nw = Math.max(MIN_W, ow + dx); const t = Math.max(MIN_H, oh - dy); ny = oy + (oh - t); nh = t; }
+      if (corner === "nw") { const tw = Math.max(MIN_W, ow - dx); nx = ox + (ow - tw); nw = tw; const th = Math.max(MIN_H, oh - dy); ny = oy + (oh - th); nh = th; }
+      setSize({ w: nw, h: nh });
+      setPos({ x: Math.max(0, nx), y: Math.max(0, ny) });
+    };
+    const mu = () => {
+      if (!resizeRef.current) return;
+      resizeRef.current = null;
+      setSize(s => { setPos(p => { onUpdate(sec.id, { width: s.w, height: s.h, pos_x: p.x, pos_y: p.y }); return p; }); return s; });
+      window.removeEventListener("mousemove", mm);
+      window.removeEventListener("mouseup", mu);
+    };
+    window.addEventListener("mousemove", mm);
+    window.addEventListener("mouseup", mu);
+  };
+
+  const hasH = size.h > 0;
+
+  return (
+    <div
+      data-exp-id={sec.id}
+      className="absolute rounded-xl border select-none group flex flex-col"
+      style={{
+        left: pos.x, top: pos.y, width: size.w, height: hasH ? size.h : undefined,
+        background: conf.bg, borderColor: conf.border, zIndex: editing ? 100 : 10,
+        cursor: editing ? "auto" : "grab",
+      }}
+      onMouseDown={onMouseDown}
+    >
+      <ResizeHandles onStart={startResize} color={conf.border} />
+
+      {/* Header */}
+      <div
+        className="flex items-center justify-between px-2.5 py-2 rounded-t-xl shrink-0"
+        style={{ background: conf.header, borderBottom: `1px solid ${conf.border}` }}
+      >
+        <span className="text-[10px] font-mono tracking-widest uppercase" style={{ color: conf.color }}>
+          {conf.shortLabel}
+        </span>
+        <button
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => { e.stopPropagation(); onDelete(sec.id); }}
+          className="p-0.5 rounded text-muted-foreground/40 hover:text-rose-400 transition-colors"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      </div>
+
+      {/* Body */}
+      <div
+        className="p-2.5 flex-1 overflow-auto"
+        onDoubleClick={() => setEditing(true)}
+        onMouseDown={e => { if (editing) e.stopPropagation(); }}
+      >
+        <textarea
+          value={draft}
+          onChange={e => handleContentChange(e.target.value)}
+          onFocus={() => setEditing(true)}
+          onBlur={() => setEditing(false)}
+          placeholder={PLACEHOLDERS[sec.section_key] ?? ""}
+          className="w-full h-full bg-transparent resize-none outline-none text-sm leading-relaxed"
+          style={{ color: conf.color, minHeight: 60, opacity: draft || editing ? 1 : 0.7 }}
+          onMouseDown={e => e.stopPropagation()}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// EXPERIMENT BOARD VIEW
+// ══════════════════════════════════════════════════════════════════════════
+function ExperimentBoardView({ board }: { board: Board }) {
+  const qc = useQueryClient();
+  const boardRef = useRef<HTMLDivElement>(null);
+  const secQK = ["/boards", board.id, "experiment-sections"];
+
+  const { data: sections = [], isLoading } = useQuery<ExpSection[]>({
+    queryKey: secQK,
+    queryFn: () => apiRequest("GET", `/api/boards/${board.id}/experiment-sections`).then(r => r.json()),
+  });
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: secQK });
+
+  const createSec = useMutation({
+    mutationFn: (body: object) => apiRequest("POST", `/api/boards/${board.id}/experiment-sections`, body).then(r => r.json()),
+    onSuccess: invalidate,
+  });
+
+  const updateSec = useMutation({
+    mutationFn: ({ id, patch }: { id: number; patch: Partial<ExpSection> }) =>
+      apiRequest("PATCH", `/api/experiment-sections/${id}`, patch),
+    onMutate: async ({ id, patch }) => {
+      await qc.cancelQueries({ queryKey: secQK });
+      const prev = qc.getQueryData<ExpSection[]>(secQK);
+      qc.setQueryData<ExpSection[]>(secQK, old => (old ?? []).map(s => s.id === id ? { ...s, ...patch } : s));
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(secQK, ctx.prev); },
+    onSettled: invalidate,
+  });
+
+  const deleteSec = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/experiment-sections/${id}`),
+    onMutate: async id => {
+      await qc.cancelQueries({ queryKey: secQK });
+      const prev = qc.getQueryData<ExpSection[]>(secQK);
+      qc.setQueryData<ExpSection[]>(secQK, old => (old ?? []).filter(s => s.id !== id));
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(secQK, ctx.prev); },
+    onSettled: invalidate,
+  });
+
+  const addCard = (type: string) => {
+    const off = (sections.length % 6) * 24;
+    createSec.mutate({ section_key: type, content: "", pos_x: 40 + off, pos_y: 40 + off, width: 260, height: 0 });
+  };
+
+  const handleUpdate = useCallback((id: number, patch: Partial<ExpSection>) => {
+    updateSec.mutate({ id, patch });
+  }, [updateSec]);
+
+  const handleDelete = useCallback((id: number) => { deleteSec.mutate(id); }, [deleteSec]);
+
+  const canvasMinH = Math.max(560, ...sections.map(s => s.pos_y + (s.height || 200) + 60));
+
+  if (isLoading) return (
+    <div className="flex items-center justify-center h-48">
+      <Loader2 className="w-5 h-5 animate-spin opacity-30" style={{ color: ACCENT_EXPERIMENT }} />
+    </div>
+  );
+
+  return (
+    <div className="p-4 space-y-3 h-full flex flex-col">
+      {/* Header + toolbar */}
+      <div className="shrink-0 space-y-2">
+        <div className="flex items-center gap-3">
+          <h2
+            className="text-base font-bold tracking-widest uppercase"
+            style={{ fontFamily: "Cinzel, serif", color: ACCENT_EXPERIMENT }}
+          >
+            {board.title}
+          </h2>
+          <span className="text-[10px] font-mono text-muted-foreground opacity-50">Experiment Board</span>
+        </div>
+
+        {/* Component type buttons */}
+        <div className="flex flex-wrap gap-1.5">
+          {EXP_TYPE_ORDER.map(type => {
+            const c = EXP_TYPES[type];
+            return (
+              <button
+                key={type}
+                onClick={() => addCard(type)}
+                disabled={createSec.isPending}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-mono transition-all hover:opacity-80"
+                style={{ border: `1px solid ${c.border}`, color: c.color, background: "transparent" }}
+                title={`Add ${c.label}`}
+              >
+                <Plus className="w-3 h-3" />
+                {c.shortLabel}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Canvas */}
+      <div
+        ref={boardRef}
+        className="relative flex-1 rounded-xl border border-border"
+        style={{ background: "hsl(220 15% 6%)", minHeight: canvasMinH }}
+      >
+        {sections.length === 0 && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground pointer-events-none">
+            <FlaskConical className="w-10 h-10 opacity-8" />
+            <p className="text-sm opacity-30">Add experiment components above to get started</p>
+          </div>
+        )}
+        {sections.map(s => (
+          <ExpCard
+            key={s.id}
+            sec={s}
+            onUpdate={handleUpdate}
+            onDelete={handleDelete}
+            boardRef={boardRef}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ARTICLE FORM
+// ══════════════════════════════════════════════════════════════════════════
 interface ArticleFormProps {
   initial?: Article;
   onSave: (data: Omit<Article, "id" | "board_id">) => void;
@@ -322,7 +898,9 @@ function ArticleForm({ initial, onSave, onCancel, saving }: ArticleFormProps) {
   );
 }
 
-// ── Conclusion row ─────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// CONCLUSION ROW
+// ══════════════════════════════════════════════════════════════════════════
 function ConclusionRow({ c, onDelete, onPatch }: {
   c: Conclusion;
   onDelete: (id: number) => void;
@@ -332,54 +910,39 @@ function ConclusionRow({ c, onDelete, onPatch }: {
   const [draft, setDraft] = useState(c.content);
   const sc = STRENGTH_CONFIG[c.strength] ?? STRENGTH_CONFIG.moderate;
   const strengths: Strength[] = ["strong", "moderate", "weak", "speculative"];
-
   const save = () => { setEditing(false); if (draft !== c.content) onPatch(c.id, { content: draft }); };
 
   return (
     <div className="flex items-start gap-2 group">
-      {/* Strength cycle badge */}
       <button
-        onClick={() => {
-          const idx = strengths.indexOf(c.strength);
-          onPatch(c.id, { strength: strengths[(idx + 1) % strengths.length] });
-        }}
+        onClick={() => { const idx = strengths.indexOf(c.strength); onPatch(c.id, { strength: strengths[(idx + 1) % strengths.length] }); }}
         className="mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-mono shrink-0 transition-all hover:opacity-80"
         style={{ color: sc.color, background: sc.bg, border: `1px solid ${sc.border}` }}
         title="Click to change strength"
       >
         {sc.label}
       </button>
-
       {editing ? (
         <textarea
-          autoFocus
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onBlur={save}
+          autoFocus value={draft} onChange={e => setDraft(e.target.value)} onBlur={save}
           onKeyDown={e => { if (e.key === "Escape") { setEditing(false); setDraft(c.content); } }}
-          className="flex-1 bg-transparent resize-none outline-none text-xs text-foreground/80 leading-relaxed border-b border-[hsl(210_40%_25%)]"
-          rows={2}
+          className="flex-1 bg-transparent resize-none outline-none text-xs text-foreground/80 leading-relaxed border-b border-[hsl(210_40%_25%)]" rows={2}
         />
       ) : (
-        <p
-          className="flex-1 text-xs text-foreground/70 leading-relaxed cursor-text"
-          onDoubleClick={() => setEditing(true)}
-        >
-          {c.content || <span className="opacity-30 italic">Double-click to write conclusion…</span>}
+        <p className="flex-1 text-xs text-foreground/70 leading-relaxed cursor-text" onDoubleClick={() => setEditing(true)}>
+          {c.content || <span className="opacity-30 italic">Double-click to write…</span>}
         </p>
       )}
-
-      <button
-        onClick={() => onDelete(c.id)}
-        className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-muted-foreground hover:text-rose-400 transition-all shrink-0 mt-0.5"
-      >
+      <button onClick={() => onDelete(c.id)} className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-muted-foreground hover:text-rose-400 transition-all shrink-0 mt-0.5">
         <X className="w-3 h-3" />
       </button>
     </div>
   );
 }
 
-// ── Article card ───────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// ARTICLE CARD
+// ══════════════════════════════════════════════════════════════════════════
 function ArticleCard({ article, conclusions, onEdit, onDelete, onAddConclusion, onDeleteConclusion, onPatchConclusion }: {
   article: Article;
   conclusions: Conclusion[];
@@ -394,31 +957,14 @@ function ArticleCard({ article, conclusions, onEdit, onDelete, onAddConclusion, 
   const tags = article.tags ? article.tags.split(",").map(t => t.trim()).filter(Boolean) : [];
 
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0 }}
-      className="rounded-xl border border-[hsl(220_15%_12%)] overflow-hidden"
-      style={{ background: "hsl(220 15% 7%)" }}
-    >
-      {/* Header */}
-      <div
-        className="flex items-start gap-2.5 px-4 py-3 cursor-pointer hover:bg-[hsl(220_15%_9%)] transition-colors"
-        onClick={() => setOpen(v => !v)}
-      >
-        {open
-          ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
-          : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
-        }
+    <motion.div layout initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+      className="rounded-xl border border-[hsl(220_15%_12%)] overflow-hidden" style={{ background: "hsl(220 15% 7%)" }}>
+      <div className="flex items-start gap-2.5 px-4 py-3 cursor-pointer hover:bg-[hsl(220_15%_9%)] transition-colors" onClick={() => setOpen(v => !v)}>
+        {open ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" /> : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold truncate" style={{ fontFamily: "Cinzel, serif", color: "hsl(220 25% 82%)" }}>
-            {article.title}
-          </p>
+          <p className="text-sm font-semibold truncate" style={{ fontFamily: "Cinzel, serif", color: "hsl(220 25% 82%)" }}>{article.title}</p>
           {(article.authors || article.year) && (
-            <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">
-              {[article.authors, article.year].filter(Boolean).join(" · ")}
-            </p>
+            <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">{[article.authors, article.year].filter(Boolean).join(" · ")}</p>
           )}
           {!open && tags.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1.5">
@@ -429,7 +975,6 @@ function ArticleCard({ article, conclusions, onEdit, onDelete, onAddConclusion, 
             </div>
           )}
         </div>
-        {/* Conclusion count badge */}
         {myConclusions.length > 0 && (
           <span className="text-[10px] font-mono shrink-0 px-1.5 py-0.5 rounded" style={{ color: ACCENT_SCIENCE + "aa", background: "hsl(210 40% 9%)" }}>
             {myConclusions.length} {myConclusions.length === 1 ? "conclusion" : "conclusions"}
@@ -445,36 +990,21 @@ function ArticleCard({ article, conclusions, onEdit, onDelete, onAddConclusion, 
           <button onClick={onDelete} className="p-1 rounded text-muted-foreground hover:text-rose-400 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
         </div>
       </div>
-
-      {/* Expanded */}
       <AnimatePresence>
         {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.18 }}
-            className="overflow-hidden"
-          >
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden">
             <div className="px-4 pb-4 space-y-4 border-t border-[hsl(220_15%_11%)] pt-3">
-              {/* Tags */}
               {tags.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
-                  {tags.map(t => (
-                    <span key={t} className="px-2 py-0.5 rounded text-[9px] font-mono" style={{ color: ACCENT_SCIENCE + "cc", background: "hsl(210 40% 9%)", border: `1px solid hsl(210 40% 18%)` }}>{t}</span>
-                  ))}
+                  {tags.map(t => <span key={t} className="px-2 py-0.5 rounded text-[9px] font-mono" style={{ color: ACCENT_SCIENCE + "cc", background: "hsl(210 40% 9%)", border: `1px solid hsl(210 40% 18%)` }}>{t}</span>)}
                 </div>
               )}
-
-              {/* Abstract */}
               {article.abstract && (
                 <div>
                   <p className={labelCls}>Abstract / Summary</p>
                   <p className="text-xs text-foreground/60 leading-relaxed whitespace-pre-wrap">{article.abstract}</p>
                 </div>
               )}
-
-              {/* Conclusions */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <p className={labelCls} style={{ marginBottom: 0 }}>Conclusions</p>
@@ -490,14 +1020,7 @@ function ArticleCard({ article, conclusions, onEdit, onDelete, onAddConclusion, 
                 <div className="space-y-2">
                   {myConclusions.length === 0
                     ? <p className="text-[10px] text-muted-foreground opacity-40 italic">No conclusions yet — click Add to draw one from this article.</p>
-                    : myConclusions.map(c => (
-                      <ConclusionRow
-                        key={c.id}
-                        c={c}
-                        onDelete={onDeleteConclusion}
-                        onPatch={onPatchConclusion}
-                      />
-                    ))
+                    : myConclusions.map(c => <ConclusionRow key={c.id} c={c} onDelete={onDeleteConclusion} onPatch={onPatchConclusion} />)
                   }
                 </div>
               </div>
@@ -509,7 +1032,9 @@ function ArticleCard({ article, conclusions, onEdit, onDelete, onAddConclusion, 
   );
 }
 
-// ── Science Board View ─────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// SCIENCE BOARD VIEW
+// ══════════════════════════════════════════════════════════════════════════
 function ScienceBoardView({ board }: { board: Board }) {
   const qc = useQueryClient();
   const artQK  = ["/boards", board.id, "articles"];
@@ -527,49 +1052,24 @@ function ScienceBoardView({ board }: { board: Board }) {
   const invArt  = () => qc.invalidateQueries({ queryKey: artQK });
   const invConc = () => qc.invalidateQueries({ queryKey: concQK });
 
-  const createArt = useMutation({
-    mutationFn: (body: object) => apiRequest("POST", `/api/boards/${board.id}/articles`, body).then(r => r.json()),
-    onSuccess: invArt,
-  });
-  const updateArt = useMutation({
-    mutationFn: ({ id, patch }: { id: number; patch: object }) => apiRequest("PATCH", `/api/articles/${id}`, patch),
-    onSuccess: invArt,
-  });
+  const createArt = useMutation({ mutationFn: (body: object) => apiRequest("POST", `/api/boards/${board.id}/articles`, body).then(r => r.json()), onSuccess: invArt });
+  const updateArt = useMutation({ mutationFn: ({ id, patch }: { id: number; patch: object }) => apiRequest("PATCH", `/api/articles/${id}`, patch), onSuccess: invArt });
   const deleteArt = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/articles/${id}`),
-    onMutate: async id => {
-      await qc.cancelQueries({ queryKey: artQK });
-      const prev = qc.getQueryData<Article[]>(artQK);
-      qc.setQueryData<Article[]>(artQK, old => (old ?? []).filter(a => a.id !== id));
-      return { prev };
-    },
+    onMutate: async id => { await qc.cancelQueries({ queryKey: artQK }); const prev = qc.getQueryData<Article[]>(artQK); qc.setQueryData<Article[]>(artQK, old => (old ?? []).filter(a => a.id !== id)); return { prev }; },
     onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(artQK, ctx.prev); },
     onSettled: invArt,
   });
-
-  const createConc = useMutation({
-    mutationFn: (body: object) => apiRequest("POST", `/api/boards/${board.id}/conclusions`, body).then(r => r.json()),
-    onSuccess: invConc,
-  });
+  const createConc = useMutation({ mutationFn: (body: object) => apiRequest("POST", `/api/boards/${board.id}/conclusions`, body).then(r => r.json()), onSuccess: invConc });
   const updateConc = useMutation({
     mutationFn: ({ id, patch }: { id: number; patch: object }) => apiRequest("PATCH", `/api/conclusions/${id}`, patch),
-    onMutate: async ({ id, patch }) => {
-      await qc.cancelQueries({ queryKey: concQK });
-      const prev = qc.getQueryData<Conclusion[]>(concQK);
-      qc.setQueryData<Conclusion[]>(concQK, old => (old ?? []).map(c => c.id === id ? { ...c, ...patch as Conclusion } : c));
-      return { prev };
-    },
+    onMutate: async ({ id, patch }) => { await qc.cancelQueries({ queryKey: concQK }); const prev = qc.getQueryData<Conclusion[]>(concQK); qc.setQueryData<Conclusion[]>(concQK, old => (old ?? []).map(c => c.id === id ? { ...c, ...patch as Conclusion } : c)); return { prev }; },
     onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(concQK, ctx.prev); },
     onSettled: invConc,
   });
   const deleteConc = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/conclusions/${id}`),
-    onMutate: async id => {
-      await qc.cancelQueries({ queryKey: concQK });
-      const prev = qc.getQueryData<Conclusion[]>(concQK);
-      qc.setQueryData<Conclusion[]>(concQK, old => (old ?? []).filter(c => c.id !== id));
-      return { prev };
-    },
+    onMutate: async id => { await qc.cancelQueries({ queryKey: concQK }); const prev = qc.getQueryData<Conclusion[]>(concQK); qc.setQueryData<Conclusion[]>(concQK, old => (old ?? []).filter(c => c.id !== id)); return { prev }; },
     onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(concQK, ctx.prev); },
     onSettled: invConc,
   });
@@ -578,79 +1078,50 @@ function ScienceBoardView({ board }: { board: Board }) {
   const [editTarget, setEditTarget] = useState<Article | null>(null);
 
   const handleSave = (data: Omit<Article, "id" | "board_id">) => {
-    if (editTarget) {
-      updateArt.mutate({ id: editTarget.id, patch: data }, { onSuccess: () => setEditTarget(null) });
-    } else {
-      createArt.mutate(data, { onSuccess: () => setShowForm(false) });
-    }
+    if (editTarget) { updateArt.mutate({ id: editTarget.id, patch: data }, { onSuccess: () => setEditTarget(null) }); }
+    else { createArt.mutate(data, { onSuccess: () => setShowForm(false) }); }
   };
 
-  if (artLoading) return (
-    <div className="flex items-center justify-center h-48">
-      <Loader2 className="w-5 h-5 animate-spin opacity-30" style={{ color: ACCENT_SCIENCE }} />
-    </div>
-  );
+  if (artLoading) return <div className="flex items-center justify-center h-48"><Loader2 className="w-5 h-5 animate-spin opacity-30" style={{ color: ACCENT_SCIENCE }} /></div>;
 
   return (
     <div className="p-5 space-y-4 max-w-3xl">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-bold tracking-widest uppercase" style={{ fontFamily: "Cinzel, serif", color: ACCENT_SCIENCE }}>
-            {board.title}
-          </h2>
+          <h2 className="text-base font-bold tracking-widest uppercase" style={{ fontFamily: "Cinzel, serif", color: ACCENT_SCIENCE }}>{board.title}</h2>
           <p className="text-[10px] font-mono text-muted-foreground mt-0.5">Science Board · {articles.length} article{articles.length !== 1 ? "s" : ""}</p>
         </div>
         {!showForm && !editTarget && (
-          <button
-            onClick={() => setShowForm(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono transition-all"
-            style={{ border: `1px solid ${ACCENT_SCIENCE}40`, color: ACCENT_SCIENCE, background: `${ACCENT_SCIENCE}10` }}
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Add Article
+          <button onClick={() => setShowForm(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono transition-all"
+            style={{ border: `1px solid ${ACCENT_SCIENCE}40`, color: ACCENT_SCIENCE, background: `${ACCENT_SCIENCE}10` }}>
+            <Plus className="w-3.5 h-3.5" />Add Article
           </button>
         )}
       </div>
-
-      {/* Form */}
       <AnimatePresence>
         {(showForm || editTarget) && (
           <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}>
-            <ArticleForm
-              initial={editTarget ?? undefined}
-              onSave={handleSave}
-              onCancel={() => { setShowForm(false); setEditTarget(null); }}
-              saving={createArt.isPending || updateArt.isPending}
-            />
+            <ArticleForm initial={editTarget ?? undefined} onSave={handleSave} onCancel={() => { setShowForm(false); setEditTarget(null); }} saving={createArt.isPending || updateArt.isPending} />
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* Empty */}
       {articles.length === 0 && !showForm && (
         <div className="flex flex-col items-center justify-center py-20 gap-3 text-muted-foreground">
           <BookOpen className="w-10 h-10 opacity-10" />
           <p className="text-sm opacity-40">Add your first research article</p>
         </div>
       )}
-
-      {/* Articles */}
       <AnimatePresence>
         <div className="space-y-2">
-          {articles.map(a => (
-            editTarget?.id === a.id ? null : (
-              <ArticleCard
-                key={a.id}
-                article={a}
-                conclusions={conclusions}
-                onEdit={() => { setEditTarget(a); setShowForm(false); }}
-                onDelete={() => deleteArt.mutate(a.id)}
-                onAddConclusion={aid => createConc.mutate({ article_id: aid, content: "", strength: "moderate" })}
-                onDeleteConclusion={id => deleteConc.mutate(id)}
-                onPatchConclusion={(id, patch) => updateConc.mutate({ id, patch })}
-              />
-            )
+          {articles.map(a => editTarget?.id === a.id ? null : (
+            <ArticleCard
+              key={a.id} article={a} conclusions={conclusions}
+              onEdit={() => { setEditTarget(a); setShowForm(false); }}
+              onDelete={() => deleteArt.mutate(a.id)}
+              onAddConclusion={aid => createConc.mutate({ article_id: aid, content: "", strength: "moderate" })}
+              onDeleteConclusion={id => deleteConc.mutate(id)}
+              onPatchConclusion={(id, patch) => updateConc.mutate({ id, patch })}
+            />
           ))}
         </div>
       </AnimatePresence>
@@ -658,143 +1129,29 @@ function ScienceBoardView({ board }: { board: Board }) {
   );
 }
 
-// ── Experiment Board View ──────────────────────────────────────────────────
-function ExperimentBoardView({ board }: { board: Board }) {
-  const qc = useQueryClient();
-  const secQK = ["/boards", board.id, "experiment-sections"];
-
-  const { data: remoteSections = [], isLoading } = useQuery<ExpSection[]>({
-    queryKey: secQK,
-    queryFn: () => apiRequest("GET", `/api/boards/${board.id}/experiment-sections`).then(r => r.json()),
-  });
-
-  const createSec = useMutation({
-    mutationFn: (body: object) => apiRequest("POST", `/api/boards/${board.id}/experiment-sections`, body).then(r => r.json()),
-    onSuccess: () => qc.invalidateQueries({ queryKey: secQK }),
-  });
-  const updateSec = useMutation({
-    mutationFn: ({ id, content }: { id: number; content: string }) => apiRequest("PATCH", `/api/experiment-sections/${id}`, { content }),
-    onMutate: async ({ id, content }) => {
-      await qc.cancelQueries({ queryKey: secQK });
-      const prev = qc.getQueryData<ExpSection[]>(secQK);
-      qc.setQueryData<ExpSection[]>(secQK, old => (old ?? []).map(s => s.id === id ? { ...s, content } : s));
-      return { prev };
-    },
-    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(secQK, ctx.prev); },
-    onSettled: () => qc.invalidateQueries({ queryKey: secQK }),
-  });
-
-  // Initialise missing sections on first load
-  useEffect(() => {
-    if (isLoading || remoteSections.length > 0) return;
-    // Seed all sections with empty content on first open
-    const seed = async () => {
-      for (const s of EXPERIMENT_SECTIONS) {
-        await apiRequest("POST", `/api/boards/${board.id}/experiment-sections`, { section_key: s.key, content: "" });
-      }
-      qc.invalidateQueries({ queryKey: secQK });
-    };
-    seed();
-  }, [isLoading, remoteSections.length, board.id]);
-
-  // Build a map key → section
-  const secMap: Record<string, ExpSection> = {};
-  remoteSections.forEach(s => { secMap[s.section_key] = s; });
-
-  // Debounced save
-  const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const handleChange = (key: string, val: string) => {
-    const sec = secMap[key];
-    if (!sec) return;
-    // Optimistic
-    qc.setQueryData<ExpSection[]>(secQK, old => (old ?? []).map(s => s.section_key === key ? { ...s, content: val } : s));
-    // Debounce
-    clearTimeout(saveTimers.current[key]);
-    saveTimers.current[key] = setTimeout(() => {
-      updateSec.mutate({ id: sec.id, content: val });
-    }, 800);
-  };
-
-  if (isLoading) return (
-    <div className="flex items-center justify-center h-48">
-      <Loader2 className="w-5 h-5 animate-spin opacity-30" style={{ color: ACCENT_EXPERIMENT }} />
-    </div>
-  );
-
-  return (
-    <div className="p-5 space-y-5 max-w-3xl">
-      {/* Header */}
-      <div>
-        <h2 className="text-base font-bold tracking-widest uppercase" style={{ fontFamily: "Cinzel, serif", color: ACCENT_EXPERIMENT }}>
-          {board.title}
-        </h2>
-        <p className="text-[10px] font-mono text-muted-foreground mt-0.5">Experiment Board</p>
-      </div>
-
-      {/* Sections */}
-      <div className="space-y-4">
-        {EXPERIMENT_SECTIONS.map((def, i) => {
-          const sec = secMap[def.key];
-          const isVar = ["iv", "dv", "cv"].includes(def.key);
-
-          return (
-            <div
-              key={def.key}
-              className="rounded-xl border border-[hsl(220_15%_12%)] overflow-hidden"
-              style={{ background: "hsl(220 15% 6%)" }}
-            >
-              <div
-                className="flex items-center gap-2.5 px-4 py-2.5 border-b border-[hsl(220_15%_10%)]"
-                style={{ background: "hsl(220 15% 7%)" }}
-              >
-                <span
-                  className="text-[9px] font-mono tracking-widest uppercase shrink-0 px-2 py-0.5 rounded"
-                  style={{
-                    color: isVar ? "hsl(270 55% 62%)" : ACCENT_EXPERIMENT + "cc",
-                    background: isVar ? "hsl(270 25% 8%)" : "hsl(145 25% 7%)",
-                    border: `1px solid ${isVar ? "hsl(270 25% 18%)" : "hsl(145 25% 16%)"}`,
-                  }}
-                >
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-                <span className="text-xs font-semibold" style={{ fontFamily: "Cinzel, serif", color: "hsl(220 20% 78%)" }}>
-                  {def.label}
-                </span>
-              </div>
-              <div className="px-4 py-3">
-                <textarea
-                  value={sec?.content ?? ""}
-                  onChange={e => handleChange(def.key, e.target.value)}
-                  placeholder={def.placeholder}
-                  rows={def.key === "method" || def.key === "results" || def.key === "analysis" ? 5 : 3}
-                  className="w-full bg-transparent resize-none outline-none text-sm text-foreground/80 leading-relaxed placeholder:text-muted-foreground/30"
-                />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── Main Page ──────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// MAIN PAGE
+// ══════════════════════════════════════════════════════════════════════════
 export default function ResearchLab() {
   const qc = useQueryClient();
   const QK = ["/research-boards"];
 
   const { data: boards = [], isLoading } = useQuery<Board[]>({
     queryKey: QK,
-    queryFn: () => apiRequest("GET", "/api/boards?type=science_board").then(async r => {
-      const sci = await r.json();
-      const expR = await apiRequest("GET", "/api/boards?type=experiment_board");
-      const exp = await expR.json();
-      return [...sci, ...exp].sort((a: Board, b: Board) => b.updated_at - a.updated_at);
-    }),
+    queryFn: async () => {
+      const [sciR, expR] = await Promise.all([
+        apiRequest("GET", "/api/boards?type=science_board").then(r => r.json()),
+        apiRequest("GET", "/api/boards?type=experiment_board").then(r => r.json()),
+      ]);
+      return [...sciR, ...expR].sort((a: Board, b: Board) => b.updated_at - a.updated_at);
+    },
   });
 
   const [activeBoardId, setActiveBoardId] = useState<number | null>(null);
   const activeBoard = boards.find(b => b.id === activeBoardId) ?? null;
+
+  // Folder state lives in Sidebar but we need it to add a board to a folder after creation
+  const pendingFolder = useRef<string>("");
 
   const createBoard = useMutation({
     mutationFn: (type: BoardType) => {
@@ -804,8 +1161,24 @@ export default function ResearchLab() {
     onSuccess: (board: Board) => {
       qc.invalidateQueries({ queryKey: QK });
       setActiveBoardId(board.id);
+      // If created via a folder button, add it to that folder
+      if (pendingFolder.current) {
+        const folderId = pendingFolder.current;
+        pendingFolder.current = "";
+        const raw = localStorage.getItem(FOLDERS_KEY);
+        const folders: LabFolder[] = raw ? JSON.parse(raw) : [];
+        const next = folders.map(f => f.id === folderId ? { ...f, boardIds: [...f.boardIds, board.id] } : f);
+        localStorage.setItem(FOLDERS_KEY, JSON.stringify(next));
+        // Force sidebar re-render by dispatching storage event
+        window.dispatchEvent(new StorageEvent("storage", { key: FOLDERS_KEY }));
+      }
     },
   });
+
+  const handleNew = (type: BoardType, folderId: string) => {
+    pendingFolder.current = folderId;
+    createBoard.mutate(type);
+  };
 
   return (
     <div className="flex h-full min-h-[calc(100vh-120px)]">
@@ -814,7 +1187,7 @@ export default function ResearchLab() {
         isLoading={isLoading}
         activeBoardId={activeBoardId}
         onSelect={setActiveBoardId}
-        onNew={type => createBoard.mutate(type)}
+        onNew={handleNew}
         creating={createBoard.isPending}
       />
 
@@ -827,28 +1200,10 @@ export default function ResearchLab() {
           <div className="flex flex-col items-center justify-center h-full gap-6 text-muted-foreground">
             <div className="flex items-center gap-4 opacity-20">
               <BookOpen className="w-10 h-10" />
-              <span className="text-2xl text-muted-foreground">+</span>
+              <span className="text-2xl">+</span>
               <FlaskConical className="w-10 h-10" />
             </div>
-            <p className="text-sm opacity-50">Select a board, or create a new one</p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => createBoard.mutate("science_board")}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-mono transition-all"
-                style={{ border: `1px solid ${ACCENT_SCIENCE}40`, color: ACCENT_SCIENCE, background: `${ACCENT_SCIENCE}10` }}
-              >
-                <BookOpen className="w-4 h-4" />
-                Science Board
-              </button>
-              <button
-                onClick={() => createBoard.mutate("experiment_board")}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-mono transition-all"
-                style={{ border: `1px solid ${ACCENT_EXPERIMENT}40`, color: ACCENT_EXPERIMENT, background: `${ACCENT_EXPERIMENT}10` }}
-              >
-                <FlaskConical className="w-4 h-4" />
-                Experiment Board
-              </button>
-            </div>
+            <p className="text-sm opacity-50">Select a board or create a new one</p>
           </div>
         )}
       </div>

@@ -889,15 +889,15 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           const body = await readBody(req);
           const user = await getActiveUser(req, sb);
           const now = Date.now();
-          const { section_key, content="" } = body;
-          const { data: row } = await sb.from("experiment_sections").insert({ board_id: boardId, user_id: user.id, section_key, content, created_at: now, updated_at: now }).select().single();
+          const { section_key, content="", pos_x=0, pos_y=0, width=260, height=0 } = body;
+          const { data: row } = await sb.from("experiment_sections").insert({ board_id: boardId, user_id: user.id, section_key, content, pos_x, pos_y, width, height, created_at: now, updated_at: now }).select().single();
           await sb.from("boards").update({ updated_at: now }).eq("id", boardId);
           return json(res, 200, row ?? {});
         }
       }
     }
 
-    // PATCH /experiment-sections/:id
+    // PATCH /DELETE /experiment-sections/:id
     {
       const m = route.match(/^\/experiment-sections\/(\d+)$/);
       if (m) {
@@ -905,7 +905,13 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const now = Date.now();
-          await sb.from("experiment_sections").update({ content: body.content ?? "", updated_at: now }).eq("id", id);
+          const patch: any = { updated_at: now };
+          ["content","pos_x","pos_y","width","height"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          await sb.from("experiment_sections").update(patch).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("experiment_sections").delete().eq("id", id);
           return json(res, 200, { ok: true });
         }
       }
