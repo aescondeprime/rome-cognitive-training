@@ -83,7 +83,7 @@ function mapMemoryItem(r: any) {
   return { id: r.id, userId: r.user_id, type: r.type ?? "reflection", content: r.content, source: r.source ?? "manual", confidence: r.confidence ?? 50, importance: r.importance ?? 50, createdAt: r.created_at ?? Date.now(), updatedAt: r.updated_at ?? Date.now() };
 }
 function mapTaskboardCard(r: any) {
-  return { id: r.id, userId: r.user_id, content: r.content ?? "", color: r.color ?? "gold", pos_x: r.pos_x ?? 100, pos_y: r.pos_y ?? 100, pinned: r.pinned ?? 0, width: r.width ?? 200, on_board: r.on_board ?? 0, createdAt: r.created_at ?? Date.now(), updatedAt: r.updated_at ?? Date.now() };
+  return { id: r.id, userId: r.user_id, content: r.content ?? "", color: r.color ?? "gold", pos_x: r.pos_x ?? 100, pos_y: r.pos_y ?? 100, pinned: r.pinned ?? 0, width: r.width ?? 200, height: r.height ?? 0, on_board: r.on_board ?? 0, createdAt: r.created_at ?? Date.now(), updatedAt: r.updated_at ?? Date.now() };
 }
 
 // ── Active user resolution ─────────────────────────────────────────────────
@@ -513,6 +513,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           if (body.pos_y    !== undefined) patch.pos_y    = body.pos_y;
           if (body.pinned   !== undefined) patch.pinned   = body.pinned;
           if (body.width    !== undefined) patch.width    = body.width;
+          if (body.height   !== undefined) patch.height   = body.height;
           if (body.onBoard  !== undefined) patch.on_board = body.onBoard ? 1 : 0;
           if (body.on_board !== undefined) patch.on_board = body.on_board;
           const { data: updated } = await sb.from("taskboard_cards").update(patch).eq("id", id).select().single();
@@ -608,6 +609,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           if (body.pos_y    !== undefined) patch.pos_y    = body.pos_y;
           if (body.pinned   !== undefined) patch.pinned   = body.pinned;
           if (body.width    !== undefined) patch.width    = body.width;
+          if (body.height   !== undefined) patch.height   = body.height;
           if (body.on_board !== undefined) patch.on_board = body.on_board;
           await sb.from("taskboard_cards").update(patch).eq("id", id);
           return json(res, 200, { ok: true });

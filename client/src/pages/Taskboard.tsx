@@ -14,6 +14,7 @@ interface Card {
   pos_y: number;
   pinned: number;
   width: number;
+  height: number;
   on_board: number;
 }
 
@@ -24,6 +25,29 @@ const COLORS = [
   { id: "slate",   bg: "bg-[hsl(220_20%_9%)]",  border: "border-[hsl(220_20%_27%)]", header: "bg-[hsl(220_20%_13%)]", text: "text-[hsl(220_25%_65%)]",  dot: "hsl(220 25% 52%)"  },
 ] as const;
 const colorFor = (id: string) => COLORS.find(c => c.id === id) ?? COLORS[0];
+
+// ── Corner resize handles ──────────────────────────────────────────────
+type Corner = "nw" | "ne" | "sw" | "se";
+const CORNER_POS: Record<Corner, React.CSSProperties> = {
+  nw: { top: -4,    left: -4,    cursor: "nw-resize" },
+  ne: { top: -4,    right: -4,   cursor: "ne-resize" },
+  sw: { bottom: -4, left: -4,    cursor: "sw-resize" },
+  se: { bottom: -4, right: -4,   cursor: "se-resize" },
+};
+function ResizeHandles({ onStart, borderColor }: { onStart: (c: Corner, e: React.MouseEvent) => void; borderColor: string }) {
+  return (
+    <>
+      {(["nw","ne","sw","se"] as Corner[]).map(c => (
+        <div
+          key={c}
+          className="absolute w-3 h-3 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"
+          style={{ ...CORNER_POS[c], background: "hsl(220 15% 14%)", border: `1.5px solid ${borderColor}`, zIndex: 50 }}
+          onMouseDown={e => { e.stopPropagation(); onStart(c, e); }}
+        />
+      ))}
+    </>
+  );
+}
 
 // ── Sticky Card ────────────────────────────────────────────────────────
 function StickyCard({ card, onUpdate, onDelete, boardRef, isOnBoard }: {
@@ -36,12 +60,17 @@ function StickyCard({ card, onUpdate, onDelete, boardRef, isOnBoard }: {
   const [editing, setEditing] = useState(false);
   const [draft,   setDraft]   = useState(card.content);
   const [pos,     setPos]     = useState({ x: card.pos_x, y: card.pos_y });
-  const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const [size,    setSize]    = useState({ w: card.width, h: card.height ?? 0 });
+  const dragState   = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const resizeState = useRef<{ sx: number; sy: number; ow: number; oh: number; ox: number; oy: number; corner: Corner } | null>(null);
   const col = colorFor(card.color);
+  const MIN_W = 160, MIN_H = 100;
 
   useEffect(() => { setPos({ x: card.pos_x, y: card.pos_y }); }, [card.pos_x, card.pos_y]);
+  useEffect(() => { setSize({ w: card.width, h: card.height ?? 0 }); }, [card.width, card.height]);
   useEffect(() => { setDraft(card.content); }, [card.content]);
 
+  // ── move ──
   const startDrag = useCallback((cx: number, cy: number) => {
     if (!isOnBoard || card.pinned) return;
     dragState.current = { startX: cx, startY: cy, origX: pos.x, origY: pos.y };
@@ -50,19 +79,19 @@ function StickyCard({ card, onUpdate, onDelete, boardRef, isOnBoard }: {
   const moveDrag = useCallback((cx: number, cy: number) => {
     if (!dragState.current || !boardRef.current) return;
     const b  = boardRef.current.getBoundingClientRect();
-    const nx = Math.max(0, Math.min(b.width - card.width - 4, dragState.current.origX + cx - dragState.current.startX));
+    const nx = Math.max(0, Math.min(b.width - size.w - 4, dragState.current.origX + cx - dragState.current.startX));
     const ny = Math.max(0, dragState.current.origY + cy - dragState.current.startY);
     setPos({ x: nx, y: ny });
-  }, [boardRef, card.width]);
+  }, [boardRef, size.w]);
 
   const endDrag = useCallback((cx: number, cy: number) => {
     if (!dragState.current || !boardRef.current) return;
     const b  = boardRef.current.getBoundingClientRect();
-    const nx = Math.max(0, Math.min(b.width - card.width - 4, dragState.current.origX + cx - dragState.current.startX));
+    const nx = Math.max(0, Math.min(b.width - size.w - 4, dragState.current.origX + cx - dragState.current.startX));
     const ny = Math.max(0, dragState.current.origY + cy - dragState.current.startY);
     dragState.current = null;
     onUpdate(card.id, { pos_x: nx, pos_y: ny });
-  }, [boardRef, card.id, card.width, onUpdate]);
+  }, [boardRef, card.id, size.w, onUpdate]);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     if (!isOnBoard || card.pinned) return;
@@ -83,14 +112,58 @@ function StickyCard({ card, onUpdate, onDelete, boardRef, isOnBoard }: {
     window.addEventListener("touchend", onEnd);
   }, [isOnBoard, card.pinned, startDrag, moveDrag, endDrag]);
 
+  // ── resize (board only, not when pinned) ──
+  const startResize = (corner: Corner, e: React.MouseEvent) => {
+    if (!isOnBoard || card.pinned) return;
+    e.preventDefault();
+    const initH = size.h > 0 ? size.h : (e.currentTarget.closest("[data-card-id]") as HTMLElement)?.offsetHeight ?? 140;
+    resizeState.current = { sx: e.clientX, sy: e.clientY, ow: size.w, oh: initH, ox: pos.x, oy: pos.y, corner };
+    const mm = (ev: MouseEvent) => {
+      if (!resizeState.current) return;
+      const { sx, sy, ow, oh, ox, oy, corner } = resizeState.current;
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      let nw = ow, nh = oh, nx = ox, ny = oy;
+      if (corner === "se") { nw = Math.max(MIN_W, ow + dx); nh = Math.max(MIN_H, oh + dy); }
+      if (corner === "sw") { const nwt = Math.max(MIN_W, ow - dx); nx = ox + (ow - nwt); nw = nwt; nh = Math.max(MIN_H, oh + dy); }
+      if (corner === "ne") { nw = Math.max(MIN_W, ow + dx); const nht = Math.max(MIN_H, oh - dy); ny = oy + (oh - nht); nh = nht; }
+      if (corner === "nw") { const nwt = Math.max(MIN_W, ow - dx); nx = ox + (ow - nwt); nw = nwt; const nht = Math.max(MIN_H, oh - dy); ny = oy + (oh - nht); nh = nht; }
+      setSize({ w: nw, h: nh });
+      setPos({ x: Math.max(0, nx), y: Math.max(0, ny) });
+    };
+    const mu = () => {
+      if (!resizeState.current) return;
+      resizeState.current = null;
+      setSize(s => {
+        setPos(p => {
+          onUpdate(card.id, { width: s.w, height: s.h, pos_x: p.x, pos_y: p.y });
+          return p;
+        });
+        return s;
+      });
+      window.removeEventListener("mousemove", mm);
+      window.removeEventListener("mouseup", mu);
+    };
+    window.addEventListener("mousemove", mm);
+    window.addEventListener("mouseup", mu);
+  };
+
   const saveEdit = () => { setEditing(false); if (draft !== card.content) onUpdate(card.id, { content: draft }); };
+
+  const hasH = isOnBoard && size.h > 0;
+  const colBorderRaw = col.border.replace("border-[", "").replace("]", "").replace(/_/g, " ");
 
   return (
     <div
-      className={cn("rounded-lg border shadow-lg select-none", col.bg, col.border, isOnBoard ? "absolute" : "inline-flex flex-col shrink-0")}
-      style={isOnBoard ? { left: pos.x, top: pos.y, width: card.width, zIndex: card.pinned ? 50 : 10 } : { width: card.width }}
+      data-card-id={card.id}
+      className={cn("rounded-lg border shadow-lg select-none group", col.bg, col.border, isOnBoard ? "absolute flex flex-col" : "inline-flex flex-col shrink-0")}
+      style={isOnBoard ? { left: pos.x, top: pos.y, width: size.w, height: hasH ? size.h : undefined, zIndex: card.pinned ? 50 : 10 } : { width: size.w }}
     >
-      <div className={cn("flex items-center justify-between px-2 py-1.5 rounded-t-lg", col.header, isOnBoard && !card.pinned ? "cursor-grab active:cursor-grabbing" : "cursor-default")}
+      {/* Resize handles — board mode only, not when pinned */}
+      {isOnBoard && !card.pinned && (
+        <ResizeHandles onStart={startResize} borderColor={colBorderRaw} />
+      )}
+
+      <div className={cn("flex items-center justify-between px-2 py-1.5 rounded-t-lg shrink-0", col.header, isOnBoard && !card.pinned ? "cursor-grab active:cursor-grabbing" : "cursor-default")}
         onMouseDown={onMouseDown} onTouchStart={onTouchStart}>
         <div className="flex items-center gap-1.5">
           {isOnBoard && <GripHorizontal className={cn("w-3 h-3 opacity-40", col.text)} />}
@@ -120,7 +193,7 @@ function StickyCard({ card, onUpdate, onDelete, boardRef, isOnBoard }: {
           </button>
         </div>
       </div>
-      <div className="p-3" onDoubleClick={() => setEditing(true)}>
+      <div className={cn("p-3 flex-1", hasH && "overflow-auto")} onDoubleClick={() => setEditing(true)}>
         {editing ? (
           <textarea autoFocus value={draft} onChange={e => setDraft(e.target.value)} onBlur={saveEdit}
             onKeyDown={e => { if (e.key === "Escape") { setEditing(false); setDraft(card.content); } }}
