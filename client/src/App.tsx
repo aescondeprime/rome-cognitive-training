@@ -17,6 +17,7 @@ import Settings from "@/pages/Settings";
 import Taskboard from "@/pages/Taskboard";
 import AlchemyLab from "@/pages/AlchemyLab";
 import ResearchLab from "@/pages/ResearchLab";
+import KronosKeep from "@/pages/KronosKeep";
 import IdeaWorkshop from "@/pages/IdeaWorkshop";
 import ComponentBoard from "@/pages/ComponentBoard";
 import NotFound from "@/pages/not-found";
@@ -95,11 +96,12 @@ export default function App() {
                     {/* Philosophy */}
                     <Route path="/philosophy" component={PhilosophyChambers} />
 
-                    {/* Strategic — has Taskboard */}
+                    {/* Strategic — Taskboard + Kronos Keep */}
                     <Route path="/strategic">
-                      <PlaceholderNode title="Strategic" symbol="♛" accent="hsl(43 88% 60%)" description="Planning and execution intelligence. Taskboard is accessible below." />
+                      <PlaceholderNode title="Strategic" symbol="♛" accent="hsl(43 88% 60%)" description="Planning and execution intelligence. Taskboard and Kronos Keep are accessible below." />
                     </Route>
-                    <Route path="/taskboard" component={Taskboard} />
+                    <Route path="/taskboard"    component={Taskboard} />
+                    <Route path="/kronos-keep"  component={KronosKeep} />
 
                     {/* Creative */}
                     <Route path="/creative">

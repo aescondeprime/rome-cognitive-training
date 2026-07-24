@@ -26,6 +26,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/investigative":       "Investigative",
   "/alchemy":             "Alchemy Lab",
   "/taskboard":           "Taskboard",
+  "/kronos-keep":         "Kronos Keep",
   "/settings":            "Settings",
 };
 

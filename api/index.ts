@@ -969,6 +969,154 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     }
 
     // ════════════════════════════════════════════════════════════════════
+    // KRONOS KEEP
+    // ════════════════════════════════════════════════════════════════════
+
+    // GET /api/kronos/calendars  POST /api/kronos/calendars
+    if (route === "/kronos/calendars") {
+      const user = await getActiveUser(req, sb);
+      if (method === "GET") {
+        const { data } = await sb.from("kronos_calendars").select("*").eq("user_id", user.id).order("created_at", { ascending: true });
+        return json(res, 200, data ?? []);
+      }
+      if (method === "POST") {
+        const body = await readBody(req);
+        const now = Date.now();
+        const { data: row } = await sb.from("kronos_calendars").insert({ user_id: user.id, name: body.name ?? "My Calendar", created_at: now, updated_at: now }).select().single();
+        return json(res, 200, row ?? {});
+      }
+    }
+
+    // PATCH /DELETE /api/kronos/calendars/:id
+    {
+      const m = route.match(/^\/kronos\/calendars\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        const user = await getActiveUser(req, sb);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          await sb.from("kronos_calendars").update({ name: body.name, updated_at: Date.now() }).eq("id", id).eq("user_id", user.id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("kronos_calendars").delete().eq("id", id).eq("user_id", user.id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ── Routines ──
+    // GET  /api/kronos/calendars/:id/routines
+    // POST /api/kronos/calendars/:id/routines
+    {
+      const m = route.match(/^\/kronos\/calendars\/(\d+)\/routines$/);
+      if (m) {
+        const calId = parseInt(m[1]);
+        const user = await getActiveUser(req, sb);
+        if (method === "GET") {
+          const { data } = await sb.from("kronos_routines").select("*").eq("calendar_id", calId).eq("user_id", user.id);
+          return json(res, 200, data ?? []);
+        }
+        if (method === "POST") {
+          const body = await readBody(req);
+          const now = Date.now();
+          const { data: row } = await sb.from("kronos_routines").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(43 88% 60%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, recurrence: body.recurrence ?? "daily", days_of_week: body.days_of_week ?? null, notes: body.notes ?? "", saved: body.saved ?? false, created_at: now, updated_at: now }).select().single();
+          return json(res, 200, row ?? {});
+        }
+      }
+    }
+    // PATCH/DELETE /api/kronos/routines/:id
+    {
+      const m = route.match(/^\/kronos\/routines\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          ["title","color","start_time","duration_minutes","recurrence","days_of_week","notes","saved"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          await sb.from("kronos_routines").update(patch).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("kronos_routines").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ── Assignments ──
+    {
+      const m = route.match(/^\/kronos\/calendars\/(\d+)\/assignments$/);
+      if (m) {
+        const calId = parseInt(m[1]);
+        const user = await getActiveUser(req, sb);
+        if (method === "GET") {
+          const { data } = await sb.from("kronos_assignments").select("*").eq("calendar_id", calId).eq("user_id", user.id);
+          return json(res, 200, data ?? []);
+        }
+        if (method === "POST") {
+          const body = await readBody(req);
+          const now = Date.now();
+          const { data: row } = await sb.from("kronos_assignments").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(210 65% 62%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, due_date: body.due_date ?? "", instructions: body.instructions ?? "", saved: body.saved ?? false, created_at: now, updated_at: now }).select().single();
+          return json(res, 200, row ?? {});
+        }
+      }
+    }
+    {
+      const m = route.match(/^\/kronos\/assignments\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          ["title","color","start_time","duration_minutes","due_date","instructions","saved"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          await sb.from("kronos_assignments").update(patch).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("kronos_assignments").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ── Events ──
+    {
+      const m = route.match(/^\/kronos\/calendars\/(\d+)\/events$/);
+      if (m) {
+        const calId = parseInt(m[1]);
+        const user = await getActiveUser(req, sb);
+        if (method === "GET") {
+          const { data } = await sb.from("kronos_events").select("*").eq("calendar_id", calId).eq("user_id", user.id);
+          return json(res, 200, data ?? []);
+        }
+        if (method === "POST") {
+          const body = await readBody(req);
+          const now = Date.now();
+          const { data: row } = await sb.from("kronos_events").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(270 60% 72%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, event_date: body.event_date ?? "", preparations: body.preparations ?? "", saved: body.saved ?? false, created_at: now, updated_at: now }).select().single();
+          return json(res, 200, row ?? {});
+        }
+      }
+    }
+    {
+      const m = route.match(/^\/kronos\/events\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          ["title","color","start_time","duration_minutes","event_date","preparations","saved"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          await sb.from("kronos_events").update(patch).eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("kronos_events").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     // EXPORT / IMPORT
     // ════════════════════════════════════════════════════════════════════
     if (route === "/export" && method === "GET") {
