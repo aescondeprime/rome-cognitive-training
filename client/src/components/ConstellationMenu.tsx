@@ -3,8 +3,8 @@ import { motion, useMotionValue, useSpring, animate } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
-import { loadLayout, saveLayout, resetLayout, DEFAULT_RAY_COLOR, type ConstellationLayout, type NodeOverride } from "@/lib/constellationLayout";
-import { getRayState, pinRaySource, setRayDirection, setRayColor, setRayBrightness } from "@/lib/lightRayState";
+import { loadLayout, saveLayout, resetLayout, DEFAULT_RAY_COLOR, DEFAULT_ACCENT_COLOR, type ConstellationLayout, type NodeOverride } from "@/lib/constellationLayout";
+import { getRayState, pinRaySource, setRayDirection, setRayColor, setRayBrightness, setAccentColor } from "@/lib/lightRayState";
 import ConstellationNode from "./ConstellationNode";
 import NodeBranchMenu from "./NodeBranchMenu";
 
@@ -355,7 +355,8 @@ export default function ConstellationMenu({ onClose }: Props) {
     setRayDirection(layout.ray.dirAngle ?? null);
     setRayColor(layout.ray.rayColor ?? DEFAULT_RAY_COLOR);
     setRayBrightness(layout.ray.rayBrightness ?? 1.0);
-  }, [layout.ray.x, layout.ray.y, layout.ray.dirAngle, layout.ray.rayColor, layout.ray.rayBrightness]);
+    setAccentColor(layout.accentColor ?? DEFAULT_ACCENT_COLOR);
+  }, [layout.ray.x, layout.ray.y, layout.ray.dirAngle, layout.ray.rayColor, layout.ray.rayBrightness, layout.accentColor]);
 
   // Dims
   const getDims = () => ({
@@ -510,13 +511,19 @@ export default function ConstellationMenu({ onClose }: Props) {
     setRayBrightness(v);
   }, []);
 
+  const handleAccentColor = useCallback((hsl: string) => {
+    setLayout(prev => ({ ...prev, accentColor: hsl }));
+    setAccentColor(hsl);
+  }, []);
+
   const handleReset = useCallback(() => {
     resetLayout();
-    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 } });
+    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR });
     pinRaySource(null, null);
     setRayDirection(null);
     setRayColor(DEFAULT_RAY_COLOR);
     setRayBrightness(1.0);
+    setAccentColor(DEFAULT_ACCENT_COLOR);
     setRayEditOffset(0, 0);
   }, []);
 
@@ -708,7 +715,21 @@ export default function ConstellationMenu({ onClose }: Props) {
         const srcScreenX = W * (0.5  + layout.ray.x);
         const srcScreenY = H * (0.28 + layout.ray.y);
         const currentColor = layout.ray.rayColor ?? DEFAULT_RAY_COLOR;
-        const currentBrightness = layout.ray.rayBrightness ?? 1.0;
+        const currentBrightness  = layout.ray.rayBrightness ?? 1.0;
+        const currentAccent      = layout.accentColor ?? DEFAULT_ACCENT_COLOR;
+
+        const ACCENT_PRESETS: { label: string; hsl: string }[] = [
+          { label: "Gold",    hsl: "43 88% 60%"  },
+          { label: "Amber",   hsl: "30 90% 58%"  },
+          { label: "Rose",    hsl: "345 80% 65%" },
+          { label: "Violet",  hsl: "270 75% 70%" },
+          { label: "Indigo",  hsl: "240 80% 68%" },
+          { label: "Sky",     hsl: "200 85% 62%" },
+          { label: "Teal",    hsl: "175 75% 52%" },
+          { label: "Emerald", hsl: "145 70% 52%" },
+          { label: "Lime",    hsl: "90 70% 52%"  },
+          { label: "White",   hsl: "43 10% 92%"  },
+        ];
 
         // Preset palette — hue groups that look great as light rays
         const RAY_PRESETS: { label: string; hsl: string }[] = [
@@ -830,8 +851,60 @@ export default function ConstellationMenu({ onClose }: Props) {
                 }}>hsl({currentColor})</p>
               </div>
 
+              {/* Divider */}
+              <div style={{ height: 1, background: "hsl(43 15% 18%)", margin: "12px 0 10px" }} />
+
+              {/* Accent colour picker */}
+              <p style={{
+                fontFamily: "DM Mono, monospace",
+                fontSize: 8,
+                color: "hsl(var(--accent-h) var(--accent-s) var(--accent-l))",
+                letterSpacing: "0.18em",
+                textTransform: "uppercase",
+                marginBottom: 8,
+              }}>Accent Colour</p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 24px)", gap: 5 }}>
+                {ACCENT_PRESETS.map(preset => {
+                  const isActive = currentAccent === preset.hsl;
+                  return (
+                    <button
+                      key={preset.hsl}
+                      title={preset.label}
+                      onClick={() => handleAccentColor(preset.hsl)}
+                      style={{
+                        width: 24, height: 24, borderRadius: "50%",
+                        background: `hsl(${preset.hsl})`,
+                        border: isActive ? "2px solid hsl(43 90% 80%)" : "2px solid transparent",
+                        outline: isActive ? "1px solid hsl(43 60% 40%)" : "none",
+                        cursor: "pointer",
+                        transition: "transform 0.12s ease, border 0.12s ease",
+                        transform: isActive ? "scale(1.18)" : "scale(1)",
+                        boxShadow: isActive ? `0 0 8px hsl(${preset.hsl} / 0.7)` : `0 0 4px hsl(${preset.hsl} / 0.3)`,
+                      }}
+                    />
+                  );
+                })}
+              </div>
+              {/* Accent hue slider */}
+              <div style={{ marginTop: 8 }}>
+                <input
+                  type="range"
+                  min={0} max={360} step={1}
+                  value={parseInt(currentAccent.split(" ")[0]) || 43}
+                  onChange={e => {
+                    const hue   = e.target.value;
+                    const parts = currentAccent.split(" ");
+                    handleAccentColor(`${hue} ${parts[1] ?? "80%"} ${parts[2] ?? "62%"}`);
+                  }}
+                  style={{ width: "100%", accentColor: `hsl(${currentAccent})`, cursor: "pointer" }}
+                />
+              </div>
+
+              {/* Divider */}
+              <div style={{ height: 1, background: "hsl(43 15% 18%)", margin: "10px 0" }} />
+
               {/* Brightness slider */}
-              <div style={{ marginTop: 10 }}>
+              <div style={{ marginTop: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                   <p style={{
                     fontFamily: "DM Mono, monospace",

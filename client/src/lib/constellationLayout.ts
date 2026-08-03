@@ -17,12 +17,14 @@ export interface RayOverride {
 export interface ConstellationLayout {
   nodes: Record<string, NodeOverride>;
   ray: RayOverride;
+  accentColor: string;  // HSL components, e.g. "43 88% 60%"
 }
 
-export const DEFAULT_RAY_COLOR = "43 88% 60%";
+export const DEFAULT_RAY_COLOR    = "43 88% 60%";
+export const DEFAULT_ACCENT_COLOR = "43 88% 60%";
 
 function defaultLayout(): ConstellationLayout {
-  return { nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 } };
+  return { nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR };
 }
 
 export function loadLayout(): ConstellationLayout {
@@ -41,6 +43,10 @@ export function loadLayout(): ConstellationLayout {
     // Backfill rayBrightness if missing
     if (parsed.ray && !("rayBrightness" in parsed.ray)) {
       parsed.ray.rayBrightness = 1.0;
+    }
+    // Backfill accentColor if missing
+    if (!("accentColor" in parsed)) {
+      (parsed as any).accentColor = DEFAULT_ACCENT_COLOR;
     }
     return parsed;
   } catch {

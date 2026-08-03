@@ -7,14 +7,22 @@
 /* ─── ROME Design System ──────────────────────────────────────────── */
 @layer base {
   :root {
-    /* Gold palette */
+    /* ── Accent colour — driven by JS via setAccentColor() ───────────
+       Default: Roman gold (43 88% 60%).
+       --accent-h / --accent-s / --accent-l are set on documentElement
+       by the constellation editor; all gold tokens derive from them. */
+    --accent-h: 43;
+    --accent-s: 88%;
+    --accent-l: 60%;
+
+    /* Gold palette — derived from accent vars */
     --gold-100: 48 100% 96%;
     --gold-200: 46 95% 85%;
     --gold-300: 44 90% 72%;
-    --gold-400: 43 88% 60%;
-    --gold-500: 42 85% 50%;   /* primary gold */
-    --gold-600: 40 80% 40%;
-    --gold-700: 38 75% 30%;
+    --gold-400: var(--accent-h) var(--accent-s) var(--accent-l);
+    --gold-500: var(--accent-h) var(--accent-s) 50%;   /* primary gold */
+    --gold-600: var(--accent-h) var(--accent-s) 40%;
+    --gold-700: var(--accent-h) var(--accent-s) 30%;
 
     /* Cave background tones */
     --cave-950: 220 16% 5%;   /* deepest void */
@@ -35,7 +43,7 @@
     --popover:       222 16% 8%;
     --popover-foreground: 46 55% 85%;
 
-    --primary:       43 88% 55%;    /* Roman gold */
+    --primary:       var(--accent-h) var(--accent-s) 55%;    /* accent gold */
     --primary-foreground: 220 18% 6%;
 
     --secondary:     218 14% 14%;
@@ -45,14 +53,14 @@
     --muted-foreground: 214 20% 50%;
 
     --accent:        218 14% 14%;
-    --accent-foreground: 43 88% 60%;
+    --accent-foreground: var(--accent-h) var(--accent-s) var(--accent-l);
 
     --destructive:   0 72% 51%;
     --destructive-foreground: 46 60% 88%;
 
     --border:        216 14% 16%;
     --input:         216 14% 12%;
-    --ring:          43 88% 55%;
+    --ring:          var(--accent-h) var(--accent-s) 55%;
 
     --radius: 0.75rem;
 
@@ -88,17 +96,17 @@
     --card-foreground: 46 55% 85%;
     --popover:       222 16% 8%;
     --popover-foreground: 46 55% 85%;
-    --primary:       43 88% 55%;
+    --primary:       var(--accent-h) var(--accent-s) 55%;
     --primary-foreground: 220 18% 6%;
     --secondary:     218 14% 14%;
     --secondary-foreground: 46 50% 80%;
     --muted:         216 12% 14%;
     --muted-foreground: 214 20% 50%;
     --accent:        218 14% 14%;
-    --accent-foreground: 43 88% 60%;
+    --accent-foreground: var(--accent-h) var(--accent-s) var(--accent-l);
     --border:        216 14% 16%;
     --input:         216 14% 12%;
-    --ring:          43 88% 55%;
+    --ring:          var(--accent-h) var(--accent-s) 55%;
   }
 }
 
@@ -194,11 +202,11 @@
 .rome-card {
   position: relative;
   background: hsl(var(--cave-800));
-  border: 1px solid hsl(43 30% 22% / 0.55);
+  border: 1px solid hsl(var(--accent-h) 30% 22% / 0.55);
   border-radius: var(--radius);
   box-shadow:
     4px 8px 32px hsl(220 25% 2% / 0.65),
-    inset 1px 1px 0 hsl(43 60% 50% / 0.1),
+    inset 1px 1px 0 hsl(var(--accent-h) 60% 50% / 0.1),
     0 2px 6px hsl(220 20% 2% / 0.5);
   transform: translateZ(0);
   transition: box-shadow 0.25s ease, transform 0.25s ease, border-color 0.3s ease, outline-color 0.3s ease;
@@ -441,8 +449,8 @@
 /* ─── Scrollbar ──────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: hsl(var(--cave-900)); }
-::-webkit-scrollbar-thumb { background: hsl(43 30% 22%); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: hsl(43 50% 32%); }
+::-webkit-scrollbar-thumb { background: hsl(var(--accent-h) 30% 22%); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--accent-h) 50% 32%); }
 
 /* ─── Obsidian-style note editor ─────────────────────────────────── */
 .note-editor {

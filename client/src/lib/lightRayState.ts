@@ -93,6 +93,19 @@ export function setRayColor(hsl: string) {
   state.rayColor = hsl;
 }
 
+/**
+ * Set the global UI accent colour. Updates CSS vars on :root so every
+ * element that uses var(--accent-h/s/l) repaints immediately.
+ * Pass HSL components only, e.g. "210 80% 65%"
+ */
+export function setAccentColor(hsl: string) {
+  const [h = 43, s = 88, l = 60] = hsl.replace(/%/g, "").split(/\s+/).map(Number);
+  const el = document.documentElement;
+  el.style.setProperty("--accent-h", String(h));
+  el.style.setProperty("--accent-s", `${s}%`);
+  el.style.setProperty("--accent-l", `${l}%`);
+}
+
 /** Update the beam brightness multiplier (0.2–2.0, default 1.0) */
 export function setRayBrightness(v: number) {
   state.rayBrightness = Math.max(0.1, Math.min(2.0, v));

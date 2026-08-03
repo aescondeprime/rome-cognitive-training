@@ -9,6 +9,8 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import AppShell from "@/components/AppShell";
 import { ConstellationPortal } from "@/components/ConstellationOverlay";
 import LightRay from "@/components/LightRay";
+import { setAccentColor } from "@/lib/lightRayState";
+import { loadLayout } from "@/lib/constellationLayout";
 import Login from "@/pages/Login";
 
 // Core pages kept
@@ -69,6 +71,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   if (!authed) return <Login onLogin={() => setAuthed(true)} />;
   return <>{children}</>;
 }
+
+// Apply saved accent colour immediately on boot
+(() => {
+  try {
+    const layout = loadLayout();
+    if (layout.accentColor) setAccentColor(layout.accentColor);
+  } catch {}
+})();
 
 export default function App() {
   return (
