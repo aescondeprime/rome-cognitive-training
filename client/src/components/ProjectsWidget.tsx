@@ -20,6 +20,7 @@ interface Props {
   collapsed: boolean;
   onPosChange: (p: { x: number; y: number }) => void;
   onCollapsedChange: (c: boolean) => void;
+  onClose: () => void;  // closes the constellation overlay
 }
 
 const W = 210;
@@ -50,7 +51,7 @@ function HexIcon({ active }: { active?: boolean }) {
   );
 }
 
-export default function ProjectsWidget({ pos, collapsed, onPosChange, onCollapsedChange }: Props) {
+export default function ProjectsWidget({ pos, collapsed, onPosChange, onCollapsedChange, onClose }: Props) {
   const DEFAULT_X = window.innerWidth - W - 24;
   const DEFAULT_Y = 340; // below the clock widget
   const x = pos?.x ?? DEFAULT_X;
@@ -74,10 +75,11 @@ export default function ProjectsWidget({ pos, collapsed, onPosChange, onCollapse
   const openBoard = useCallback((board: Board) => {
     // Store the target board ID so BoardShell auto-selects it on mount
     sessionStorage.setItem("rome_open_board_id", String(board.id));
-    // Set hash then fire hashchange so wouter picks up the route immediately
+    // Close the constellation overlay first (same as NodeBranchMenu),
+    // then set the hash — the new route renders once the overlay unmounts
     window.location.hash = "/idea-workshop";
-    window.dispatchEvent(new HashChangeEvent("hashchange"));
-  }, []);
+    onClose();
+  }, [onClose]);
 
   // ── Drag ────────────────────────────────────────────────────────────────
   const dragging   = useRef(false);

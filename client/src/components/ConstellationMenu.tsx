@@ -1077,6 +1077,7 @@ export default function ConstellationMenu({ onClose }: Props) {
           collapsed={layout.projectsWidgetCollapsed ?? false}
           onPosChange={p => setLayout(prev => ({ ...prev, projectsWidgetPos: p }))}
           onCollapsedChange={c => setLayout(prev => ({ ...prev, projectsWidgetCollapsed: c }))}
+          onClose={onClose}
         />
       )}
 
