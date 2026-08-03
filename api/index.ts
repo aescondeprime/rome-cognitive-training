@@ -972,6 +972,33 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     // KRONOS KEEP
     // ════════════════════════════════════════════════════════════════════
 
+    // GET /api/kronos/today — all items for the user's local today across all calendars
+    if (route === "/kronos/today" && method === "GET") {
+      // Accept ?date=YYYY-MM-DD from client (client knows local date)
+      const dateStr = (url.searchParams.get("date") ?? new Date().toISOString().slice(0, 10));
+      const weekday = new Date(dateStr + "T12:00:00").getDay(); // local noon avoids DST
+      const { data: cals } = await sb.from("kronos_calendars").select("id").eq("user_id", user.id);
+      const calIds = (cals ?? []).map((c: { id: number }) => c.id);
+      const items: object[] = [];
+      if (calIds.length > 0) {
+        const { data: routines } = await sb.from("kronos_routines").select("*").in("calendar_id", calIds).eq("user_id", user.id);
+        for (const r of routines ?? []) {
+          const fits = r.recurrence === "daily" || (r.recurrence === "weekly" && Array.isArray(r.days_of_week) && r.days_of_week.includes(weekday));
+          if (fits) items.push({ type: "routine", id: r.id, title: r.title, color: r.color, start_time: r.start_time, duration_minutes: r.duration_minutes });
+        }
+        const { data: assignments } = await sb.from("kronos_assignments").select("*").in("calendar_id", calIds).eq("user_id", user.id).eq("due_date", dateStr);
+        for (const a of assignments ?? []) items.push({ type: "assignment", id: a.id, title: a.title, color: a.color, start_time: a.start_time, duration_minutes: a.duration_minutes });
+        const { data: events } = await sb.from("kronos_events").select("*").in("calendar_id", calIds).eq("user_id", user.id).eq("event_date", dateStr);
+        for (const e of events ?? []) items.push({ type: "event", id: e.id, title: e.title, color: e.color, start_time: e.start_time, duration_minutes: e.duration_minutes });
+      }
+      // Sort by start_time
+      items.sort((a: any, b: any) => {
+        const toMins = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+        return toMins(a.start_time) - toMins(b.start_time);
+      });
+      return new Response(JSON.stringify(items), { headers: { "Content-Type": "application/json" } });
+    }
+
     // GET /api/kronos/calendars  POST /api/kronos/calendars
     if (route === "/kronos/calendars") {
       const user = await getActiveUser(req, sb);

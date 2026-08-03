@@ -7,6 +7,7 @@ import { loadLayout, saveLayout, resetLayout, DEFAULT_RAY_COLOR, DEFAULT_ACCENT_
 import { getRayState, pinRaySource, setRayDirection, setRayColor, setRayBrightness, setAccentColor } from "@/lib/lightRayState";
 import ConstellationNode from "./ConstellationNode";
 import NodeBranchMenu from "./NodeBranchMenu";
+import ConstellationWidget from "./ConstellationWidget";
 
 // ── Moving particle canvas ─────────────────────────────────────────────────
 function ParticleCanvas({
@@ -542,7 +543,7 @@ export default function ConstellationMenu({ onClose }: Props) {
 
   const handleReset = useCallback(() => {
     resetLayout();
-    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null });
+    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null, widgetPos: null, widgetCollapsed: false });
     pinRaySource(null, null);
     setRayDirection(null);
     setRayColor(DEFAULT_RAY_COLOR);
@@ -1057,6 +1058,16 @@ export default function ConstellationMenu({ onClose }: Props) {
           </>
         );
       })()}
+
+      {/* Kronos agenda widget — always shown on constellation (not in edit mode) */}
+      {!editMode && (
+        <ConstellationWidget
+          pos={layout.widgetPos ?? null}
+          collapsed={layout.widgetCollapsed ?? false}
+          onPosChange={p => setLayout(prev => ({ ...prev, widgetPos: p }))}
+          onCollapsedChange={c => setLayout(prev => ({ ...prev, widgetCollapsed: c }))}
+        />
+      )}
 
       {/* Profile badge */}
       {activeProfile && !editMode && (

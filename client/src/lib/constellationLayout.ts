@@ -20,13 +20,15 @@ export interface ConstellationLayout {
   accentColor: string;    // HSL components, e.g. "43 88% 60%"
   particleCount: number;  // 0–560, default 280
   particleHue: number | null;  // null = follow accent hue
+  widgetPos: { x: number; y: number } | null;  // null = default top-right
+  widgetCollapsed: boolean;
 }
 
 export const DEFAULT_RAY_COLOR    = "43 88% 60%";
 export const DEFAULT_ACCENT_COLOR = "43 88% 60%";
 
 function defaultLayout(): ConstellationLayout {
-  return { nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null };
+  return { nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null, widgetPos: null, widgetCollapsed: false };
 }
 
 export function loadLayout(): ConstellationLayout {
@@ -51,8 +53,10 @@ export function loadLayout(): ConstellationLayout {
       (parsed as any).accentColor = DEFAULT_ACCENT_COLOR;
     }
     // Backfill particle settings if missing
-    if (!("particleCount" in parsed)) (parsed as any).particleCount = 280;
-    if (!("particleHue"   in parsed)) (parsed as any).particleHue   = null;
+    if (!("particleCount"    in parsed)) (parsed as any).particleCount    = 280;
+    if (!("particleHue"      in parsed)) (parsed as any).particleHue      = null;
+    if (!("widgetPos"        in parsed)) (parsed as any).widgetPos        = null;
+    if (!("widgetCollapsed"  in parsed)) (parsed as any).widgetCollapsed  = false;
     return parsed;
   } catch {
     return defaultLayout();
