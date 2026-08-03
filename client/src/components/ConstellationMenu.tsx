@@ -657,16 +657,15 @@ export default function ConstellationMenu({ onClose }: Props) {
               const a = nodePositions[aId];
               const b = nodePositions[bId];
               if (!a || !b) return null;
-              const nodeA = effectiveNodes.find(n => n.id === aId)!;
               const lit = !editMode && (activeId === aId || activeId === bId);
               return (
                 <motion.line
                   key={`${aId}-${bId}`}
                   x1={a.x} y1={a.y}
                   x2={b.x} y2={b.y}
-                  stroke={lit ? nodeA.accent : "hsl(var(--accent-h) 30% 40%)"}
+                  stroke="hsl(var(--accent-h) var(--accent-s) var(--accent-l))"
                   strokeWidth={lit ? 1 : 0.35}
-                  strokeOpacity={lit ? 0.6 : editMode ? 0.22 : 0.14}
+                  strokeOpacity={lit ? 0.65 : editMode ? 0.22 : 0.14}
                   strokeDasharray={lit ? undefined : "3 9"}
                   animate={{ strokeOpacity: lit ? 0.6 : editMode ? 0.22 : 0.14, strokeWidth: lit ? 1 : 0.35 }}
                   transition={{ duration: 0.3 }}

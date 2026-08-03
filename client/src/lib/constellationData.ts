@@ -56,7 +56,7 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     subnodes: [
       { id: "phil-reflections", label: "Reflections", icon: "✦", href: "/philosophy", description: "Philosophy Chambers — notes and reflections" },
     ],
-    connections: [],
+    connections: ["athena", "strategic"],
   },
 
   // ── Athena Trials — right, mid-upper
@@ -79,7 +79,7 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
       { id: "at-span",  label: "Memory Span",            icon: "◎", href: "/athena/memory-span",   description: "Forward, reverse, and sorted recall" },
       { id: "at-pasat", label: "PASAT",                  icon: "⊕", href: "/athena/pasat",         description: "Paced auditory serial addition task" },
     ],
-    connections: [],
+    connections: ["creative"],
   },
 
   // ── Strategic — triangle top-left
