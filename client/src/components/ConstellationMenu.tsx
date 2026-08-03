@@ -7,7 +7,6 @@ import { loadLayout, saveLayout, resetLayout, DEFAULT_RAY_COLOR, type Constellat
 import { getRayState, pinRaySource, setRayDirection, setRayColor } from "@/lib/lightRayState";
 import ConstellationNode from "./ConstellationNode";
 import NodeBranchMenu from "./NodeBranchMenu";
-import LightRay from "./LightRay";
 
 // ── Moving particle canvas ─────────────────────────────────────────────────
 function ParticleCanvas({ width, height }: { width: number; height: number }) {
@@ -550,9 +549,6 @@ export default function ConstellationMenu({ onClose }: Props) {
 
       {/* Particles */}
       <ParticleCanvas width={dims.w} height={dims.h} />
-
-      {/* Light ray */}
-      <LightRay zIndex={5} />
 
       {/* Edit mode grid overlay */}
       {editMode && (
