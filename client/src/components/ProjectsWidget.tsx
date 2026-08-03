@@ -3,9 +3,8 @@
  * Clicking a project navigates to /idea-workshop?board=ID.
  * Draggable, collapsible, futuristic geometric design matching ConstellationWidget.
  */
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 
 interface Board {
@@ -26,14 +25,11 @@ interface Props {
 const W = 210;
 
 // ── Corner bracket ─────────────────────────────────────────────────────────
-function Corner({ flip = false, rotate90 = false }: { flip?: boolean; rotate90?: boolean }) {
-  let transform = "";
-  if (flip && rotate90) transform = "rotate(270deg)";
-  else if (flip)    transform = "rotate(180deg)";
-  else if (rotate90) transform = "rotate(90deg)";
+// deg: 0=┌ top-left  90=┐ top-right  180=┘ bottom-right  270=└ bottom-left
+function Corner({ deg = 0 }: { deg?: 0 | 90 | 180 | 270 }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
-      style={{ transform, opacity: 0.65, flexShrink: 0 }}>
+      style={{ transform: deg ? `rotate(${deg}deg)` : undefined, opacity: 0.65, flexShrink: 0 }}>
       <path d="M2 12 L2 2 L12 2" stroke="hsl(var(--accent-h) var(--accent-s) var(--accent-l))" strokeWidth="1.5" />
       <circle cx="2" cy="2" r="1.2" fill="hsl(var(--accent-h) var(--accent-s) var(--accent-l))" />
     </svg>
@@ -60,7 +56,6 @@ export default function ProjectsWidget({ pos, collapsed, onPosChange, onCollapse
   const x = pos?.x ?? DEFAULT_X;
   const y = pos?.y ?? DEFAULT_Y;
 
-  const [, navigate] = useLocation();
   const [hoveredId, setHoveredId] = useState<number | null>(null);
 
   // ── Fetch idea_workshop boards ──────────────────────────────────────────
@@ -74,10 +69,11 @@ export default function ProjectsWidget({ pos, collapsed, onPosChange, onCollapse
   const sorted = [...boards].sort((a, b) => b.updated_at - a.updated_at);
 
   // ── Navigate to workshop and open board ────────────────────────────────
+  // Use the same pattern as NodeBranchMenu: set window.location.hash directly.
+  // The ?board= param lives inside the hash fragment so BoardShell can read it.
   const openBoard = useCallback((board: Board) => {
-    // Navigate to the idea-workshop page, encoding board id in hash query
-    navigate(`/idea-workshop?board=${board.id}`);
-  }, [navigate]);
+    window.location.hash = `/idea-workshop?board=${board.id}`;
+  }, []);
 
   // ── Drag ────────────────────────────────────────────────────────────────
   const dragging   = useRef(false);
@@ -294,7 +290,7 @@ export default function ProjectsWidget({ pos, collapsed, onPosChange, onCollapse
               <span style={{ fontSize: 7, color: "hsl(var(--accent-h) 20% 28%)", letterSpacing: "0.14em", textTransform: "uppercase" }}>
                 Idea Workshop
               </span>
-              <Corner flip rotate90 />
+              <Corner deg={180} />
             </div>
           </div>
         )}
