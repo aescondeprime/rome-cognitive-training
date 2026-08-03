@@ -138,23 +138,6 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     connections: [],
   },
 
-  // ── Alchemy Lab — lower-left, standalone
-  {
-    id: "alchemy",
-    label: "Alchemy Lab",
-    symbol: "⚗",
-    lucideIcon: "FlaskConical",
-    accent: "hsl(270 55% 62%)",
-    x: 14, y: 76,
-    size: 15,
-    depth: 0.88,
-    href: "/alchemy",
-    tagline: "Experimental features and transmutations",
-    subnodes: [
-      { id: "alch-nootropics", label: "Nootropics", icon: "⚗", href: "/alchemy-lab", description: "Track cognitive compounds, mechanisms, and effects" },
-    ],
-    connections: [],
-  },
 ];
 
 // Build a de-duplicated list of connection pairs for SVG line rendering

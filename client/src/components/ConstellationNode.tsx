@@ -138,26 +138,6 @@ function EyeShape({ color, s }: { color: string; s: number }) {
   );
 }
 
-function FlaskShape({ color, s }: { color: string; s: number }) {
-  return (
-    <g transform={`translate(${-s / 2}, ${-s / 2})`}>
-      <svg width={s} height={s} viewBox="0 0 48 52" fill="none">
-        <rect x="17.5" y="2"  width="13" height="3"  rx="1.5" stroke={color} strokeWidth="1.3" />
-        <rect x="19.5" y="5"  width="9"  height="13" rx="1"   stroke={color} strokeWidth="1.2" />
-        <path d="M19.5 18 L6 44 Q5 46 7 46 L41 46 Q43 46 42 44 L28.5 18 Z"
-          stroke={color} strokeWidth="1.5" strokeLinejoin="round" />
-        <path d="M12 37 L35 37" stroke={color} strokeWidth="0.9" opacity="0.45" />
-        <circle cx="19"   cy="42"   r="2"   stroke={color} strokeWidth="1"   opacity="0.65" />
-        <circle cx="28"   cy="43.5" r="1.3" stroke={color} strokeWidth="0.9" opacity="0.55" />
-        <circle cx="34"   cy="41"   r="1.6" stroke={color} strokeWidth="0.9" opacity="0.55" />
-        <path d="M6 10 L7 13 L10 14 L7 15 L6 18 L5 15 L2 14 L5 13 Z"       fill={color} opacity="0.65" />
-        <path d="M40 8 L41 11 L44 12 L41 13 L40 16 L39 13 L36 12 L39 11 Z"  fill={color} opacity="0.55" />
-        <path d="M43 26 L44 28.5 L46.5 29.5 L44 30.5 L43 33 L42 30.5 L39.5 29.5 L42 28.5 Z" fill={color} opacity="0.45" />
-      </svg>
-    </g>
-  );
-}
-
 function SwordsShape({ color, s }: { color: string; s: number }) {
   // Two swords crossed at center — sword 1: top-left to bottom-right
   //                                sword 2: top-right to bottom-left
@@ -297,7 +277,6 @@ export default memo(function ConstellationNode({
       >
         {node.id === "philosophy"    && <PillarShape   color={iconColor} s={s} />}
         {node.id === "investigative" && <EyeShape      color={iconColor} s={s} />}
-        {node.id === "alchemy"       && <FlaskShape    color={iconColor} s={s} />}
         {node.id === "athena"        && <SwordsShape   color={iconColor} s={s} />}
         {node.id === "strategic"     && <CrownShape    color={iconColor} s={s} />}
         {node.id === "creative"      && <SparklesShape color={iconColor} s={s} />}
