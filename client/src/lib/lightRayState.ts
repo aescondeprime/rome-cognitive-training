@@ -16,6 +16,8 @@ const state = {
   pinnedY: null as number | null,
   // Direction the beam points — radians. null = auto (aim at screen center)
   dirAngle: null as number | null,
+  // Ray colour — HSL components string, e.g. "43 88% 60%"
+  rayColor: "43 88% 60%",
   started: false,
   rafHandle: 0,
 };
@@ -75,6 +77,20 @@ export function setRayEditOffset(_ox: number, _oy: number) {
 
 export function setRayDirection(angle: number | null) {
   state.dirAngle = angle;
+}
+
+/** Update the beam colour. Pass HSL components only, e.g. "210 80% 65%" */
+export function setRayColor(hsl: string) {
+  state.rayColor = hsl;
+}
+
+/** Returns a parsed { h, s, l } object from the stored HSL string */
+export function getRayHSL(): { h: number; s: number; l: number } {
+  const [h = 43, s = 88, l = 60] = state.rayColor
+    .replace(/%/g, "")
+    .split(/\s+/)
+    .map(Number);
+  return { h, s, l };
 }
 
 /** Lissajous drift — slow figure-8, upper screen area. */

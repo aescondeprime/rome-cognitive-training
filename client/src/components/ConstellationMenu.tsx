@@ -3,8 +3,8 @@ import { motion, useMotionValue, useSpring, animate } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
-import { loadLayout, saveLayout, resetLayout, type ConstellationLayout, type NodeOverride } from "@/lib/constellationLayout";
-import { getRayState, pinRaySource, setRayDirection } from "@/lib/lightRayState";
+import { loadLayout, saveLayout, resetLayout, DEFAULT_RAY_COLOR, type ConstellationLayout, type NodeOverride } from "@/lib/constellationLayout";
+import { getRayState, pinRaySource, setRayDirection, setRayColor } from "@/lib/lightRayState";
 import ConstellationNode from "./ConstellationNode";
 import NodeBranchMenu from "./NodeBranchMenu";
 import LightRay from "./LightRay";
@@ -342,12 +342,10 @@ export default function ConstellationMenu({ onClose }: Props) {
   // Persist whenever layout changes
   useEffect(() => { saveLayout(layout); }, [layout]);
 
-  // Apply ray offset to shared ray state whenever it changes
+  // Apply ray state (position + direction + colour) to shared state whenever layout changes
   useEffect(() => {
     // Pin source if user had set a position, otherwise let it drift freely
     if (layout.ray.x !== 0 || layout.ray.y !== 0) {
-      const W = window.innerWidth;
-      const H = window.innerHeight;
       pinRaySource(
         Math.max(0.01, Math.min(0.99, 0.5  + layout.ray.x)),
         Math.max(0.01, Math.min(0.99, 0.28 + layout.ray.y)),
@@ -356,7 +354,8 @@ export default function ConstellationMenu({ onClose }: Props) {
       pinRaySource(null, null);
     }
     setRayDirection(layout.ray.dirAngle ?? null);
-  }, [layout.ray.offsetX, layout.ray.offsetY]);
+    setRayColor(layout.ray.rayColor ?? DEFAULT_RAY_COLOR);
+  }, [layout.ray.x, layout.ray.y, layout.ray.dirAngle, layout.ray.rayColor]);
 
   // Dims
   const getDims = () => ({
@@ -501,11 +500,17 @@ export default function ConstellationMenu({ onClose }: Props) {
     setRayDirection(angle);
   }, []);
 
+  const handleRayColor = useCallback((hsl: string) => {
+    setLayout(prev => ({ ...prev, ray: { ...prev.ray, rayColor: hsl } }));
+    setRayColor(hsl);
+  }, []);
+
   const handleReset = useCallback(() => {
     resetLayout();
-    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null } });
+    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR } });
     pinRaySource(null, null);
     setRayDirection(null);
+    setRayColor(DEFAULT_RAY_COLOR);
     setRayEditOffset(0, 0);
   }, []);
 
@@ -693,12 +698,28 @@ export default function ConstellationMenu({ onClose }: Props) {
         </motion.div>
       </motion.div>
 
-      {/* Ray source handle + direction handle — both HTML divs, fixed position */}
+      {/* Ray source handle + direction handle + colour picker — fixed position, edit mode only */}
       {editMode && (() => {
         const W = window.innerWidth;
         const H = window.innerHeight;
         const srcScreenX = W * (0.5  + layout.ray.x);
         const srcScreenY = H * (0.28 + layout.ray.y);
+        const currentColor = layout.ray.rayColor ?? DEFAULT_RAY_COLOR;
+
+        // Preset palette — hue groups that look great as light rays
+        const RAY_PRESETS: { label: string; hsl: string }[] = [
+          { label: "Gold",       hsl: "43 88% 60%"  },
+          { label: "Amber",      hsl: "30 90% 58%"  },
+          { label: "Rose",       hsl: "345 80% 65%" },
+          { label: "Violet",     hsl: "270 75% 70%" },
+          { label: "Indigo",     hsl: "240 80% 68%" },
+          { label: "Sky",        hsl: "200 85% 62%" },
+          { label: "Teal",       hsl: "175 75% 52%" },
+          { label: "Emerald",    hsl: "145 70% 52%" },
+          { label: "Lime",       hsl: "90 70% 52%"  },
+          { label: "White",      hsl: "43 10% 92%"  },
+        ];
+
         return (
           <>
             <RayHandle
@@ -711,6 +732,100 @@ export default function ConstellationMenu({ onClose }: Props) {
               angle={layout.ray.dirAngle}
               onAngle={handleRayDirection}
             />
+
+            {/* Ray colour picker — fixed top-left card */}
+            <div
+              style={{
+                position: "fixed",
+                top: 20,
+                left: 20,
+                zIndex: 40,
+                background: "hsl(222 18% 8% / 0.92)",
+                border: "1px solid hsl(43 30% 20%)",
+                borderRadius: 10,
+                padding: "10px 12px",
+                backdropFilter: "blur(12px)",
+                minWidth: 160,
+              }}
+            >
+              <p style={{
+                fontFamily: "DM Mono, monospace",
+                fontSize: 8,
+                color: "hsl(43 40% 42%)",
+                letterSpacing: "0.18em",
+                textTransform: "uppercase",
+                marginBottom: 8,
+              }}>Ray Colour</p>
+
+              {/* Swatch grid */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 24px)", gap: 5 }}>
+                {RAY_PRESETS.map(preset => {
+                  const isActive = currentColor === preset.hsl;
+                  return (
+                    <button
+                      key={preset.hsl}
+                      title={preset.label}
+                      onClick={() => handleRayColor(preset.hsl)}
+                      style={{
+                        width: 24,
+                        height: 24,
+                        borderRadius: "50%",
+                        background: `hsl(${preset.hsl})`,
+                        border: isActive
+                          ? "2px solid hsl(43 90% 80%)"
+                          : "2px solid transparent",
+                        outline: isActive ? "1px solid hsl(43 60% 40%)" : "none",
+                        cursor: "pointer",
+                        transition: "transform 0.12s ease, border 0.12s ease",
+                        transform: isActive ? "scale(1.18)" : "scale(1)",
+                        boxShadow: isActive
+                          ? `0 0 8px hsl(${preset.hsl} / 0.7)`
+                          : `0 0 4px hsl(${preset.hsl} / 0.3)`,
+                      }}
+                    />
+                  );
+                })}
+              </div>
+
+              {/* Custom hue slider */}
+              <div style={{ marginTop: 10 }}>
+                <p style={{
+                  fontFamily: "DM Mono, monospace",
+                  fontSize: 7,
+                  color: "hsl(43 30% 35%)",
+                  letterSpacing: "0.14em",
+                  textTransform: "uppercase",
+                  marginBottom: 4,
+                }}>Custom hue</p>
+                <input
+                  type="range"
+                  min={0}
+                  max={360}
+                  step={1}
+                  value={parseInt(currentColor.split(" ")[0]) || 43}
+                  onChange={e => {
+                    const hue = e.target.value;
+                    // Keep saturation + lightness from current, just replace hue
+                    const parts = currentColor.split(" ");
+                    const newHsl = `${hue} ${parts[1] ?? "80%"} ${parts[2] ?? "62%"}`;
+                    handleRayColor(newHsl);
+                  }}
+                  style={{
+                    width: "100%",
+                    accentColor: `hsl(${currentColor})`,
+                    cursor: "pointer",
+                  }}
+                />
+                <p style={{
+                  fontFamily: "DM Mono, monospace",
+                  fontSize: 8,
+                  color: `hsl(${currentColor})`,
+                  textAlign: "center",
+                  marginTop: 2,
+                  letterSpacing: "0.1em",
+                }}>hsl({currentColor})</p>
+              </div>
+            </div>
           </>
         );
       })()}

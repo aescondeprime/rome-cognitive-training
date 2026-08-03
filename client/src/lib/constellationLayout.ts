@@ -10,6 +10,7 @@ export interface RayOverride {
   x: number;           // fractional position offset, range –0.4 → +0.4
   y: number;
   dirAngle: number | null; // beam direction in radians; null = auto-aim
+  rayColor: string;        // HSL string, e.g. "43 88% 60%" (just H S L, no hsl() wrapper)
 }
 
 export interface ConstellationLayout {
@@ -17,8 +18,10 @@ export interface ConstellationLayout {
   ray: RayOverride;
 }
 
+export const DEFAULT_RAY_COLOR = "43 88% 60%";
+
 function defaultLayout(): ConstellationLayout {
-  return { nodes: {}, ray: { x: 0, y: 0, dirAngle: null } };
+  return { nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR } };
 }
 
 export function loadLayout(): ConstellationLayout {
@@ -29,6 +32,10 @@ export function loadLayout(): ConstellationLayout {
     // Backfill dirAngle if missing (upgrading from v1)
     if (parsed.ray && !("dirAngle" in parsed.ray)) {
       parsed.ray.dirAngle = null;
+    }
+    // Backfill rayColor if missing
+    if (parsed.ray && !("rayColor" in parsed.ray)) {
+      parsed.ray.rayColor = DEFAULT_RAY_COLOR;
     }
     return parsed;
   } catch {

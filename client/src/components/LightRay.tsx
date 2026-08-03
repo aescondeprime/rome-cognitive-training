@@ -66,6 +66,17 @@ export default function LightRay({ zIndex = 2 }: Props) {
     function draw() {
       const rs = getRayState();
 
+      // ── Live colour from shared state ──────────────────────────────
+      const col = getRayHSL();
+      const { h, s, l } = col;
+      const lHi  = Math.min(99, l + 18);
+      const lMid = Math.min(99, l + 8);
+      const lLo  = Math.max(0,  l - 12);
+      const lFar = Math.max(0,  l - 20);
+      const sMid = Math.max(0, s - 10);
+      const sLo  = Math.max(0, s - 20);
+      const sFar = Math.max(0, s - 30);
+
       // ── Use the pre-computed position (offset already applied) ──────
       const srcX = rs.srcX * w;
       const srcY = rs.srcY * h;
@@ -100,11 +111,11 @@ export default function LightRay({ zIndex = 2 }: Props) {
           srcX + Math.cos(baseAngle) * farDist,
           srcY + Math.sin(baseAngle) * farDist,
         );
-        grad.addColorStop(0,    `hsla(43, 80%, 72%, ${(layerAlpha * 0.6).toFixed(3)})`);
-        grad.addColorStop(0.08, `hsla(43, 75%, 68%, ${layerAlpha.toFixed(3)})`);
-        grad.addColorStop(0.4,  `hsla(43, 65%, 60%, ${(layerAlpha * 0.55).toFixed(3)})`);
-        grad.addColorStop(0.75, `hsla(43, 55%, 50%, ${(layerAlpha * 0.18).toFixed(3)})`);
-        grad.addColorStop(1,    `hsla(43, 45%, 40%, 0)`);
+        grad.addColorStop(0,    `hsla(${h}, ${s}%, ${lHi}%, ${(layerAlpha * 0.6).toFixed(3)})`);
+        grad.addColorStop(0.08, `hsla(${h}, ${s}%, ${lMid}%, ${layerAlpha.toFixed(3)})`);
+        grad.addColorStop(0.4,  `hsla(${h}, ${sMid}%, ${l}%, ${(layerAlpha * 0.55).toFixed(3)})`);
+        grad.addColorStop(0.75, `hsla(${h}, ${sLo}%, ${lLo}%, ${(layerAlpha * 0.18).toFixed(3)})`);
+        grad.addColorStop(1,    `hsla(${h}, ${sFar}%, ${lFar}%, 0)`);
 
         ctx.beginPath();
         ctx.moveTo(srcX, srcY);
@@ -117,9 +128,9 @@ export default function LightRay({ zIndex = 2 }: Props) {
 
       // ── Source halo ───────────────────────────────────────────────────
       const halo = ctx.createRadialGradient(srcX, srcY, 0, srcX, srcY, w * 0.14);
-      halo.addColorStop(0,    "hsla(43, 90%, 78%, 0.14)");
-      halo.addColorStop(0.35, "hsla(43, 75%, 65%, 0.07)");
-      halo.addColorStop(1,    "hsla(43, 60%, 50%, 0)");
+      halo.addColorStop(0,    `hsla(${h}, ${s}%, ${lHi}%, 0.14)`);
+      halo.addColorStop(0.35, `hsla(${h}, ${sMid}%, ${lMid}%, 0.07)`);
+      halo.addColorStop(1,    `hsla(${h}, ${sLo}%, ${l}%, 0)`);
       ctx.beginPath();
       ctx.arc(srcX, srcY, w * 0.14, 0, Math.PI * 2);
       ctx.fillStyle = halo;
@@ -137,7 +148,7 @@ export default function LightRay({ zIndex = 2 }: Props) {
         const moteA = (Math.sin(moteT * 1.1 + m) * 0.3 + 0.5) * BASE_ALPHA * 3;
         ctx.beginPath();
         ctx.arc(mx, my, 1.2, 0, Math.PI * 2);
-        ctx.fillStyle = `hsla(43, 90%, 82%, ${moteA.toFixed(3)})`;
+        ctx.fillStyle = `hsla(${h}, ${s}%, ${lHi}%, ${moteA.toFixed(3)})`;
         ctx.fill();
       }
 
