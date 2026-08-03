@@ -9,8 +9,16 @@ import ConstellationNode from "./ConstellationNode";
 import NodeBranchMenu from "./NodeBranchMenu";
 
 // ── Moving particle canvas ─────────────────────────────────────────────────
-function ParticleCanvas({ width, height }: { width: number; height: number }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+function ParticleCanvas({
+  width, height, count = 280, particleHue,
+}: { width: number; height: number; count?: number; particleHue?: number }) {
+  const canvasRef  = useRef<HTMLCanvasElement>(null);
+  const countRef   = useRef(count);
+  const hueRef     = useRef(particleHue);
+
+  // Keep refs in sync so the RAF loop always reads current values
+  useEffect(() => { countRef.current = count; }, [count]);
+  useEffect(() => { hueRef.current   = particleHue; }, [particleHue]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -18,15 +26,15 @@ function ParticleCanvas({ width, height }: { width: number; height: number }) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const particles = Array.from({ length: 280 }, () => {
+    // Spawn MAX_COUNT particles once; only draw the first `countRef.current` of them
+    const MAX = 560;
+    const particles = Array.from({ length: MAX }, () => {
       const angle = Math.random() * Math.PI * 2;
       const speed = Math.random() * 0.18 + 0.04;
       return {
-        x:     Math.random() * width,
-        y:     Math.random() * height,
-        vx:    Math.cos(angle) * speed,
-        vy:    Math.sin(angle) * speed,
-        r:     Math.random() * 1.5 + 0.3,
+        x: Math.random() * width, y: Math.random() * height,
+        vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+        r: Math.random() * 1.5 + 0.3,
         alpha: Math.random() * 0.6 + 0.15,
         phase: Math.random() * Math.PI * 2,
         flicker: Math.random() * 0.025 + 0.008,
@@ -35,37 +43,40 @@ function ParticleCanvas({ width, height }: { width: number; height: number }) {
 
     let t = 0;
     let raf: number;
+    let cancelled = false;
 
     function draw() {
+      if (cancelled) return;
       ctx!.clearRect(0, 0, width, height);
       t++;
-      for (const p of particles) {
-        p.x += p.vx;
-        p.y += p.vy;
-        if (p.x < -2)         p.x = width + 2;
-        if (p.x > width + 2)  p.x = -2;
-        if (p.y < -2)         p.y = height + 2;
-        if (p.y > height + 2) p.y = -2;
 
+      // Read accent hue directly from CSS var at draw time (canvas can't use var())
+      const h = hueRef.current ??
+        (parseInt(getComputedStyle(document.documentElement).getPropertyValue("--accent-h").trim()) || 43);
+
+      const visible = Math.min(countRef.current, MAX);
+      for (let i = 0; i < visible; i++) {
+        const p = particles[i];
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < -2)        p.x = width + 2;
+        if (p.x > width + 2) p.x = -2;
+        if (p.y < -2)        p.y = height + 2;
+        if (p.y > height + 2) p.y = -2;
         const flicker = Math.sin(t * p.flicker + p.phase) * 0.28 + 0.72;
         ctx!.beginPath();
         ctx!.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx!.fillStyle = `hsla(var(--accent-h), 55%, 80%, ${p.alpha * flicker})`;
+        ctx!.fillStyle = `hsla(${h}, 55%, 80%, ${(p.alpha * flicker).toFixed(3)})`;
         ctx!.fill();
       }
       raf = requestAnimationFrame(draw);
     }
     draw();
-    return () => cancelAnimationFrame(raf);
+    return () => { cancelled = true; cancelAnimationFrame(raf); };
   }, [width, height]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={width}
-      height={height}
-      style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
-    />
+    <canvas ref={canvasRef} width={width} height={height}
+      style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />
   );
 }
 
@@ -516,9 +527,17 @@ export default function ConstellationMenu({ onClose }: Props) {
     setAccentColor(hsl);
   }, []);
 
+  const handleParticleCount = useCallback((v: number) => {
+    setLayout(prev => ({ ...prev, particleCount: v }));
+  }, []);
+
+  const handleParticleHue = useCallback((v: number | null) => {
+    setLayout(prev => ({ ...prev, particleHue: v }));
+  }, []);
+
   const handleReset = useCallback(() => {
     resetLayout();
-    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR });
+    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null });
     pinRaySource(null, null);
     setRayDirection(null);
     setRayColor(DEFAULT_RAY_COLOR);
@@ -562,7 +581,12 @@ export default function ConstellationMenu({ onClose }: Props) {
       <div className="rome-bg" style={{ position: "absolute", inset: 0 }} />
 
       {/* Particles */}
-      <ParticleCanvas width={dims.w} height={dims.h} />
+      <ParticleCanvas
+        width={dims.w}
+        height={dims.h}
+        count={layout.particleCount ?? 280}
+        particleHue={layout.particleHue ?? undefined}
+      />
 
       {/* Edit mode grid overlay */}
       {editMode && (
@@ -899,6 +923,55 @@ export default function ConstellationMenu({ onClose }: Props) {
                   style={{ width: "100%", accentColor: `hsl(${currentAccent})`, cursor: "pointer" }}
                 />
               </div>
+
+              {/* Divider */}
+              <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />
+
+              {/* Particles section */}
+              <p style={{
+                fontFamily: "DM Mono, monospace",
+                fontSize: 8,
+                color: "hsl(var(--accent-h) var(--accent-s) var(--accent-l))",
+                letterSpacing: "0.18em",
+                textTransform: "uppercase",
+                marginBottom: 6,
+              }}>Particles</p>
+
+              {/* Density slider */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 30% 35%)", letterSpacing: "0.14em", textTransform: "uppercase", margin: 0 }}>Density</p>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 8, color: "hsl(var(--accent-h) 60% 60%)", margin: 0 }}>{layout.particleCount ?? 280}</p>
+              </div>
+              <input
+                type="range" min={0} max={560} step={10}
+                value={layout.particleCount ?? 280}
+                onChange={e => handleParticleCount(parseInt(e.target.value))}
+                style={{ width: "100%", accentColor: `hsl(var(--accent-h) var(--accent-s) var(--accent-l))`, cursor: "pointer", marginBottom: 8 }}
+              />
+
+              {/* Particle colour */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 30% 35%)", letterSpacing: "0.14em", textTransform: "uppercase", margin: 0 }}>Colour</p>
+                <button
+                  onClick={() => handleParticleHue(layout.particleHue == null ? 200 : null)}
+                  style={{
+                    fontFamily: "DM Mono, monospace", fontSize: 6.5, letterSpacing: "0.12em", textTransform: "uppercase",
+                    padding: "2px 7px", borderRadius: 4, cursor: "pointer",
+                    background: layout.particleHue == null ? "hsl(var(--accent-h) 50% 25% / 0.6)" : "hsl(220 14% 14% / 0.6)",
+                    border: layout.particleHue == null ? "1px solid hsl(var(--accent-h) 60% 40%)" : "1px solid hsl(220 14% 28%)",
+                    color: layout.particleHue == null ? "hsl(var(--accent-h) 80% 70%)" : "hsl(220 20% 55%)",
+                    transition: "all 0.15s ease",
+                  }}
+                >{layout.particleHue == null ? "Auto" : "Custom"}</button>
+              </div>
+              {layout.particleHue != null && (
+                <input
+                  type="range" min={0} max={360} step={1}
+                  value={layout.particleHue}
+                  onChange={e => handleParticleHue(parseInt(e.target.value))}
+                  style={{ width: "100%", accentColor: `hsl(${layout.particleHue} 55% 75%)`, cursor: "pointer", marginBottom: 4 }}
+                />
+              )}
 
               {/* Divider */}
               <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />
