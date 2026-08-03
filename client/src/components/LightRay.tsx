@@ -19,7 +19,6 @@ const BASE_ALPHA         = 0.055;
 
 export default function LightRay({ zIndex = 2 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const rafRef    = useRef<number>(0);
 
   useEffect(() => {
     startRayClock();
@@ -33,6 +32,9 @@ export default function LightRay({ zIndex = 2 }: Props) {
     canvas.height = h;
 
     const ctx = canvas.getContext("2d")!;
+
+    // ── Cancellation flag — if this effect re-runs, the old loop stops ──
+    let cancelled = false;
 
     function updateCardGlow(srcXpx: number, srcYpx: number) {
       const cards = document.querySelectorAll<HTMLElement>(".rome-card");
@@ -64,6 +66,9 @@ export default function LightRay({ zIndex = 2 }: Props) {
     }
 
     function draw() {
+      // Stop immediately if this loop instance has been superseded
+      if (cancelled) return;
+
       const rs = getRayState();
 
       // ── Live colour from shared state ──────────────────────────────
@@ -81,6 +86,8 @@ export default function LightRay({ zIndex = 2 }: Props) {
       const srcX = rs.srcX * w;
       const srcY = rs.srcY * h;
 
+      // ── Hard clear — use 'copy' op to guarantee full transparency ──
+      ctx.globalCompositeOperation = "source-over";
       ctx.clearRect(0, 0, w, h);
 
       const halfAngle = (RAY_HALF_ANGLE_DEG * Math.PI) / 180;
@@ -153,10 +160,10 @@ export default function LightRay({ zIndex = 2 }: Props) {
       }
 
       updateCardGlow(srcX, srcY);
-      rafRef.current = requestAnimationFrame(draw);
+      requestAnimationFrame(draw);
     }
 
-    rafRef.current = requestAnimationFrame(draw);
+    requestAnimationFrame(draw);
 
     function onResize() {
       w = window.innerWidth;
@@ -165,8 +172,12 @@ export default function LightRay({ zIndex = 2 }: Props) {
       canvas.height = h;
     }
     window.addEventListener("resize", onResize);
+
     return () => {
-      cancelAnimationFrame(rafRef.current);
+      // Flag this loop as dead — it will stop itself on its next tick
+      cancelled = true;
+      // Clear the canvas immediately so no ghost frame lingers
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
       window.removeEventListener("resize", onResize);
     };
   }, []);

@@ -27,6 +27,8 @@ export function getRayState() {
 }
 
 export function startRayClock() {
+  // Already running — do nothing. The clock is a singleton that never stops
+  // once started; it just keeps updating shared position state.
   if (state.started) return;
   state.started = true;
   let last = performance.now();
