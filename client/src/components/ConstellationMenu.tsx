@@ -51,8 +51,13 @@ function ParticleCanvas({
       t++;
 
       // Read accent hue directly from CSS var at draw time (canvas can't use var())
-      const h = hueRef.current ??
-        (parseInt(getComputedStyle(document.documentElement).getPropertyValue("--accent-h").trim()) || 43);
+      // particleHue === -1 is the "White" sentinel — use low saturation
+      const rawHue = hueRef.current;
+      const isWhite = rawHue === -1;
+      const h = isWhite ? 43
+        : rawHue != null ? rawHue
+        : (parseInt(getComputedStyle(document.documentElement).getPropertyValue("--accent-h").trim()) || 43);
+      const sat = isWhite ? 10 : 55;
 
       const visible = Math.min(countRef.current, MAX);
       for (let i = 0; i < visible; i++) {
@@ -65,7 +70,7 @@ function ParticleCanvas({
         const flicker = Math.sin(t * p.flicker + p.phase) * 0.28 + 0.72;
         ctx!.beginPath();
         ctx!.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx!.fillStyle = `hsla(${h}, 55%, 80%, ${(p.alpha * flicker).toFixed(3)})`;
+        ctx!.fillStyle = `hsla(${h}, ${sat}%, 80%, ${(p.alpha * flicker).toFixed(3)})`;
         ctx!.fill();
       }
       raf = requestAnimationFrame(draw);
@@ -950,28 +955,67 @@ export default function ConstellationMenu({ onClose }: Props) {
               />
 
               {/* Particle colour */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 30% 35%)", letterSpacing: "0.14em", textTransform: "uppercase", margin: 0 }}>Colour</p>
-                <button
-                  onClick={() => handleParticleHue(layout.particleHue == null ? 200 : null)}
-                  style={{
-                    fontFamily: "DM Mono, monospace", fontSize: 6.5, letterSpacing: "0.12em", textTransform: "uppercase",
-                    padding: "2px 7px", borderRadius: 4, cursor: "pointer",
-                    background: layout.particleHue == null ? "hsl(var(--accent-h) 50% 25% / 0.6)" : "hsl(220 14% 14% / 0.6)",
-                    border: layout.particleHue == null ? "1px solid hsl(var(--accent-h) 60% 40%)" : "1px solid hsl(220 14% 28%)",
-                    color: layout.particleHue == null ? "hsl(var(--accent-h) 80% 70%)" : "hsl(220 20% 55%)",
-                    transition: "all 0.15s ease",
-                  }}
-                >{layout.particleHue == null ? "Auto" : "Custom"}</button>
-              </div>
-              {layout.particleHue != null && (
-                <input
-                  type="range" min={0} max={360} step={1}
-                  value={layout.particleHue}
-                  onChange={e => handleParticleHue(parseInt(e.target.value))}
-                  style={{ width: "100%", accentColor: `hsl(${layout.particleHue} 55% 75%)`, cursor: "pointer", marginBottom: 4 }}
-                />
-              )}
+              <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 30% 35%)", letterSpacing: "0.14em", textTransform: "uppercase", margin: "0 0 6px" }}>Colour</p>
+              {(() => {
+                const PARTICLE_PRESETS: { label: string; hue: number | null }[] = [
+                  { label: "Auto",    hue: null },
+                  { label: "Gold",    hue: 43   },
+                  { label: "Amber",   hue: 30   },
+                  { label: "Rose",    hue: 345  },
+                  { label: "Violet",  hue: 270  },
+                  { label: "Indigo",  hue: 240  },
+                  { label: "Sky",     hue: 200  },
+                  { label: "Teal",    hue: 175  },
+                  { label: "Emerald", hue: 145  },
+                  { label: "Lime",    hue: 90   },
+                  { label: "White",   hue: -1   },  // -1 sentinel = desaturated white
+                ];
+                const accentH = parseInt(currentAccent.split(" ")[0]) || 43;
+                return (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 24px)", gap: 5, marginBottom: 6 }}>
+                      {PARTICLE_PRESETS.map(preset => {
+                        // "Auto" swatch mirrors accent colour; "White" uses low-sat white
+                        const swatchHue = preset.hue === null ? accentH : preset.hue;
+                        const swatchColor = preset.label === "White"
+                          ? "hsl(43 10% 92%)"
+                          : `hsl(${swatchHue} 55% 75%)`;
+                        const isActive = preset.hue === null
+                          ? layout.particleHue == null
+                          : layout.particleHue === preset.hue;
+                        return (
+                          <button
+                            key={preset.label}
+                            title={preset.label}
+                            onClick={() => handleParticleHue(preset.hue)}
+                            style={{
+                              width: 24, height: 24, borderRadius: "50%",
+                              background: swatchColor,
+                              border: isActive ? "2px solid hsl(43 90% 80%)" : "2px solid transparent",
+                              outline: isActive ? "1px solid hsl(43 60% 40%)" : "none",
+                              cursor: "pointer",
+                              transition: "transform 0.12s ease, border 0.12s ease",
+                              transform: isActive ? "scale(1.18)" : "scale(1)",
+                              boxShadow: isActive
+                                ? `0 0 8px ${swatchColor.replace(")", " / 0.7)")}`
+                                : `0 0 4px ${swatchColor.replace(")", " / 0.3)")}`,
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+                    {/* Fine-tune hue slider — only shown when not Auto */}
+                    {layout.particleHue != null && (
+                      <input
+                        type="range" min={0} max={360} step={1}
+                        value={layout.particleHue}
+                        onChange={e => handleParticleHue(parseInt(e.target.value))}
+                        style={{ width: "100%", accentColor: `hsl(${layout.particleHue} 55% 75%)`, cursor: "pointer", marginBottom: 2 }}
+                      />
+                    )}
+                  </>
+                );
+              })()}
 
               {/* Divider */}
               <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />
