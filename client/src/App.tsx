@@ -131,7 +131,7 @@ export default function App() {
               </Route>
             </Switch>
           </Router>
-          <LightRay zIndex={1} />
+          <LightRay zIndex={201} />
           <Toaster />
         </AuthGate>
       </ThemeProvider>

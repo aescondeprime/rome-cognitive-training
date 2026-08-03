@@ -51,6 +51,11 @@ export function startRayClock() {
 
     document.documentElement.style.setProperty("--ray-x", `${(state.srcX * 100).toFixed(1)}%`);
     document.documentElement.style.setProperty("--ray-y", `${(state.srcY * 100).toFixed(1)}%`);
+    // Colour components for CSS ambient glow
+    const [rh = 43, rs = 88, rl = 60] = state.rayColor.replace(/%/g, "").split(/\s+/).map(Number);
+    document.documentElement.style.setProperty("--ray-h", String(rh));
+    document.documentElement.style.setProperty("--ray-s", `${rs}%`);
+    document.documentElement.style.setProperty("--ray-l", `${rl}%`);
 
     state.rafHandle = requestAnimationFrame(tick);
   }
