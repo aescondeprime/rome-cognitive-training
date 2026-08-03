@@ -974,6 +974,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
     // GET /api/kronos/today — all items for the user's local today across all calendars
     if (route === "/kronos/today" && method === "GET") {
+      const user = await getActiveUser(req, sb);
       // Accept ?date=YYYY-MM-DD from client (client knows local date)
       const dateStr = (url.searchParams.get("date") ?? new Date().toISOString().slice(0, 10));
       const weekday = new Date(dateStr + "T12:00:00").getDay(); // local noon avoids DST
@@ -996,7 +997,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         const toMins = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
         return toMins(a.start_time) - toMins(b.start_time);
       });
-      return new Response(JSON.stringify(items), { headers: { "Content-Type": "application/json" } });
+      return json(res, 200, items);
     }
 
     // GET /api/kronos/calendars  POST /api/kronos/calendars
