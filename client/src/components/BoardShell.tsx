@@ -39,17 +39,15 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
     queryFn:  () => apiRequest("GET", `/api/boards?type=${type}`).then(r => r.json()),
   });
 
-  // Deep-link: if URL hash contains ?board=ID, auto-select that board once loaded
+  // Deep-link: if sessionStorage has a pending board ID, auto-select it once boards load
   useEffect(() => {
     if (boards.length === 0) return;
-    const hash = window.location.hash; // e.g. "#/idea-workshop?board=42"
-    const match = hash.match(/[?&]board=(\d+)/);
-    if (match) {
-      const id = parseInt(match[1]);
+    const pending = sessionStorage.getItem("rome_open_board_id");
+    if (pending) {
+      const id = parseInt(pending);
+      sessionStorage.removeItem("rome_open_board_id");
       if (boards.find(b => b.id === id)) {
         setActiveBoardId(id);
-        // Clean the param so back-nav works cleanly
-        window.history.replaceState(null, "", window.location.pathname + "#" + hash.replace(/[?&]board=\d+/, ""));
       }
     }
   }, [boards]);
