@@ -10,7 +10,7 @@ import { getRayState, startRayClock, getRayHSL } from "@/lib/lightRayState";
 interface Props { zIndex?: number; }
 
 const RAY_HALF_ANGLE_DEG = 13;
-const BASE_ALPHA         = 0.13;   // higher since no screen-blend boost
+const BASE_ALPHA         = 0.18;   // higher since no screen-blend boost
 
 export default function LightRay({ zIndex = 5 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -93,11 +93,11 @@ export default function LightRay({ zIndex = 5 }: Props) {
       // ── Source halo ────────────────────────────────────────────────
       const lHi = Math.min(99, l + 22);
       const halo = ctx.createRadialGradient(srcX, srcY, 0, srcX, srcY, w * 0.12);
-      halo.addColorStop(0,   `hsla(${hue},${s}%,${lHi}%,0.22)`);
-      halo.addColorStop(0.3, `hsla(${hue},${s}%,${l}%,0.09)`);
+      halo.addColorStop(0,   `hsla(${hue},${s}%,${lHi}%,0.30)`);
+      halo.addColorStop(0.3, `hsla(${hue},${s}%,${l}%,0.12)`);
       halo.addColorStop(1,   `hsla(${hue},${s}%,${l}%,0)`);
       ctx.beginPath();
-      ctx.arc(srcX, srcY, w * 0.12, 0, Math.PI * 2);
+      ctx.arc(srcX, srcY, w * 0.15, 0, Math.PI * 2);
       ctx.fillStyle = halo;
       ctx.fill();
 

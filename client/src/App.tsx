@@ -8,6 +8,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import AppShell from "@/components/AppShell";
 import { ConstellationPortal } from "@/components/ConstellationOverlay";
+import LightRay from "@/components/LightRay";
 import Login from "@/pages/Login";
 
 // Core pages kept
@@ -130,6 +131,7 @@ export default function App() {
               </Route>
             </Switch>
           </Router>
+          <LightRay zIndex={1} />
           <Toaster />
         </AuthGate>
       </ThemeProvider>
