@@ -72,7 +72,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// Apply saved accent colour immediately on boot
+// Apply saved accent colour immediately on boot (module-eval time)
 (() => {
   try {
     const layout = loadLayout();
@@ -81,6 +81,15 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 })();
 
 export default function App() {
+  // Also apply inside a useEffect so it fires after React hydration,
+  // which can reset documentElement inline styles on first mount.
+  useEffect(() => {
+    try {
+      const layout = loadLayout();
+      if (layout.accentColor) setAccentColor(layout.accentColor);
+    } catch {}
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
