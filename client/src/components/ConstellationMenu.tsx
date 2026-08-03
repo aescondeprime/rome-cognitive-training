@@ -545,7 +545,7 @@ export default function ConstellationMenu({ onClose }: Props) {
       onMouseMove={handleMouseMove}
       onMouseLeave={() => { if (!selectedId && !editMode) { mx.set(0); my.set(0); } }}
     >
-      {/* Cave background */}
+      {/* Cave background — static dark gradient, no CSS ray (canvas handles it) */}
       <div className="rome-bg" style={{ position: "absolute", inset: 0 }} />
 
       {/* Particles */}

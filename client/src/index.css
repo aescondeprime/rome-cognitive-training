@@ -139,12 +139,8 @@
   position: fixed;
   inset: 0;
   z-index: 0;
-  /* Deep cave gradient — brighter base */
+  /* Deep cave gradient — static, no CSS ray (canvas handles it) */
   background:
-    radial-gradient(ellipse 90% 70% at var(--ray-x) var(--ray-y),
-      hsl(43 50% 18% / 0.45) 0%,
-      hsl(43 30% 10% / 0.2) 40%,
-      transparent 70%),
     radial-gradient(ellipse 60% 80% at 80% 100%,
       hsl(222 18% 6% / 0.7) 0%,
       transparent 70%),
@@ -160,12 +156,7 @@
   content: '';
   position: absolute;
   inset: 0;
-  background: radial-gradient(
-    ellipse 60% 50% at var(--ray-x, 20%) var(--ray-y, 0%),
-    hsl(43 55% 48% / 0.08) 0%,
-    transparent 70%
-  );
-  transition: background 0.1s linear;
+  /* Removed — canvas LightRay handles all ray rendering */
   pointer-events: none;
 }
 
