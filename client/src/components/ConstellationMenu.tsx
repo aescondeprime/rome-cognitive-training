@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
 import { loadLayout, saveLayout, resetLayout, DEFAULT_RAY_COLOR, type ConstellationLayout, type NodeOverride } from "@/lib/constellationLayout";
-import { getRayState, pinRaySource, setRayDirection, setRayColor } from "@/lib/lightRayState";
+import { getRayState, pinRaySource, setRayDirection, setRayColor, setRayBrightness } from "@/lib/lightRayState";
 import ConstellationNode from "./ConstellationNode";
 import NodeBranchMenu from "./NodeBranchMenu";
 
@@ -354,7 +354,8 @@ export default function ConstellationMenu({ onClose }: Props) {
     }
     setRayDirection(layout.ray.dirAngle ?? null);
     setRayColor(layout.ray.rayColor ?? DEFAULT_RAY_COLOR);
-  }, [layout.ray.x, layout.ray.y, layout.ray.dirAngle, layout.ray.rayColor]);
+    setRayBrightness(layout.ray.rayBrightness ?? 1.0);
+  }, [layout.ray.x, layout.ray.y, layout.ray.dirAngle, layout.ray.rayColor, layout.ray.rayBrightness]);
 
   // Dims
   const getDims = () => ({
@@ -504,12 +505,18 @@ export default function ConstellationMenu({ onClose }: Props) {
     setRayColor(hsl);
   }, []);
 
+  const handleRayBrightness = useCallback((v: number) => {
+    setLayout(prev => ({ ...prev, ray: { ...prev.ray, rayBrightness: v } }));
+    setRayBrightness(v);
+  }, []);
+
   const handleReset = useCallback(() => {
     resetLayout();
-    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR } });
+    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 } });
     pinRaySource(null, null);
     setRayDirection(null);
     setRayColor(DEFAULT_RAY_COLOR);
+    setRayBrightness(1.0);
     setRayEditOffset(0, 0);
   }, []);
 
@@ -701,6 +708,7 @@ export default function ConstellationMenu({ onClose }: Props) {
         const srcScreenX = W * (0.5  + layout.ray.x);
         const srcScreenY = H * (0.28 + layout.ray.y);
         const currentColor = layout.ray.rayColor ?? DEFAULT_RAY_COLOR;
+        const currentBrightness = layout.ray.rayBrightness ?? 1.0;
 
         // Preset palette — hue groups that look great as light rays
         const RAY_PRESETS: { label: string; hsl: string }[] = [
@@ -820,6 +828,40 @@ export default function ConstellationMenu({ onClose }: Props) {
                   marginTop: 2,
                   letterSpacing: "0.1em",
                 }}>hsl({currentColor})</p>
+              </div>
+
+              {/* Brightness slider */}
+              <div style={{ marginTop: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <p style={{
+                    fontFamily: "DM Mono, monospace",
+                    fontSize: 7,
+                    color: "hsl(43 30% 35%)",
+                    letterSpacing: "0.14em",
+                    textTransform: "uppercase",
+                    margin: 0,
+                  }}>Brightness</p>
+                  <p style={{
+                    fontFamily: "DM Mono, monospace",
+                    fontSize: 8,
+                    color: `hsl(${currentColor})`,
+                    margin: 0,
+                    letterSpacing: "0.08em",
+                  }}>{currentBrightness.toFixed(2)}×</p>
+                </div>
+                <input
+                  type="range"
+                  min={0.1}
+                  max={2.0}
+                  step={0.05}
+                  value={currentBrightness}
+                  onChange={e => handleRayBrightness(parseFloat(e.target.value))}
+                  style={{
+                    width: "100%",
+                    accentColor: `hsl(${currentColor})`,
+                    cursor: "pointer",
+                  }}
+                />
               </div>
             </div>
           </>

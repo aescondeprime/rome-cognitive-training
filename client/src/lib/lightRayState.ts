@@ -18,6 +18,8 @@ const state = {
   dirAngle: null as number | null,
   // Ray colour — HSL components string, e.g. "43 88% 60%"
   rayColor: "43 88% 60%",
+  // Ray brightness multiplier — 1.0 = default, 0.2 = dim, 2.0 = bright
+  rayBrightness: 1.0,
   started: false,
   rafHandle: 0,
 };
@@ -89,6 +91,16 @@ export function setRayDirection(angle: number | null) {
 /** Update the beam colour. Pass HSL components only, e.g. "210 80% 65%" */
 export function setRayColor(hsl: string) {
   state.rayColor = hsl;
+}
+
+/** Update the beam brightness multiplier (0.2–2.0, default 1.0) */
+export function setRayBrightness(v: number) {
+  state.rayBrightness = Math.max(0.1, Math.min(2.0, v));
+}
+
+/** Get current brightness multiplier */
+export function getRayBrightness(): number {
+  return state.rayBrightness;
 }
 
 /** Returns a parsed { h, s, l } object from the stored HSL string */

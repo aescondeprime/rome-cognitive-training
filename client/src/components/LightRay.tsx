@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { getRayState, startRayClock, getRayHSL } from "@/lib/lightRayState";
+import { getRayState, startRayClock, getRayHSL, getRayBrightness } from "@/lib/lightRayState";
 
 interface Props { zIndex?: number; }
 
@@ -35,6 +35,7 @@ export default function LightRay({ zIndex = 5 }: Props) {
       const rs  = getRayState();
       const col = getRayHSL();
       const { h: hue, s, l } = col;
+      const bright = getRayBrightness();
 
       const srcX = rs.srcX * w;
       const srcY = rs.srcY * h;
@@ -50,9 +51,9 @@ export default function LightRay({ zIndex = 5 }: Props) {
 
       // ── 3 layered beam passes, wide → narrow, low → higher alpha ───
       const layers = [
-        { spread: 2.2, alpha: BASE_ALPHA * 0.45 },
-        { spread: 1.4, alpha: BASE_ALPHA * 0.70 },
-        { spread: 0.7, alpha: BASE_ALPHA * 1.00 },
+        { spread: 2.2, alpha: BASE_ALPHA * 0.45 * bright },
+        { spread: 1.4, alpha: BASE_ALPHA * 0.70 * bright },
+        { spread: 0.7, alpha: BASE_ALPHA * 1.00 * bright },
       ];
 
       for (const layer of layers) {
@@ -93,8 +94,8 @@ export default function LightRay({ zIndex = 5 }: Props) {
       // ── Source halo ────────────────────────────────────────────────
       const lHi = Math.min(99, l + 22);
       const halo = ctx.createRadialGradient(srcX, srcY, 0, srcX, srcY, w * 0.12);
-      halo.addColorStop(0,   `hsla(${hue},${s}%,${lHi}%,0.18)`);
-      halo.addColorStop(0.3, `hsla(${hue},${s}%,${l}%,0.07)`);
+      halo.addColorStop(0,   `hsla(${hue},${s}%,${lHi}%,${(0.18 * bright).toFixed(3)})`);
+      halo.addColorStop(0.3, `hsla(${hue},${s}%,${l}%,${(0.07 * bright).toFixed(3)})`);
       halo.addColorStop(1,   `hsla(${hue},${s}%,${l}%,0)`);
       ctx.beginPath();
       ctx.arc(srcX, srcY, w * 0.15, 0, Math.PI * 2);
@@ -110,7 +111,7 @@ export default function LightRay({ zIndex = 5 }: Props) {
         const angle = baseAngle + perp;
         const mx    = srcX + Math.cos(angle) * along * w * 0.9;
         const my    = srcY + Math.sin(angle) * along * w * 0.9;
-        const moteA = (Math.sin(moteT * 1.1 + m) * 0.3 + 0.5) * BASE_ALPHA * 2.5;
+        const moteA = (Math.sin(moteT * 1.1 + m) * 0.3 + 0.5) * BASE_ALPHA * 2.5 * bright;
         ctx.beginPath();
         ctx.arc(mx, my, 1.4, 0, Math.PI * 2);
         ctx.fillStyle = `hsla(${hue},${s}%,${lHi}%,${moteA.toFixed(3)})`;
