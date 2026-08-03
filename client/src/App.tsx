@@ -5,7 +5,6 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { getToken, clearToken, authHeaders } from "@/lib/auth";
 import { Toaster } from "@/components/ui/toaster";
-import LightRay from "@/components/LightRay";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import AppShell from "@/components/AppShell";
 import { ConstellationPortal } from "@/components/ConstellationOverlay";
@@ -131,7 +130,6 @@ export default function App() {
               </Route>
             </Switch>
           </Router>
-          <LightRay zIndex={1} />
           <Toaster />
         </AuthGate>
       </ThemeProvider>

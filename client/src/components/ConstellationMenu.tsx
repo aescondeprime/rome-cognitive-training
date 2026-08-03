@@ -5,6 +5,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
 import { loadLayout, saveLayout, resetLayout, DEFAULT_RAY_COLOR, type ConstellationLayout, type NodeOverride } from "@/lib/constellationLayout";
 import { getRayState, pinRaySource, setRayDirection, setRayColor } from "@/lib/lightRayState";
+import LightRay from "./LightRay";
 import ConstellationNode from "./ConstellationNode";
 import NodeBranchMenu from "./NodeBranchMenu";
 
@@ -549,6 +550,9 @@ export default function ConstellationMenu({ onClose }: Props) {
 
       {/* Particles */}
       <ParticleCanvas width={dims.w} height={dims.h} />
+
+      {/* Light ray — lives here so it only renders while constellation is open */}
+      <LightRay zIndex={5} />
 
       {/* Edit mode grid overlay */}
       {editMode && (
