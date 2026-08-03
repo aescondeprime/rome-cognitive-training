@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { getRayState, startRayClock } from "@/lib/lightRayState";
+import { getRayState, startRayClock, getRayHSL } from "@/lib/lightRayState";
 
 interface Props {
   zIndex?: number;
