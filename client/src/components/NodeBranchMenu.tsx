@@ -184,13 +184,13 @@ export default function NodeBranchMenu({
         const labelCY = cy + Math.sin(branch.angle) * (offset + labelDist);
         const lr = 5 * inv; // border radius
 
-        const accentRaw = branch.isPrimary ? node.accent : "hsl(43 60% 55%)";
+        const accentRaw = branch.isPrimary ? node.accent : "hsl(var(--accent-h) 60% 55%)";
         const stemColor  = branch.isPrimary
           ? `${node.accent.replace(")", " / 0.7)").replace("hsl(", "hsl(")}`
-          : "hsl(43 30% 40% / 0.5)";
+          : "hsl(var(--accent-h) 30% 40% / 0.5)";
         const labelBg    = branch.isPrimary ? `${node.accent}18` : "hsl(220 14% 8% / 0.88)";
         const labelBorder= branch.isPrimary ? `${node.accent}45` : "hsl(220 14% 20% / 0.7)";
-        const labelText  = branch.isPrimary ? node.accent : "hsl(43 50% 62%)";
+        const labelText  = branch.isPrimary ? node.accent : "hsl(var(--accent-h) 50% 62%)";
         const fontSize   = fontSize_;
         const iconSize   = iconSize_;
 
@@ -210,7 +210,7 @@ export default function NodeBranchMenu({
               <circle
                 cx={ftX} cy={ftY}
                 r={2.5 * inv}
-                fill={branch.isPrimary ? node.accent : "hsl(43 30% 45%)"}
+                fill={branch.isPrimary ? node.accent : "hsl(var(--accent-h) 30% 45%)"}
                 opacity={anim.stemT}
               />
             )}

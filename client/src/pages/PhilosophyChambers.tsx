@@ -221,12 +221,12 @@ export default function PhilosophyChambers() {
         mobileView === "list" ? "flex w-full" : "hidden md:flex",
       )}
       style={{
-        borderColor: "hsl(43 25% 14% / 0.8)",
+        borderColor: "hsl(var(--accent-h) 25% 14% / 0.8)",
         background:  "hsl(222 18% 5%)",
       }}
     >
       {/* Header */}
-      <div className="px-4 pt-6 pb-3 border-b shrink-0" style={{ borderColor: "hsl(43 25% 14% / 0.5)" }}>
+      <div className="px-4 pt-6 pb-3 border-b shrink-0" style={{ borderColor: "hsl(var(--accent-h) 25% 14% / 0.5)" }}>
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Feather className="w-4 h-4 text-gold-400" />
@@ -258,7 +258,7 @@ export default function PhilosophyChambers() {
 
       {/* Tag filters */}
       {allTags.length > 0 && (
-        <div className="px-3 py-2 border-b flex flex-wrap gap-1.5" style={{ borderColor: "hsl(43 20% 12% / 0.6)" }}>
+        <div className="px-3 py-2 border-b flex flex-wrap gap-1.5" style={{ borderColor: "hsl(var(--accent-h) 20% 12% / 0.6)" }}>
           <button
             onClick={() => setTagFilter(null)}
             className={cn("rome-tag transition-all text-xs py-1 px-2", !tagFilter && "bg-gold-500/15 border-gold-400/40 text-gold-300")}
@@ -330,7 +330,7 @@ export default function PhilosophyChambers() {
       {/* Toolbar */}
       <div
         className="flex items-center gap-0.5 px-3 md:px-6 py-2 border-b shrink-0 overflow-x-auto"
-        style={{ borderColor: "hsl(43 20% 14% / 0.6)", background: "hsl(220 18% 5%)" }}
+        style={{ borderColor: "hsl(var(--accent-h) 20% 14% / 0.6)", background: "hsl(220 18% 5%)" }}
       >
         {/* Mobile: back button */}
         <button
@@ -528,7 +528,7 @@ function NoteRow({ note, selected, onSelect }: { note: Note; selected: boolean; 
         "w-full text-left px-4 py-3.5 transition-all duration-150 border-b active:bg-gold-500/12",
         selected ? "bg-gold-500/8 border-gold-500/15" : "hover:bg-cave-800/60 border-transparent",
       )}
-      style={{ borderBottomColor: "hsl(43 20% 12% / 0.4)" }}
+      style={{ borderBottomColor: "hsl(var(--accent-h) 20% 12% / 0.4)" }}
     >
       <div className="flex items-start justify-between gap-2">
         <p

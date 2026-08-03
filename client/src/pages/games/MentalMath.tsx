@@ -54,7 +54,7 @@ interface Config {
 const DEFAULT_CONFIG: Config = { levelIdx: 1, op: "mixed", trials: 10, timeLimitMs: 60000, threshAdvance: 80, threshFallback: 50 };
 
 type Phase = "idle" | "running" | "feedback" | "result";
-const accent = "hsl(43 88% 60%)";
+const accent = "hsl(var(--accent-h) 88% 60%)";
 
 export default function MentalMath() {
   const [cfg, setCfg] = useState<Config>(DEFAULT_CONFIG);
@@ -139,7 +139,7 @@ export default function MentalMath() {
           {(["+","-","×","÷","mixed"] as Op[]).map(o => (
             <button key={o} onClick={() => setCfg(c => ({ ...c, op: o }))}
               className="px-3 py-1.5 rounded-lg text-[11px] font-semibold tracking-wide uppercase transition-all"
-              style={{ background: cfg.op === o ? `${accent}20` : "hsl(222 20% 5%)", border: `1px solid ${cfg.op === o ? accent : "hsl(43 15% 14%)"}`, color: cfg.op === o ? accent : "hsl(214 20% 45%)", fontFamily: "'Cinzel', serif" }}>
+              style={{ background: cfg.op === o ? `${accent}20` : "hsl(222 20% 5%)", border: `1px solid ${cfg.op === o ? accent : "hsl(var(--accent-h) 15% 14%)"}`, color: cfg.op === o ? accent : "hsl(214 20% 45%)", fontFamily: "'Cinzel', serif" }}>
               {o}
             </button>
           ))}
@@ -152,7 +152,7 @@ export default function MentalMath() {
           <div className="flex items-center justify-between gap-4">
             <label className="text-[11px]" style={{ color: "hsl(214 20% 50%)", fontFamily: "DM Mono, monospace" }}>Difficulty Level</label>
             <select value={cfg.levelIdx} onChange={e => setCfg(c => ({ ...c, levelIdx: Number(e.target.value) }))}
-              className="text-[11px] rounded px-2 py-1" style={{ background: "hsl(222 20% 9%)", border: `1px solid hsl(43 15% 18%)`, color: accent }}>
+              className="text-[11px] rounded px-2 py-1" style={{ background: "hsl(222 20% 9%)", border: `1px solid hsl(var(--accent-h) 15% 18%)`, color: accent }}>
               {LEVEL_LABELS.map((l, i) => <option key={l} value={i}>{l}</option>)}
             </select>
           </div>
@@ -179,8 +179,8 @@ export default function MentalMath() {
 
       {/* Idle instructions */}
       {phase === "idle" && (
-        <div className="mb-5 p-4 rounded-xl border text-[11px] leading-relaxed" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(43 15% 12%)", color: "hsl(214 20% 50%)" }}>
-          <p>An arithmetic expression appears. Calculate the answer mentally and type it, then press <kbd className="px-1 rounded text-[10px]" style={{ background: "hsl(222 20% 9%)", border: "1px solid hsl(43 15% 18%)", color: accent }}>Enter</kbd>. Difficulty adapts to your accuracy.</p>
+        <div className="mb-5 p-4 rounded-xl border text-[11px] leading-relaxed" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(var(--accent-h) 15% 12%)", color: "hsl(214 20% 50%)" }}>
+          <p>An arithmetic expression appears. Calculate the answer mentally and type it, then press <kbd className="px-1 rounded text-[10px]" style={{ background: "hsl(222 20% 9%)", border: "1px solid hsl(var(--accent-h) 15% 18%)", color: accent }}>Enter</kbd>. Difficulty adapts to your accuracy.</p>
         </div>
       )}
 

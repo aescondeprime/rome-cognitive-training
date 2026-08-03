@@ -202,7 +202,7 @@ export default function PASAT() {
       )}
 
       {phase === "idle" && (
-        <div className="mb-5 p-4 rounded-xl border text-[11px] leading-relaxed space-y-2" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(43 15% 12%)", color: "hsl(214 20% 50%)" }}>
+        <div className="mb-5 p-4 rounded-xl border text-[11px] leading-relaxed space-y-2" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(var(--accent-h) 15% 12%)", color: "hsl(214 20% 50%)" }}>
           <p>Numbers appear one at a time. Add the <strong style={{ color: accent }}>current number</strong> to the <strong style={{ color: accent }}>previous one</strong> and enter the sum before the next number appears.</p>
           <p>e.g. stream <strong style={{ color: accent }}>3 → 7 → 4</strong> → you type <strong style={{ color: accent }}>10</strong>, then <strong style={{ color: accent }}>11</strong></p>
           <p>Higher levels reduce the time between numbers. Difficulty adapts automatically.</p>

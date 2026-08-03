@@ -178,7 +178,7 @@
   /* Constant warm floor glow for depth */
   background: radial-gradient(
     ellipse 80% 40% at 50% 110%,
-    hsl(43 30% 14% / 0.35) 0%,
+    hsl(var(--accent-h) 30% 14% / 0.35) 0%,
     transparent 70%
   );
   pointer-events: none;
@@ -217,9 +217,9 @@
 .rome-card:hover {
   box-shadow:
     6px 12px 40px hsl(220 25% 2% / 0.8),
-    inset 1px 1px 0 hsl(43 60% 50% / 0.2),
-    0 0 0 1px hsl(43 50% 40% / 0.25);
-  border-color: hsl(43 40% 28% / 0.75);
+    inset 1px 1px 0 hsl(var(--accent-h) 60% 50% / 0.2),
+    0 0 0 1px hsl(var(--accent-h) 50% 40% / 0.25);
+  border-color: hsl(var(--accent-h) 40% 28% / 0.75);
   transform: translateY(-1px) translateZ(0);
 }
 
@@ -228,7 +228,7 @@
   @extend .rome-card;
   box-shadow:
     2px 4px 20px hsl(220 25% 2% / 0.6),
-    inset 1px 1px 0 hsl(43 60% 50% / 0.06);
+    inset 1px 1px 0 hsl(var(--accent-h) 60% 50% / 0.06);
 }
 
 /* Light-catch highlight strip at top of cards — brighter & ray-aware */
@@ -242,9 +242,9 @@
   /* The JS-driven ray position shifts the bright peak left/right */
   background: linear-gradient(90deg,
     transparent 0%,
-    hsl(43 80% 65% / calc(var(--card-ray-intensity, 0.18))) 30%,
-    hsl(43 80% 68% / calc(var(--card-ray-intensity, 0.32))) 52%,
-    hsl(43 80% 65% / calc(var(--card-ray-intensity, 0.14))) 72%,
+    hsl(var(--accent-h) 80% 65% / calc(var(--card-ray-intensity, 0.18))) 30%,
+    hsl(var(--accent-h) 80% 68% / calc(var(--card-ray-intensity, 0.32))) 52%,
+    hsl(var(--accent-h) 80% 65% / calc(var(--card-ray-intensity, 0.14))) 72%,
     transparent 100%);
   border-radius: 999px;
   pointer-events: none;
@@ -274,20 +274,20 @@
 .gold-gradient {
   background: linear-gradient(135deg,
     hsl(46 90% 72%) 0%,
-    hsl(43 88% 55%) 40%,
+    hsl(var(--accent-h) 88% 55%) 40%,
     hsl(40 80% 42%) 70%,
-    hsl(43 85% 60%) 100%);
+    hsl(var(--accent-h) 85% 60%) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
 .gold-border {
-  border-color: hsl(43 50% 35% / 0.6);
+  border-color: hsl(var(--accent-h) 50% 35% / 0.6);
 }
 
 .gold-glow {
-  box-shadow: 0 0 20px hsl(43 80% 50% / 0.15), 0 0 60px hsl(43 80% 50% / 0.05);
+  box-shadow: 0 0 20px hsl(var(--accent-h) 80% 50% / 0.15), 0 0 60px hsl(var(--accent-h) 80% 50% / 0.05);
 }
 
 /* ─── Primary Button — Roman Gold ────────────────────────────────── */
@@ -302,14 +302,14 @@
   border: none;
   border-radius: var(--radius);
   box-shadow:
-    0 2px 12px hsl(43 80% 40% / 0.35),
+    0 2px 12px hsl(var(--accent-h) 80% 40% / 0.35),
     inset 0 1px 0 hsl(46 90% 75% / 0.3);
   transition: all 0.2s ease;
 }
 .btn-rome:hover {
   background: linear-gradient(135deg, hsl(46 90% 62%) 0%, hsl(42 85% 50%) 100%);
   box-shadow:
-    0 4px 20px hsl(43 80% 40% / 0.5),
+    0 4px 20px hsl(var(--accent-h) 80% 40% / 0.5),
     inset 0 1px 0 hsl(46 90% 80% / 0.4);
   transform: translateY(-1px);
 }
@@ -327,7 +327,7 @@
     /* crimson right edge glow */
     2px 0 12px hsl(0 55% 25% / 0.35),
     /* gold catch-light on top */
-    inset 0 1px 0 hsl(43 60% 40% / 0.08);
+    inset 0 1px 0 hsl(var(--accent-h) 60% 40% / 0.08);
 }
 
 /* ─── Roman Border Design ──────────────────────────────────────────── */
@@ -417,7 +417,7 @@
 }
 
 /* ─── Domain Score Bar Colors ────────────────────────────────────── */
-.score-bar-recall        { background: linear-gradient(90deg, hsl(43 88% 45%), hsl(43 88% 58%)); }
+.score-bar-recall        { background: linear-gradient(90deg, hsl(var(--accent-h) 88% 45%), hsl(var(--accent-h) 88% 58%)); }
 .score-bar-working       { background: linear-gradient(90deg, hsl(270 60% 52%), hsl(270 60% 62%)); }
 .score-bar-focus         { background: linear-gradient(90deg, hsl(165 55% 38%), hsl(165 55% 48%)); }
 .score-bar-flexibility   { background: linear-gradient(90deg, hsl(25 85% 48%), hsl(25 85% 58%)); }
@@ -427,7 +427,7 @@
 .score-bar-metacognition { background: linear-gradient(90deg, hsl(175 55% 38%), hsl(175 55% 48%)); }
 
 /* Domain text colors */
-.text-domain-recall        { color: hsl(43 88% 60%); }
+.text-domain-recall        { color: hsl(var(--accent-h) 88% 60%); }
 .text-domain-working       { color: hsl(270 60% 68%); }
 .text-domain-focus         { color: hsl(165 55% 52%); }
 .text-domain-flexibility   { color: hsl(25 85% 62%); }
@@ -437,7 +437,7 @@
 .text-domain-metacognition { color: hsl(175 55% 52%); }
 
 /* Domain bg (transparent) */
-.bg-domain-recall        { background: hsl(43 88% 58% / 0.12); border-color: hsl(43 88% 58% / 0.3); }
+.bg-domain-recall        { background: hsl(var(--accent-h) 88% 58% / 0.12); border-color: hsl(var(--accent-h) 88% 58% / 0.3); }
 .bg-domain-working       { background: hsl(270 60% 62% / 0.12); border-color: hsl(270 60% 62% / 0.3); }
 .bg-domain-focus         { background: hsl(165 55% 48% / 0.12); border-color: hsl(165 55% 48% / 0.3); }
 .bg-domain-flexibility   { background: hsl(25 85% 58% / 0.12); border-color: hsl(25 85% 58% / 0.3); }
@@ -469,10 +469,10 @@
 .note-content ul { @apply list-disc list-inside text-sm mb-3 space-y-1; color: hsl(46 40% 78%); }
 .note-content ol { @apply list-decimal list-inside text-sm mb-3 space-y-1; color: hsl(46 40% 78%); }
 .note-content blockquote {
-  border-left: 3px solid hsl(43 60% 40%);
+  border-left: 3px solid hsl(var(--accent-h) 60% 40%);
   padding-left: 1rem;
   margin: 1rem 0;
-  color: hsl(43 50% 62%);
+  color: hsl(var(--accent-h) 50% 62%);
   font-style: italic;
 }
 .note-content code {
@@ -482,7 +482,7 @@
   border: 1px solid hsl(216 14% 18%);
   padding: 0.15em 0.4em;
   border-radius: 4px;
-  color: hsl(43 70% 65%);
+  color: hsl(var(--accent-h) 70% 65%);
 }
 .note-content pre {
   background: hsl(216 14% 8%);
@@ -498,9 +498,9 @@
   padding: 0;
 }
 .note-content strong { color: hsl(46 70% 80%); font-weight: 600; }
-.note-content em { color: hsl(43 55% 68%); font-style: italic; }
-.note-content a { color: hsl(43 80% 58%); text-decoration: underline; text-underline-offset: 3px; }
-.note-content hr { border-color: hsl(43 25% 18%); margin: 1.5rem 0; }
+.note-content em { color: hsl(var(--accent-h) 55% 68%); font-style: italic; }
+.note-content a { color: hsl(var(--accent-h) 80% 58%); text-decoration: underline; text-underline-offset: 3px; }
+.note-content hr { border-color: hsl(var(--accent-h) 25% 18%); margin: 1.5rem 0; }
 
 /* ─── Galvanized / neon-blue highlight ───────────────────────────── */
 @keyframes galvanizedPulse {
@@ -558,9 +558,9 @@
   letter-spacing: 0.06em;
   padding: 2px 8px;
   border-radius: 999px;
-  background: hsl(43 40% 14%);
-  border: 1px solid hsl(43 40% 22%);
-  color: hsl(43 70% 62%);
+  background: hsl(var(--accent-h) 40% 14%);
+  border: 1px solid hsl(var(--accent-h) 40% 22%);
+  color: hsl(var(--accent-h) 70% 62%);
 }
 
 /* ─── Animations ─────────────────────────────────────────────────── */
@@ -599,9 +599,9 @@
 
 .gold-shimmer {
   background: linear-gradient(90deg,
-    hsl(43 60% 50%) 0%,
+    hsl(var(--accent-h) 60% 50%) 0%,
     hsl(46 95% 75%) 30%,
-    hsl(43 60% 50%) 60%,
+    hsl(var(--accent-h) 60% 50%) 60%,
     hsl(40 70% 42%) 100%);
   background-size: 200% auto;
   -webkit-background-clip: text;

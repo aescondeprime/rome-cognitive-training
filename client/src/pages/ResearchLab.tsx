@@ -95,7 +95,7 @@ const EXP_TYPES: Record<string, { label: string; shortLabel: string; color: stri
   iv:          { label: "Independent Var.",  shortLabel: "Indep. Var.", color: "hsl(38 80% 65%)",  bg: "hsl(38 35% 7%)",   border: "hsl(38 40% 24%)",  header: "hsl(38 35% 11%)"  },
   dv:          { label: "Dependent Var.",    shortLabel: "Dep. Var.",   color: "hsl(0 60% 65%)",   bg: "hsl(0 35% 7%)",    border: "hsl(0 40% 24%)",   header: "hsl(0 35% 11%)"   },
   cv:          { label: "Controlled Vars.",  shortLabel: "Control",     color: "hsl(175 55% 58%)", bg: "hsl(175 30% 6%)",  border: "hsl(175 35% 22%)", header: "hsl(175 30% 10%)" },
-  materials:   { label: "Materials",         shortLabel: "Materials",   color: "hsl(43 70% 62%)",  bg: "hsl(43 30% 6%)",   border: "hsl(43 35% 22%)",  header: "hsl(43 30% 10%)"  },
+  materials:   { label: "Materials",         shortLabel: "Materials",   color: "hsl(var(--accent-h) 70% 62%)",  bg: "hsl(var(--accent-h) 30% 6%)",   border: "hsl(var(--accent-h) 35% 22%)",  header: "hsl(var(--accent-h) 30% 10%)"  },
   method:      { label: "Method",            shortLabel: "Method",      color: "hsl(145 55% 55%)", bg: "hsl(145 28% 6%)",  border: "hsl(145 32% 20%)", header: "hsl(145 28% 9%)"  },
   results:     { label: "Results",           shortLabel: "Results",     color: "hsl(195 60% 60%)", bg: "hsl(195 30% 6%)",  border: "hsl(195 35% 20%)", header: "hsl(195 30% 9%)"  },
   analysis:    { label: "Analysis",          shortLabel: "Analysis",    color: "hsl(240 50% 70%)", bg: "hsl(240 30% 7%)",  border: "hsl(240 35% 22%)", header: "hsl(240 30% 10%)" },

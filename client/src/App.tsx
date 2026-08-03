@@ -108,7 +108,7 @@ export default function App() {
 
                     {/* Strategic — Taskboard + Kronos Keep */}
                     <Route path="/strategic">
-                      <PlaceholderNode title="Strategic" symbol="♛" accent="hsl(43 88% 60%)" description="Planning and execution intelligence. Taskboard and Kronos Keep are accessible below." />
+                      <PlaceholderNode title="Strategic" symbol="♛" accent="hsl(var(--accent-h) 88% 60%)" description="Planning and execution intelligence. Taskboard and Kronos Keep are accessible below." />
                     </Route>
                     <Route path="/taskboard"    component={Taskboard} />
                     <Route path="/kronos-keep"  component={KronosKeep} />

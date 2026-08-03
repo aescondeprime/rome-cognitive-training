@@ -185,7 +185,7 @@ export default function CWM() {
           {(["verbal", "spatial"] as GameType[]).map(t => (
             <button key={t} onClick={() => setType(t)}
               className="flex-1 py-2 rounded-lg text-[11px] font-semibold tracking-widest uppercase transition-all"
-              style={{ background: type === t ? `${accent}20` : "hsl(222 20% 5%)", border: `1px solid ${type === t ? accent : "hsl(43 15% 14%)"}`, color: type === t ? accent : "hsl(214 20% 45%)", fontFamily: "'Cinzel', serif" }}>
+              style={{ background: type === t ? `${accent}20` : "hsl(222 20% 5%)", border: `1px solid ${type === t ? accent : "hsl(var(--accent-h) 15% 14%)"}`, color: type === t ? accent : "hsl(214 20% 45%)", fontFamily: "'Cinzel', serif" }}>
               {t}
             </button>
           ))}
@@ -217,7 +217,7 @@ export default function CWM() {
 
       {/* IDLE */}
       {phase === "idle" && (
-        <div className="mb-5 p-4 rounded-xl border text-[11px] leading-relaxed space-y-2" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(43 15% 12%)", color: "hsl(214 20% 50%)" }}>
+        <div className="mb-5 p-4 rounded-xl border text-[11px] leading-relaxed space-y-2" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(var(--accent-h) 15% 12%)", color: "hsl(214 20% 50%)" }}>
           {type === "verbal"
             ? <p>Each round: decide if a word is <strong style={{ color: accent }}>spelled correctly</strong>, then remember the <strong style={{ color: accent }}>letter</strong> shown. After all rounds, recall all letters in order.</p>
             : <p>Each round: decide if a shape is <strong style={{ color: accent }}>Y-axis symmetric</strong>, then remember the <strong style={{ color: accent }}>highlighted grid cell</strong>. After all rounds, tap all cells in order.</p>}
@@ -258,7 +258,7 @@ export default function CWM() {
           ) : (
             <div className="grid mx-auto" style={{ display: "grid", gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`, width: 200, height: 200, gap: 4 }}>
               {Array.from({ length: GRID_CELLS }).map((_, i) => (
-                <div key={i} className="rounded" style={{ background: i === currentMemItem ? accent : "hsl(222 20% 10%)", border: `1px solid ${i === currentMemItem ? accent : "hsl(43 15% 14%)"}`, boxShadow: i === currentMemItem ? `0 0 12px ${accent}` : "none" }} />
+                <div key={i} className="rounded" style={{ background: i === currentMemItem ? accent : "hsl(222 20% 10%)", border: `1px solid ${i === currentMemItem ? accent : "hsl(var(--accent-h) 15% 14%)"}`, boxShadow: i === currentMemItem ? `0 0 12px ${accent}` : "none" }} />
               ))}
             </div>
           )}
@@ -281,7 +281,7 @@ export default function CWM() {
           {/* Show what's been recalled */}
           <div className="flex gap-2 flex-wrap justify-center mb-2">
             {recallInput.map((item, i) => (
-              <span key={i} className="px-2 py-1 rounded text-[11px]" style={{ background: i < recallIdx ? `${accent}20` : "hsl(222 20% 8%)", border: `1px solid ${i < recallIdx ? accent : "hsl(43 15% 14%)"}`, color: i < recallIdx ? accent : "hsl(214 20% 35%)" }}>
+              <span key={i} className="px-2 py-1 rounded text-[11px]" style={{ background: i < recallIdx ? `${accent}20` : "hsl(222 20% 8%)", border: `1px solid ${i < recallIdx ? accent : "hsl(var(--accent-h) 15% 14%)"}`, color: i < recallIdx ? accent : "hsl(214 20% 35%)" }}>
                 {item !== null ? (type === "verbal" ? item : `Cell ${item}`) : "?"}
               </span>
             ))}
@@ -291,7 +291,7 @@ export default function CWM() {
               {LETTERS_POOL.map(l => (
                 <button key={l} onClick={() => handleRecall(l)}
                   className="w-10 h-10 rounded-lg text-sm font-bold transition-all active:scale-90"
-                  style={{ background: "hsl(222 20% 8%)", border: `1px solid hsl(43 15% 14%)`, color: "hsl(46 45% 70%)", fontFamily: "'Cinzel', serif" }}>
+                  style={{ background: "hsl(222 20% 8%)", border: `1px solid hsl(var(--accent-h) 15% 14%)`, color: "hsl(46 45% 70%)", fontFamily: "'Cinzel', serif" }}>
                   {l}
                 </button>
               ))}
@@ -301,7 +301,7 @@ export default function CWM() {
               {Array.from({ length: GRID_CELLS }).map((_, i) => (
                 <button key={i} onClick={() => handleRecall(i)}
                   className="rounded transition-all active:scale-90"
-                  style={{ background: "hsl(222 20% 9%)", border: `1px solid hsl(43 15% 16%)` }}
+                  style={{ background: "hsl(222 20% 9%)", border: `1px solid hsl(var(--accent-h) 15% 16%)` }}
                   onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = `${accent}30`; }}
                   onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "hsl(222 20% 9%)"; }}
                 />

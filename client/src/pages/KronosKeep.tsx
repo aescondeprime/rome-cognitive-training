@@ -59,7 +59,7 @@ interface DayItem {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-const GOLD   = "hsl(43 88% 60%)";
+const GOLD   = "hsl(var(--accent-h) 88% 60%)";
 const BLUE   = "hsl(210 65% 62%)";
 const VIOLET = "hsl(270 60% 72%)";
 const CAVE   = "hsl(222 14% 9%)";

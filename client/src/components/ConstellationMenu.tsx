@@ -50,7 +50,7 @@ function ParticleCanvas({ width, height }: { width: number; height: number }) {
         const flicker = Math.sin(t * p.flicker + p.phase) * 0.28 + 0.72;
         ctx!.beginPath();
         ctx!.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx!.fillStyle = `hsla(43, 55%, 80%, ${p.alpha * flicker})`;
+        ctx!.fillStyle = `hsla(var(--accent-h), 55%, 80%, ${p.alpha * flicker})`;
         ctx!.fill();
       }
       raf = requestAnimationFrame(draw);
@@ -138,7 +138,7 @@ function DirectionHandle({
         {/* Orbit ring — only visible in edit mode, dashed */}
         <circle r={ORBIT_R}
           cx={sourceX - dotX} cy={sourceY - dotY}
-          fill="none" stroke="hsl(43 50% 40%)" strokeWidth={0.6}
+          fill="none" stroke="hsl(var(--accent-h) 50% 40%)" strokeWidth={0.6}
           strokeOpacity={0.3} strokeDasharray="3 5"
         />
         {/* Direction dot */}
@@ -223,18 +223,18 @@ function RayHandle({
       }}
     >
       <svg width={44} height={54} viewBox="-22 -22 44 54" overflow="visible">
-        <circle r={18} fill="hsl(43 60% 8% / 0.7)" stroke="hsl(43 90% 62%)"
+        <circle r={18} fill="hsl(var(--accent-h) 60% 8% / 0.7)" stroke="hsl(var(--accent-h) 90% 62%)"
           strokeWidth={1.2} strokeOpacity={0.85}
-          style={{ filter: "drop-shadow(0 0 8px hsl(43 88% 55%))" }}
+          style={{ filter: "drop-shadow(0 0 8px hsl(var(--accent-h) 88% 55%))" }}
         />
-        <circle r={5} fill="hsl(43 95% 70%)" opacity={0.9}
-          style={{ filter: "drop-shadow(0 0 5px hsl(43 95% 65%))" }}
+        <circle r={5} fill="hsl(var(--accent-h) 95% 70%)" opacity={0.9}
+          style={{ filter: "drop-shadow(0 0 5px hsl(var(--accent-h) 95% 65%))" }}
         />
-        <line x1={-11} y1={0}   x2={-6}  y2={0}   stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
-        <line x1={6}   y1={0}   x2={11}  y2={0}   stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
-        <line x1={0}   y1={-11} x2={0}   y2={-6}  stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
-        <line x1={0}   y1={6}   x2={0}   y2={11}  stroke="hsl(43 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
-        <text y={30} textAnchor="middle" fontSize={7.5} fill="hsl(43 70% 60%)" opacity={0.65}
+        <line x1={-11} y1={0}   x2={-6}  y2={0}   stroke="hsl(var(--accent-h) 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
+        <line x1={6}   y1={0}   x2={11}  y2={0}   stroke="hsl(var(--accent-h) 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
+        <line x1={0}   y1={-11} x2={0}   y2={-6}  stroke="hsl(var(--accent-h) 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
+        <line x1={0}   y1={6}   x2={0}   y2={11}  stroke="hsl(var(--accent-h) 80% 65%)" strokeWidth={1} strokeOpacity={0.6} />
+        <text y={30} textAnchor="middle" fontSize={7.5} fill="hsl(var(--accent-h) 70% 60%)" opacity={0.65}
           style={{ fontFamily: "DM Mono, monospace", letterSpacing: "0.1em" }}
         >
           RAY SOURCE
@@ -302,7 +302,7 @@ function EditableNodeGroup({
       <circle
         r={size * 1.55}
         fill="none"
-        stroke="hsl(43 80% 60%)"
+        stroke="hsl(var(--accent-h) 80% 60%)"
         strokeWidth={active ? 1.5 : 1}
         strokeOpacity={active ? 0.7 : 0.35}
         strokeDasharray="4 5"
@@ -310,11 +310,11 @@ function EditableNodeGroup({
       />
       {/* Resize hint dots — top and bottom of ring */}
       <circle r={3} cx={0} cy={-(size * 1.55 + 6)}
-        fill="hsl(43 85% 62%)" opacity={0.7}
+        fill="hsl(var(--accent-h) 85% 62%)" opacity={0.7}
         style={{ cursor: "ns-resize" }}
       />
       <circle r={3} cx={0} cy={(size * 1.55 + 6)}
-        fill="hsl(43 85% 62%)" opacity={0.7}
+        fill="hsl(var(--accent-h) 85% 62%)" opacity={0.7}
         style={{ cursor: "ns-resize" }}
       />
       {children}
@@ -575,7 +575,7 @@ export default function ConstellationMenu({ onClose }: Props) {
             <line key={`v${i}`}
               x1={(i + 1) / 10 * dims.w} y1={0}
               x2={(i + 1) / 10 * dims.w} y2={dims.h}
-              stroke="hsl(43 40% 50%)" strokeWidth={0.4} strokeOpacity={0.10}
+              stroke="hsl(var(--accent-h) 40% 50%)" strokeWidth={0.4} strokeOpacity={0.10}
               strokeDasharray="3 8"
             />
           ))}
@@ -583,7 +583,7 @@ export default function ConstellationMenu({ onClose }: Props) {
             <line key={`h${i}`}
               x1={0} y1={(i + 1) / 10 * dims.h}
               x2={dims.w} y2={(i + 1) / 10 * dims.h}
-              stroke="hsl(43 40% 50%)" strokeWidth={0.4} strokeOpacity={0.10}
+              stroke="hsl(var(--accent-h) 40% 50%)" strokeWidth={0.4} strokeOpacity={0.10}
               strokeDasharray="3 8"
             />
           ))}
@@ -633,7 +633,7 @@ export default function ConstellationMenu({ onClose }: Props) {
                   key={`${aId}-${bId}`}
                   x1={a.x} y1={a.y}
                   x2={b.x} y2={b.y}
-                  stroke={lit ? nodeA.accent : "hsl(43 30% 40%)"}
+                  stroke={lit ? nodeA.accent : "hsl(var(--accent-h) 30% 40%)"}
                   strokeWidth={lit ? 1 : 0.35}
                   strokeOpacity={lit ? 0.6 : editMode ? 0.22 : 0.14}
                   strokeDasharray={lit ? undefined : "3 9"}
@@ -766,7 +766,7 @@ export default function ConstellationMenu({ onClose }: Props) {
                 left: 20,
                 zIndex: 40,
                 background: "hsl(222 18% 8% / 0.92)",
-                border: "1px solid hsl(43 30% 20%)",
+                border: "1px solid hsl(var(--accent-h) 30% 20%)",
                 borderRadius: 10,
                 padding: "10px 12px",
                 backdropFilter: "blur(12px)",
@@ -776,7 +776,7 @@ export default function ConstellationMenu({ onClose }: Props) {
               <p style={{
                 fontFamily: "DM Mono, monospace",
                 fontSize: 8,
-                color: "hsl(43 40% 42%)",
+                color: "hsl(var(--accent-h) 40% 42%)",
                 letterSpacing: "0.18em",
                 textTransform: "uppercase",
                 marginBottom: 8,
@@ -797,9 +797,9 @@ export default function ConstellationMenu({ onClose }: Props) {
                         borderRadius: "50%",
                         background: `hsl(${preset.hsl})`,
                         border: isActive
-                          ? "2px solid hsl(43 90% 80%)"
+                          ? "2px solid hsl(var(--accent-h) 90% 80%)"
                           : "2px solid transparent",
-                        outline: isActive ? "1px solid hsl(43 60% 40%)" : "none",
+                        outline: isActive ? "1px solid hsl(var(--accent-h) 60% 40%)" : "none",
                         cursor: "pointer",
                         transition: "transform 0.12s ease, border 0.12s ease",
                         transform: isActive ? "scale(1.18)" : "scale(1)",
@@ -817,7 +817,7 @@ export default function ConstellationMenu({ onClose }: Props) {
                 <p style={{
                   fontFamily: "DM Mono, monospace",
                   fontSize: 7,
-                  color: "hsl(43 30% 35%)",
+                  color: "hsl(var(--accent-h) 30% 35%)",
                   letterSpacing: "0.14em",
                   textTransform: "uppercase",
                   marginBottom: 4,
@@ -852,7 +852,7 @@ export default function ConstellationMenu({ onClose }: Props) {
               </div>
 
               {/* Divider */}
-              <div style={{ height: 1, background: "hsl(43 15% 18%)", margin: "12px 0 10px" }} />
+              <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "12px 0 10px" }} />
 
               {/* Accent colour picker */}
               <p style={{
@@ -874,8 +874,8 @@ export default function ConstellationMenu({ onClose }: Props) {
                       style={{
                         width: 24, height: 24, borderRadius: "50%",
                         background: `hsl(${preset.hsl})`,
-                        border: isActive ? "2px solid hsl(43 90% 80%)" : "2px solid transparent",
-                        outline: isActive ? "1px solid hsl(43 60% 40%)" : "none",
+                        border: isActive ? "2px solid hsl(var(--accent-h) 90% 80%)" : "2px solid transparent",
+                        outline: isActive ? "1px solid hsl(var(--accent-h) 60% 40%)" : "none",
                         cursor: "pointer",
                         transition: "transform 0.12s ease, border 0.12s ease",
                         transform: isActive ? "scale(1.18)" : "scale(1)",
@@ -901,7 +901,7 @@ export default function ConstellationMenu({ onClose }: Props) {
               </div>
 
               {/* Divider */}
-              <div style={{ height: 1, background: "hsl(43 15% 18%)", margin: "10px 0" }} />
+              <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />
 
               {/* Brightness slider */}
               <div style={{ marginTop: 0 }}>
@@ -909,7 +909,7 @@ export default function ConstellationMenu({ onClose }: Props) {
                   <p style={{
                     fontFamily: "DM Mono, monospace",
                     fontSize: 7,
-                    color: "hsl(43 30% 35%)",
+                    color: "hsl(var(--accent-h) 30% 35%)",
                     letterSpacing: "0.14em",
                     textTransform: "uppercase",
                     margin: 0,
@@ -947,14 +947,14 @@ export default function ConstellationMenu({ onClose }: Props) {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div style={{
               width: 20, height: 20, borderRadius: "50%",
-              background: "hsl(43 40% 12%)", border: "1px solid hsl(43 45% 26%)",
+              background: "hsl(var(--accent-h) 40% 12%)", border: "1px solid hsl(var(--accent-h) 45% 26%)",
               display: "flex", alignItems: "center", justifyContent: "center",
             }}>
-              <span style={{ fontFamily: "'Cinzel', serif", fontSize: 8, color: "hsl(43 80% 60%)", fontWeight: 700 }}>
+              <span style={{ fontFamily: "'Cinzel', serif", fontSize: 8, color: "hsl(var(--accent-h) 80% 60%)", fontWeight: 700 }}>
                 {(activeProfile.name || "T")[0].toUpperCase()}
               </span>
             </div>
-            <span style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "hsl(43 30% 40%)", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+            <span style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "hsl(var(--accent-h) 30% 40%)", letterSpacing: "0.12em", textTransform: "uppercase" }}>
               {activeProfile.name}
             </span>
           </div>
@@ -964,7 +964,7 @@ export default function ConstellationMenu({ onClose }: Props) {
       {/* Bottom hint — switches between normal and edit mode text */}
       <div style={{ position: "absolute", bottom: 28, left: "50%", transform: "translateX(-50%)", zIndex: 30, pointerEvents: "none" }}>
         {editMode ? (
-          <p style={{ fontFamily: "DM Mono, monospace", fontSize: 9, color: "hsl(43 55% 42%)", letterSpacing: "0.18em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+          <p style={{ fontFamily: "DM Mono, monospace", fontSize: 9, color: "hsl(var(--accent-h) 55% 42%)", letterSpacing: "0.18em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
             DRAG NODES · SCROLL TO RESIZE · DRAG RAY SOURCE · ESC TO EXIT
           </p>
         ) : (
@@ -1005,23 +1005,23 @@ export default function ConstellationMenu({ onClose }: Props) {
             width: 36, height: 36,
             borderRadius: "50%",
             background: editMode
-              ? "hsl(43 55% 14% / 0.9)"
+              ? "hsl(var(--accent-h) 55% 14% / 0.9)"
               : "hsl(222 20% 10% / 0.75)",
-            border: `1px solid ${editMode ? "hsl(43 75% 45%)" : "hsl(43 25% 25%)"}`,
+            border: `1px solid ${editMode ? "hsl(var(--accent-h) 75% 45%)" : "hsl(var(--accent-h) 25% 25%)"}`,
             display: "flex", alignItems: "center", justifyContent: "center",
             cursor: "pointer",
-            boxShadow: editMode ? "0 0 12px hsl(43 80% 40% / 0.4)" : "none",
+            boxShadow: editMode ? "0 0 12px hsl(var(--accent-h) 80% 40% / 0.4)" : "none",
             transition: "all 0.2s ease",
           }}
         >
           {editMode ? (
             // Check mark — done editing
-            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="hsl(43 85% 62%)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="hsl(var(--accent-h) 85% 62%)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
               <polyline points="20 6 9 17 4 12" />
             </svg>
           ) : (
             // Pencil
-            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="hsl(43 40% 45%)" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="hsl(var(--accent-h) 40% 45%)" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
               <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
             </svg>

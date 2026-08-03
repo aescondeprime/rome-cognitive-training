@@ -165,7 +165,7 @@ export default function CorsiBlocks() {
           {(["Classic","Reverse","Sticky Classic","Sticky Reverse"] as Variant[]).map(v => (
             <button key={v} onClick={() => setCfg(c => ({ ...c, variant: v }))}
               className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold tracking-wide uppercase transition-all"
-              style={{ background: cfg.variant === v ? `${accent}20` : "hsl(222 20% 5%)", border: `1px solid ${cfg.variant === v ? accent : "hsl(43 15% 14%)"}`, color: cfg.variant === v ? accent : "hsl(214 20% 45%)", fontFamily: "'Cinzel', serif" }}>
+              style={{ background: cfg.variant === v ? `${accent}20` : "hsl(222 20% 5%)", border: `1px solid ${cfg.variant === v ? accent : "hsl(var(--accent-h) 15% 14%)"}`, color: cfg.variant === v ? accent : "hsl(214 20% 45%)", fontFamily: "'Cinzel', serif" }}>
               {v}
             </button>
           ))}
@@ -196,7 +196,7 @@ export default function CorsiBlocks() {
       )}
 
       {phase === "idle" && (
-        <div className="mb-5 p-4 rounded-xl border text-[11px] leading-relaxed" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(43 15% 12%)", color: "hsl(214 20% 50%)" }}>
+        <div className="mb-5 p-4 rounded-xl border text-[11px] leading-relaxed" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(var(--accent-h) 15% 12%)", color: "hsl(214 20% 50%)" }}>
           <p>Blocks will light up one by one. Tap them in the <strong style={{ color: accent }}>{cfg.variant.includes("Reverse") ? "reverse" : "same"}</strong> order. Span adapts to your accuracy.</p>
         </div>
       )}
@@ -204,7 +204,7 @@ export default function CorsiBlocks() {
       {/* Block grid */}
       {(phase === "showing" || phase === "input" || phase === "feedback") && (
         <div ref={containerRef} className="relative rounded-xl mb-4 overflow-hidden"
-          style={{ width: "100%", height: ch, background: "hsl(222 20% 5%)", border: "1px solid hsl(43 15% 12%)" }}>
+          style={{ width: "100%", height: ch, background: "hsl(222 20% 5%)", border: "1px solid hsl(var(--accent-h) 15% 12%)" }}>
           {BLOCKS.map(b => {
             const isLit = litId === b.id || stickyLit.has(b.id);
             const isClicked = phase === "input" && playerSeq.includes(b.id);
@@ -217,7 +217,7 @@ export default function CorsiBlocks() {
                 style={{
                   left: px, top: py, width: BLOCK_SIZE, height: BLOCK_SIZE,
                   background: isLit ? accent : isClicked ? `${accent}50` : "hsl(222 20% 10%)",
-                  border: `1px solid ${isLit ? accent : "hsl(43 15% 18%)"}`,
+                  border: `1px solid ${isLit ? accent : "hsl(var(--accent-h) 15% 18%)"}`,
                   boxShadow: isLit ? `0 0 20px ${accent}80` : "none",
                   cursor: phase === "input" ? "pointer" : "default",
                   transform: isLit ? "scale(1.08)" : "scale(1)",

@@ -67,7 +67,7 @@ export default function Login({ onLogin }: Props) {
       {/* Subtle particle-like background radial */}
       <div style={{
         position: "absolute", inset: 0,
-        background: "radial-gradient(ellipse 70% 60% at 50% 40%, hsl(43 30% 8% / 0.8) 0%, transparent 100%)",
+        background: "radial-gradient(ellipse 70% 60% at 50% 40%, hsl(var(--accent-h) 30% 8% / 0.8) 0%, transparent 100%)",
         pointerEvents: "none",
       }} />
 
@@ -79,26 +79,26 @@ export default function Login({ onLogin }: Props) {
           margin: "0 auto",
           padding: "48px 40px",
           background: "hsl(222 18% 8%)",
-          border: "1px solid hsl(43 20% 16% / 0.8)",
+          border: "1px solid hsl(var(--accent-h) 20% 16% / 0.8)",
           borderRadius: 16,
-          boxShadow: "0 0 60px hsl(43 40% 8% / 0.6), 0 0 120px hsl(43 30% 5% / 0.4)",
+          boxShadow: "0 0 60px hsl(var(--accent-h) 40% 8% / 0.6), 0 0 120px hsl(var(--accent-h) 30% 5% / 0.4)",
         }}
       >
         {/* Logo mark */}
         <div style={{ textAlign: "center", marginBottom: 32 }}>
           <svg width="36" height="36" viewBox="0 0 28 28" fill="none" aria-hidden="true" style={{ margin: "0 auto 12px" }}>
-            <circle cx="14" cy="14" r="12" stroke="hsl(43,88%,55%)" strokeWidth="1.2" fill="none"/>
-            <path d="M7 14 C5 11 6 8 9 8 C8 11 8 13 10 14"  stroke="hsl(43,78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
-            <path d="M7 14 C5 16 6 19 9 19 C8 16 8 15 10 14" stroke="hsl(43,78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
-            <path d="M21 14 C23 11 22 8 19 8 C20 11 20 13 18 14"  stroke="hsl(43,78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
-            <path d="M21 14 C23 16 22 19 19 19 C20 16 20 15 18 14" stroke="hsl(43,78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
-            <rect x="13" y="9" width="2" height="10" rx="1" fill="hsl(43,88%,55%)" opacity="0.7"/>
+            <circle cx="14" cy="14" r="12" stroke="hsl(var(--accent-h),88%,55%)" strokeWidth="1.2" fill="none"/>
+            <path d="M7 14 C5 11 6 8 9 8 C8 11 8 13 10 14"  stroke="hsl(var(--accent-h),78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
+            <path d="M7 14 C5 16 6 19 9 19 C8 16 8 15 10 14" stroke="hsl(var(--accent-h),78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
+            <path d="M21 14 C23 11 22 8 19 8 C20 11 20 13 18 14"  stroke="hsl(var(--accent-h),78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
+            <path d="M21 14 C23 16 22 19 19 19 C20 16 20 15 18 14" stroke="hsl(var(--accent-h),78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
+            <rect x="13" y="9" width="2" height="10" rx="1" fill="hsl(var(--accent-h),88%,55%)" opacity="0.7"/>
           </svg>
           <h1 style={{
             fontFamily: "'Cinzel', serif",
             fontSize: 15, fontWeight: 700,
             letterSpacing: "0.22em",
-            color: "hsl(43 75% 58%)",
+            color: "hsl(var(--accent-h) 75% 58%)",
             textTransform: "uppercase",
             margin: 0,
           }}>
@@ -118,7 +118,7 @@ export default function Login({ onLogin }: Props) {
           display: "flex", marginBottom: 28,
           background: "hsl(222 20% 6%)",
           borderRadius: 8, padding: 3,
-          border: "1px solid hsl(43 15% 12%)",
+          border: "1px solid hsl(var(--accent-h) 15% 12%)",
         }}>
           {(["login", "register"] as const).map(m => (
             <button
@@ -131,8 +131,8 @@ export default function Login({ onLogin }: Props) {
                 fontSize: 11, fontFamily: "'Cinzel', serif",
                 letterSpacing: "0.1em", textTransform: "uppercase",
                 cursor: "pointer",
-                background: mode === m ? "hsl(43 30% 12%)" : "transparent",
-                color: mode === m ? "hsl(43 75% 58%)" : "hsl(214 15% 36%)",
+                background: mode === m ? "hsl(var(--accent-h) 30% 12%)" : "transparent",
+                color: mode === m ? "hsl(var(--accent-h) 75% 58%)" : "hsl(214 15% 36%)",
                 transition: "all 0.2s ease",
               }}
             >
@@ -144,7 +144,7 @@ export default function Login({ onLogin }: Props) {
         {/* Fields */}
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div>
-            <label style={{ display: "block", fontSize: 10, color: "hsl(43 30% 38%)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6, fontFamily: "DM Mono, monospace" }}>
+            <label style={{ display: "block", fontSize: 10, color: "hsl(var(--accent-h) 30% 38%)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6, fontFamily: "DM Mono, monospace" }}>
               Profile Name
             </label>
             <input
@@ -157,19 +157,19 @@ export default function Login({ onLogin }: Props) {
                 width: "100%", boxSizing: "border-box",
                 padding: "10px 14px",
                 background: "hsl(222 20% 6%)",
-                border: "1px solid hsl(43 15% 14%)",
-                borderRadius: 8, color: "hsl(43 30% 80%)",
+                border: "1px solid hsl(var(--accent-h) 15% 14%)",
+                borderRadius: 8, color: "hsl(var(--accent-h) 30% 80%)",
                 fontSize: 14, outline: "none",
                 fontFamily: "DM Sans, sans-serif",
                 transition: "border-color 0.2s",
               }}
-              onFocus={e => e.target.style.borderColor = "hsl(43 50% 30%)"}
-              onBlur={e => e.target.style.borderColor = "hsl(43 15% 14%)"}
+              onFocus={e => e.target.style.borderColor = "hsl(var(--accent-h) 50% 30%)"}
+              onBlur={e => e.target.style.borderColor = "hsl(var(--accent-h) 15% 14%)"}
             />
           </div>
 
           <div>
-            <label style={{ display: "block", fontSize: 10, color: "hsl(43 30% 38%)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6, fontFamily: "DM Mono, monospace" }}>
+            <label style={{ display: "block", fontSize: 10, color: "hsl(var(--accent-h) 30% 38%)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6, fontFamily: "DM Mono, monospace" }}>
               Password
             </label>
             <input
@@ -181,20 +181,20 @@ export default function Login({ onLogin }: Props) {
                 width: "100%", boxSizing: "border-box",
                 padding: "10px 14px",
                 background: "hsl(222 20% 6%)",
-                border: "1px solid hsl(43 15% 14%)",
-                borderRadius: 8, color: "hsl(43 30% 80%)",
+                border: "1px solid hsl(var(--accent-h) 15% 14%)",
+                borderRadius: 8, color: "hsl(var(--accent-h) 30% 80%)",
                 fontSize: 14, outline: "none",
                 fontFamily: "DM Sans, sans-serif",
                 transition: "border-color 0.2s",
               }}
-              onFocus={e => e.target.style.borderColor = "hsl(43 50% 30%)"}
-              onBlur={e => e.target.style.borderColor = "hsl(43 15% 14%)"}
+              onFocus={e => e.target.style.borderColor = "hsl(var(--accent-h) 50% 30%)"}
+              onBlur={e => e.target.style.borderColor = "hsl(var(--accent-h) 15% 14%)"}
             />
           </div>
 
           {mode === "register" && (
             <div>
-              <label style={{ display: "block", fontSize: 10, color: "hsl(43 30% 38%)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6, fontFamily: "DM Mono, monospace" }}>
+              <label style={{ display: "block", fontSize: 10, color: "hsl(var(--accent-h) 30% 38%)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6, fontFamily: "DM Mono, monospace" }}>
                 Confirm Password
               </label>
               <input
@@ -206,14 +206,14 @@ export default function Login({ onLogin }: Props) {
                   width: "100%", boxSizing: "border-box",
                   padding: "10px 14px",
                   background: "hsl(222 20% 6%)",
-                  border: "1px solid hsl(43 15% 14%)",
-                  borderRadius: 8, color: "hsl(43 30% 80%)",
+                  border: "1px solid hsl(var(--accent-h) 15% 14%)",
+                  borderRadius: 8, color: "hsl(var(--accent-h) 30% 80%)",
                   fontSize: 14, outline: "none",
                   fontFamily: "DM Sans, sans-serif",
                   transition: "border-color 0.2s",
                 }}
-                onFocus={e => e.target.style.borderColor = "hsl(43 50% 30%)"}
-                onBlur={e => e.target.style.borderColor = "hsl(43 15% 14%)"}
+                onFocus={e => e.target.style.borderColor = "hsl(var(--accent-h) 50% 30%)"}
+                onBlur={e => e.target.style.borderColor = "hsl(var(--accent-h) 15% 14%)"}
               />
             </div>
           )}
@@ -238,16 +238,16 @@ export default function Login({ onLogin }: Props) {
           style={{
             marginTop: 24,
             width: "100%", padding: "11px 0",
-            background: loading ? "hsl(43 20% 10%)" : "hsl(43 35% 14%)",
-            border: "1px solid hsl(43 40% 24%)",
+            background: loading ? "hsl(var(--accent-h) 20% 10%)" : "hsl(var(--accent-h) 35% 14%)",
+            border: "1px solid hsl(var(--accent-h) 40% 24%)",
             borderRadius: 8, cursor: loading ? "wait" : "pointer",
-            color: loading ? "hsl(43 30% 36%)" : "hsl(43 80% 62%)",
+            color: loading ? "hsl(var(--accent-h) 30% 36%)" : "hsl(var(--accent-h) 80% 62%)",
             fontSize: 12, fontFamily: "'Cinzel', serif",
             letterSpacing: "0.14em", textTransform: "uppercase",
             transition: "all 0.2s ease",
           }}
-          onMouseEnter={e => { if (!loading) (e.target as HTMLButtonElement).style.background = "hsl(43 35% 18%)"; }}
-          onMouseLeave={e => { if (!loading) (e.target as HTMLButtonElement).style.background = "hsl(43 35% 14%)"; }}
+          onMouseEnter={e => { if (!loading) (e.target as HTMLButtonElement).style.background = "hsl(var(--accent-h) 35% 18%)"; }}
+          onMouseLeave={e => { if (!loading) (e.target as HTMLButtonElement).style.background = "hsl(var(--accent-h) 35% 14%)"; }}
         >
           {loading ? "…" : mode === "login" ? "Enter" : "Create Profile"}
         </button>

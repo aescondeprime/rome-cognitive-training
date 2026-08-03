@@ -69,7 +69,7 @@ export default function DomainDetailPanel({ node, onClose, onNavigate }: Props) 
               <button
                 onClick={onClose}
                 className="shrink-0 mt-0.5 transition-opacity opacity-40 hover:opacity-80"
-                style={{ color: "hsl(43 40% 50%)" }}
+                style={{ color: "hsl(var(--accent-h) 40% 50%)" }}
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -106,7 +106,7 @@ export default function DomainDetailPanel({ node, onClose, onNavigate }: Props) 
                   title={sub.description}
                   className="w-full flex items-center gap-3 px-3 py-2 rounded-lg border border-transparent transition-all text-left"
                   style={{ cursor: "pointer" }}
-                  onMouseEnter={e => (e.currentTarget.style.background = "hsl(43 20% 9%)")}
+                  onMouseEnter={e => (e.currentTarget.style.background = "hsl(var(--accent-h) 20% 9%)")}
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                 >
                   <span

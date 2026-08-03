@@ -21,7 +21,7 @@ const TRIALS = [
     href: "/athena/mental-math",
     name: "Mental Math",
     symbol: "∑",
-    accent: "hsl(43 88% 60%)",
+    accent: "hsl(var(--accent-h) 88% 60%)",
     desc: "Progressive arithmetic problems solved without pen or paper. Scales from single-digit addition to multi-step mixed operations.",
   },
   {
@@ -71,14 +71,14 @@ export default function AthenaTrials() {
               className="group flex items-center gap-4 px-5 py-4 rounded-xl border cursor-pointer transition-all"
               style={{
                 background: "hsl(222 20% 5% / 0.6)",
-                borderColor: "hsl(43 15% 12%)",
+                borderColor: "hsl(var(--accent-h) 15% 12%)",
               }}
               onMouseEnter={e => {
                 (e.currentTarget as HTMLDivElement).style.borderColor = `${t.accent}40`;
                 (e.currentTarget as HTMLDivElement).style.background = `${t.accent}08`;
               }}
               onMouseLeave={e => {
-                (e.currentTarget as HTMLDivElement).style.borderColor = "hsl(43 15% 12%)";
+                (e.currentTarget as HTMLDivElement).style.borderColor = "hsl(var(--accent-h) 15% 12%)";
                 (e.currentTarget as HTMLDivElement).style.background = "hsl(222 20% 5% / 0.6)";
               }}
             >

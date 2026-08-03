@@ -251,7 +251,9 @@ export default memo(function ConstellationNode({
   // ── Visual params ─────────────────────────────────────────────────────
   // Icon stroke: cool blue-white glass at rest → warm gold under ray / when selected
   const warm = rayIntensity * 0.5 + (lit ? 0.55 : 0);
-  const hue  = Math.round(210 - warm * 168);   // 210 blue → 42 gold
+  // Read accent hue from CSS var so it respects the user's accent colour choice
+  const accentHue = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--accent-h").trim()) || 43;
+  const hue  = Math.round(210 - warm * (210 - accentHue));   // 210 blue → accentHue
   const sat  = Math.round(65  + warm * 22);
   const lum  = Math.round(72  + warm * 14);
   const opa  = lit ? 0.95 : 0.50 + rayIntensity * 0.28;
@@ -260,7 +262,7 @@ export default memo(function ConstellationNode({
   // Border/glow
   const borderBase    = rayIntensity * 0.45 + 0.12;
   const borderOpacity = lit ? Math.min(1, borderBase + 0.52) : borderBase;
-  const borderColor   = lit ? "hsl(43 85% 62%)" : `hsl(${hue} ${sat}% ${lum}%)`;
+  const borderColor   = lit ? "hsl(var(--accent-h) 85% 62%)" : `hsl(${hue} ${sat}% ${lum}%)`;
   const glowStr       = lit ? 8 + rayIntensity * 12 : rayIntensity * 4;
 
   const s = iconSize * 0.72; // icon inner size
@@ -306,7 +308,7 @@ export default memo(function ConstellationNode({
         y={s * 0.70}
         textAnchor="middle"
         fontSize={8.5}
-        fill="hsl(43 75% 68%)"
+        fill="hsl(var(--accent-h) 75% 68%)"
         opacity={lit ? 0.9 : 0}
         style={{
           fontFamily: "'Cinzel', serif",

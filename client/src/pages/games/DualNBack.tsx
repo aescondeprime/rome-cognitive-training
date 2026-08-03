@@ -201,9 +201,9 @@ export default function DualNBack() {
 
       {/* Instructions */}
       {phase === "idle" && (
-        <div className="mb-6 p-4 rounded-xl border text-[11px] space-y-1.5 leading-relaxed" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(43 15% 12%)", color: "hsl(214 20% 50%)" }}>
+        <div className="mb-6 p-4 rounded-xl border text-[11px] space-y-1.5 leading-relaxed" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(var(--accent-h) 15% 12%)", color: "hsl(214 20% 50%)" }}>
           <p>A sequence of signals plays one at a time. Match each signal to what appeared <strong style={{ color: accentColor }}>N steps back</strong>.</p>
-          <p><kbd className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "hsl(222 20% 9%)", border: "1px solid hsl(43 15% 18%)", color: accentColor }}>A</kbd> — audio letter match &nbsp;&nbsp; <kbd className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "hsl(222 20% 9%)", border: "1px solid hsl(43 15% 18%)", color: accentColor }}>L</kbd> — position match</p>
+          <p><kbd className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "hsl(222 20% 9%)", border: "1px solid hsl(var(--accent-h) 15% 18%)", color: accentColor }}>A</kbd> — audio letter match &nbsp;&nbsp; <kbd className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "hsl(222 20% 9%)", border: "1px solid hsl(var(--accent-h) 15% 18%)", color: accentColor }}>L</kbd> — position match</p>
           <p>Auto-advances to N+1 when accuracy ≥ {cfg.threshAdvance}%, drops to N-1 when &lt; {cfg.threshFallback}%.</p>
         </div>
       )}
@@ -223,7 +223,7 @@ export default function DualNBack() {
                   className="rounded-lg transition-all duration-150"
                   style={{
                     background: isActive ? accentColor : "hsl(222 20% 8%)",
-                    border: `1px solid ${isActive ? accentColor : "hsl(43 15% 14%)"}`,
+                    border: `1px solid ${isActive ? accentColor : "hsl(var(--accent-h) 15% 14%)"}`,
                     boxShadow: isActive ? `0 0 24px ${accentColor}80, 0 0 8px ${accentColor}` : "none",
                   }}
                 />

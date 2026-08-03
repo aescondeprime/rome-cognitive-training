@@ -146,7 +146,7 @@ export default function MemorySpan() {
           {TYPES.map(t => (
             <button key={t} onClick={() => setCfg(c => ({ ...c, type: t }))}
               className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold tracking-wide uppercase transition-all"
-              style={{ background: cfg.type === t ? `${accent}20` : "hsl(222 20% 5%)", border: `1px solid ${cfg.type === t ? accent : "hsl(43 15% 14%)"}`, color: cfg.type === t ? accent : "hsl(214 20% 45%)", fontFamily: "'Cinzel', serif" }}>
+              style={{ background: cfg.type === t ? `${accent}20` : "hsl(222 20% 5%)", border: `1px solid ${cfg.type === t ? accent : "hsl(var(--accent-h) 15% 14%)"}`, color: cfg.type === t ? accent : "hsl(214 20% 45%)", fontFamily: "'Cinzel', serif" }}>
               {t}
             </button>
           ))}
@@ -177,7 +177,7 @@ export default function MemorySpan() {
       )}
 
       {phase === "idle" && (
-        <div className="mb-5 p-4 rounded-xl border text-[11px] leading-relaxed" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(43 15% 12%)", color: "hsl(214 20% 50%)" }}>
+        <div className="mb-5 p-4 rounded-xl border text-[11px] leading-relaxed" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(var(--accent-h) 15% 12%)", color: "hsl(214 20% 50%)" }}>
           <p>A sequence flashes one item at a time. Recall it <strong style={{ color: accent }}>
             {cfg.type.includes("Reverse") ? "in reverse" : cfg.type.includes("Sorted") ? "sorted alphabetically/numerically" : "in the same order"}
           </strong>. Span grows as you improve.</p>
@@ -213,7 +213,7 @@ export default function MemorySpan() {
                     background: phase === "feedback"
                       ? isCorrect ? "hsl(130 40% 15%)" : "hsl(0 40% 15%)"
                       : val ? `${accent}20` : "hsl(222 20% 8%)",
-                    border: `1px solid ${phase === "feedback" ? (isCorrect ? "hsl(130 60% 40%)" : "hsl(0 60% 40%)") : val ? accent : "hsl(43 15% 16%)"}`,
+                    border: `1px solid ${phase === "feedback" ? (isCorrect ? "hsl(130 60% 40%)" : "hsl(0 60% 40%)") : val ? accent : "hsl(var(--accent-h) 15% 16%)"}`,
                     color: phase === "feedback" ? (isCorrect ? "hsl(130 60% 60%)" : "hsl(0 60% 60%)") : val ? accent : "hsl(214 20% 30%)",
                     fontFamily: "'Cinzel', serif",
                   }}>
@@ -235,15 +235,15 @@ export default function MemorySpan() {
               {pool.map(item => (
                 <button key={item} onClick={() => handleInput(item)}
                   className="w-11 h-11 rounded-lg text-sm font-bold transition-all active:scale-90"
-                  style={{ background: "hsl(222 20% 8%)", border: `1px solid hsl(43 15% 16%)`, color: "hsl(46 45% 70%)", fontFamily: "'Cinzel', serif" }}
+                  style={{ background: "hsl(222 20% 8%)", border: `1px solid hsl(var(--accent-h) 15% 16%)`, color: "hsl(46 45% 70%)", fontFamily: "'Cinzel', serif" }}
                   onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = accent; (e.currentTarget as HTMLButtonElement).style.color = accent; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "hsl(43 15% 16%)"; (e.currentTarget as HTMLButtonElement).style.color = "hsl(46 45% 70%)"; }}>
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "hsl(var(--accent-h) 15% 16%)"; (e.currentTarget as HTMLButtonElement).style.color = "hsl(46 45% 70%)"; }}>
                   {item}
                 </button>
               ))}
               <button onClick={handleBackspace}
                 className="w-11 h-11 rounded-lg flex items-center justify-center transition-all active:scale-90"
-                style={{ background: "hsl(222 20% 8%)", border: "1px solid hsl(43 15% 16%)", color: "hsl(214 20% 45%)" }}>
+                style={{ background: "hsl(222 20% 8%)", border: "1px solid hsl(var(--accent-h) 15% 16%)", color: "hsl(214 20% 45%)" }}>
                 <Delete className="w-4 h-4" />
               </button>
             </div>
