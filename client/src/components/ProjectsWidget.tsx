@@ -72,9 +72,11 @@ export default function ProjectsWidget({ pos, collapsed, onPosChange, onCollapse
   // Use the same pattern as NodeBranchMenu: set window.location.hash directly.
   // The ?board= param lives inside the hash fragment so BoardShell can read it.
   const openBoard = useCallback((board: Board) => {
-    // Store the target board ID in sessionStorage so BoardShell can pick it up
+    // Store the target board ID so BoardShell auto-selects it on mount
     sessionStorage.setItem("rome_open_board_id", String(board.id));
+    // Set hash then fire hashchange so wouter picks up the route immediately
     window.location.hash = "/idea-workshop";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
   }, []);
 
   // ── Drag ────────────────────────────────────────────────────────────────
