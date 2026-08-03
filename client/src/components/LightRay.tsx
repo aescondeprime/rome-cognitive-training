@@ -1,23 +1,18 @@
 /**
- * LightRay — physics light ray, original Mark VII style.
- *
- * Reads state.srcX/srcY (with editor offset already applied) from the shared
- * clock — so the beam always follows the ray source handle exactly.
- * Reads state.dirAngle for beam direction (null = auto-aim at screen center).
+ * LightRay — single canvas, no blend mode, no accumulation.
+ * Draws on a fully transparent canvas each frame.
+ * No mixBlendMode — avoids GPU compositing layer stacking artifacts.
  */
 
 import { useEffect, useRef } from "react";
 import { getRayState, startRayClock, getRayHSL } from "@/lib/lightRayState";
 
-interface Props {
-  zIndex?: number;
-}
+interface Props { zIndex?: number; }
 
-const RAY_HALF_ANGLE_DEG = 11;
-const BEAM_STEPS         = 4;
-const BASE_ALPHA         = 0.055;
+const RAY_HALF_ANGLE_DEG = 13;
+const BASE_ALPHA         = 0.13;   // higher since no screen-blend boost
 
-export default function LightRay({ zIndex = 2 }: Props) {
+export default function LightRay({ zIndex = 5 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -32,78 +27,37 @@ export default function LightRay({ zIndex = 2 }: Props) {
     canvas.height = h;
 
     const ctx = canvas.getContext("2d")!;
-
-    // ── Cancellation flag — if this effect re-runs, the old loop stops ──
     let cancelled = false;
 
-    function updateCardGlow(srcXpx: number, srcYpx: number) {
-      const cards = document.querySelectorAll<HTMLElement>(".rome-card");
-      cards.forEach(card => {
-        const rect = card.getBoundingClientRect();
-        const cardCx = (rect.left + rect.right) / 2;
-        const cardCy = (rect.top  + rect.bottom) / 2;
-
-        const dx   = (cardCx - srcXpx) / w;
-        const dy   = (cardCy - srcYpx) / h;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        const falloff   = Math.max(0, 1 - dist * 1.6);
-        const intensity = falloff * falloff;
-
-        const borderAlpha = (intensity * 0.55 + 0.22).toFixed(2);
-        card.style.borderColor = `hsl(43 55% 35% / ${borderAlpha})`;
-
-        const glowStrength = (intensity * 28).toFixed(0);
-        const glowAlpha    = (intensity * 0.22 + 0.04).toFixed(2);
-        const offX = (-dx * 12 * intensity * w).toFixed(1);
-        const offY = (-dy * 12 * intensity * h).toFixed(1);
-        card.style.boxShadow = [
-          `4px 8px 32px hsl(220 25% 2% / 0.65)`,
-          `inset 1px 1px 0 hsl(43 60% 50% / ${(intensity * 0.22 + 0.08).toFixed(2)})`,
-          `${offX}px ${offY}px ${glowStrength}px hsl(43 70% 52% / ${glowAlpha})`,
-        ].join(", ");
-      });
-    }
-
     function draw() {
-      // Stop immediately if this loop instance has been superseded
       if (cancelled) return;
 
-      const rs = getRayState();
-
-      // ── Live colour from shared state ──────────────────────────────
+      const rs  = getRayState();
       const col = getRayHSL();
-      const { h, s, l } = col;
-      const lHi  = Math.min(99, l + 18);
-      const lMid = Math.min(99, l + 8);
-      const lLo  = Math.max(0,  l - 12);
-      const lFar = Math.max(0,  l - 20);
-      const sMid = Math.max(0, s - 10);
-      const sLo  = Math.max(0, s - 20);
-      const sFar = Math.max(0, s - 30);
+      const { h: hue, s, l } = col;
 
-      // ── Use the pre-computed position (offset already applied) ──────
       const srcX = rs.srcX * w;
       const srcY = rs.srcY * h;
 
-      // ── Hard clear — use 'copy' op to guarantee full transparency ──
-      ctx.globalCompositeOperation = "source-over";
+      // Hard clear — source-over on a cleared canvas = true transparency
       ctx.clearRect(0, 0, w, h);
 
       const halfAngle = (RAY_HALF_ANGLE_DEG * Math.PI) / 180;
-
-      // ── Direction: use stored angle, or auto-aim at screen center ───
       const baseAngle = rs.dirAngle !== null
         ? rs.dirAngle
         : Math.atan2(h * 0.65 - srcY, w * 0.5 - srcX);
-
       const farDist = Math.sqrt(w * w + h * h) * 1.2;
 
-      // ── Layered beam ─────────────────────────────────────────────────
-      for (let layer = BEAM_STEPS; layer >= 1; layer--) {
-        const layerFrac  = layer / BEAM_STEPS;
-        const spread     = halfAngle * layerFrac * 1.8;
-        const layerAlpha = BASE_ALPHA * (1 - layerFrac * 0.5);
+      // ── 3 layered beam passes, wide → narrow, low → higher alpha ───
+      const layers = [
+        { spread: 2.2, alpha: BASE_ALPHA * 0.45 },
+        { spread: 1.4, alpha: BASE_ALPHA * 0.70 },
+        { spread: 0.7, alpha: BASE_ALPHA * 1.00 },
+      ];
+
+      for (const layer of layers) {
+        const spread = halfAngle * layer.spread;
+        const alpha  = layer.alpha;
 
         const left  = baseAngle - spread;
         const right = baseAngle + spread;
@@ -113,16 +67,19 @@ export default function LightRay({ zIndex = 2 }: Props) {
         const x2 = srcX + Math.cos(right) * farDist;
         const y2 = srcY + Math.sin(right) * farDist;
 
+        const lHi = Math.min(99, l + 20);
+        const lMd = Math.min(99, l + 8);
+
         const grad = ctx.createLinearGradient(
           srcX, srcY,
           srcX + Math.cos(baseAngle) * farDist,
           srcY + Math.sin(baseAngle) * farDist,
         );
-        grad.addColorStop(0,    `hsla(${h}, ${s}%, ${lHi}%, ${(layerAlpha * 0.6).toFixed(3)})`);
-        grad.addColorStop(0.08, `hsla(${h}, ${s}%, ${lMid}%, ${layerAlpha.toFixed(3)})`);
-        grad.addColorStop(0.4,  `hsla(${h}, ${sMid}%, ${l}%, ${(layerAlpha * 0.55).toFixed(3)})`);
-        grad.addColorStop(0.75, `hsla(${h}, ${sLo}%, ${lLo}%, ${(layerAlpha * 0.18).toFixed(3)})`);
-        grad.addColorStop(1,    `hsla(${h}, ${sFar}%, ${lFar}%, 0)`);
+        grad.addColorStop(0,    `hsla(${hue},${s}%,${lHi}%,${(alpha * 0.7).toFixed(3)})`);
+        grad.addColorStop(0.06, `hsla(${hue},${s}%,${lMd}%,${alpha.toFixed(3)})`);
+        grad.addColorStop(0.35, `hsla(${hue},${Math.max(0,s-10)}%,${l}%,${(alpha*0.5).toFixed(3)})`);
+        grad.addColorStop(0.7,  `hsla(${hue},${Math.max(0,s-20)}%,${Math.max(0,l-15)}%,${(alpha*0.15).toFixed(3)})`);
+        grad.addColorStop(1,    `hsla(${hue},${Math.max(0,s-30)}%,${Math.max(0,l-25)}%,0)`);
 
         ctx.beginPath();
         ctx.moveTo(srcX, srcY);
@@ -133,33 +90,33 @@ export default function LightRay({ zIndex = 2 }: Props) {
         ctx.fill();
       }
 
-      // ── Source halo ───────────────────────────────────────────────────
-      const halo = ctx.createRadialGradient(srcX, srcY, 0, srcX, srcY, w * 0.14);
-      halo.addColorStop(0,    `hsla(${h}, ${s}%, ${lHi}%, 0.14)`);
-      halo.addColorStop(0.35, `hsla(${h}, ${sMid}%, ${lMid}%, 0.07)`);
-      halo.addColorStop(1,    `hsla(${h}, ${sLo}%, ${l}%, 0)`);
+      // ── Source halo ────────────────────────────────────────────────
+      const lHi = Math.min(99, l + 22);
+      const halo = ctx.createRadialGradient(srcX, srcY, 0, srcX, srcY, w * 0.12);
+      halo.addColorStop(0,   `hsla(${hue},${s}%,${lHi}%,0.22)`);
+      halo.addColorStop(0.3, `hsla(${hue},${s}%,${l}%,0.09)`);
+      halo.addColorStop(1,   `hsla(${hue},${s}%,${l}%,0)`);
       ctx.beginPath();
-      ctx.arc(srcX, srcY, w * 0.14, 0, Math.PI * 2);
+      ctx.arc(srcX, srcY, w * 0.12, 0, Math.PI * 2);
       ctx.fillStyle = halo;
       ctx.fill();
 
-      // ── Dust motes ────────────────────────────────────────────────────
+      // ── Dust motes ────────────────────────────────────────────────
       const t = rs.t;
       for (let m = 0; m < 6; m++) {
         const moteT = t * 0.4 + m * 1.3;
         const along = (Math.sin(moteT * 0.7 + m) * 0.5 + 0.5) * 0.7;
-        const perp  = (Math.sin(moteT * 0.4 + m * 2.1) * 0.5) * halfAngle * along;
+        const perp  = Math.sin(moteT * 0.4 + m * 2.1) * 0.5 * halfAngle * along;
         const angle = baseAngle + perp;
         const mx    = srcX + Math.cos(angle) * along * w * 0.9;
         const my    = srcY + Math.sin(angle) * along * w * 0.9;
-        const moteA = (Math.sin(moteT * 1.1 + m) * 0.3 + 0.5) * BASE_ALPHA * 3;
+        const moteA = (Math.sin(moteT * 1.1 + m) * 0.3 + 0.5) * BASE_ALPHA * 2.5;
         ctx.beginPath();
-        ctx.arc(mx, my, 1.2, 0, Math.PI * 2);
-        ctx.fillStyle = `hsla(${h}, ${s}%, ${lHi}%, ${moteA.toFixed(3)})`;
+        ctx.arc(mx, my, 1.4, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${hue},${s}%,${lHi}%,${moteA.toFixed(3)})`;
         ctx.fill();
       }
 
-      updateCardGlow(srcX, srcY);
       requestAnimationFrame(draw);
     }
 
@@ -174,9 +131,7 @@ export default function LightRay({ zIndex = 2 }: Props) {
     window.addEventListener("resize", onResize);
 
     return () => {
-      // Flag this loop as dead — it will stop itself on its next tick
       cancelled = true;
-      // Clear the canvas immediately so no ghost frame lingers
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       window.removeEventListener("resize", onResize);
     };
@@ -190,7 +145,7 @@ export default function LightRay({ zIndex = 2 }: Props) {
         inset: 0,
         zIndex,
         pointerEvents: "none",
-        mixBlendMode: "screen",
+        // NO mixBlendMode — avoids GPU compositing layer artifacts
       }}
     />
   );
