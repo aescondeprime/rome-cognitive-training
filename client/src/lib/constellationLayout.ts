@@ -24,13 +24,15 @@ export interface ConstellationLayout {
   widgetCollapsed: boolean;
   projectsWidgetPos: { x: number; y: number } | null;
   projectsWidgetCollapsed: boolean;
+  threatsWidgetPos: { x: number; y: number } | null;
+  threatsWidgetCollapsed: boolean;
 }
 
 export const DEFAULT_RAY_COLOR    = "43 88% 60%";
 export const DEFAULT_ACCENT_COLOR = "43 88% 60%";
 
 function defaultLayout(): ConstellationLayout {
-  return { nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null, widgetPos: null, widgetCollapsed: false, projectsWidgetPos: null, projectsWidgetCollapsed: false };
+  return { nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null, widgetPos: null, widgetCollapsed: false, projectsWidgetPos: null, projectsWidgetCollapsed: false, threatsWidgetPos: null, threatsWidgetCollapsed: false };
 }
 
 export function loadLayout(): ConstellationLayout {
@@ -61,6 +63,8 @@ export function loadLayout(): ConstellationLayout {
     if (!("widgetCollapsed"        in parsed)) (parsed as any).widgetCollapsed        = false;
     if (!("projectsWidgetPos"      in parsed)) (parsed as any).projectsWidgetPos      = null;
     if (!("projectsWidgetCollapsed" in parsed)) (parsed as any).projectsWidgetCollapsed = false;
+    if (!("threatsWidgetPos"        in parsed)) (parsed as any).threatsWidgetPos        = null;
+    if (!("threatsWidgetCollapsed"  in parsed)) (parsed as any).threatsWidgetCollapsed  = false;
     return parsed;
   } catch {
     return defaultLayout();

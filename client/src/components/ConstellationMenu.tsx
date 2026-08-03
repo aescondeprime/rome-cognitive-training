@@ -9,6 +9,7 @@ import ConstellationNode from "./ConstellationNode";
 import NodeBranchMenu from "./NodeBranchMenu";
 import ConstellationWidget from "./ConstellationWidget";
 import ProjectsWidget from "./ProjectsWidget";
+import ThreatsWidget from "./ThreatsWidget";
 
 // ── Moving particle canvas ─────────────────────────────────────────────────
 function ParticleCanvas({
@@ -1066,6 +1067,16 @@ export default function ConstellationMenu({ onClose }: Props) {
           collapsed={layout.widgetCollapsed ?? false}
           onPosChange={p => setLayout(prev => ({ ...prev, widgetPos: p }))}
           onCollapsedChange={c => setLayout(prev => ({ ...prev, widgetCollapsed: c }))}
+        />
+      )}
+
+      {/* Threats widget */}
+      {!editMode && (
+        <ThreatsWidget
+          pos={layout.threatsWidgetPos ?? null}
+          collapsed={layout.threatsWidgetCollapsed ?? false}
+          onPosChange={p => setLayout(prev => ({ ...prev, threatsWidgetPos: p }))}
+          onCollapsedChange={c => setLayout(prev => ({ ...prev, threatsWidgetCollapsed: c }))}
         />
       )}
 

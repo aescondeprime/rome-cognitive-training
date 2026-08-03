@@ -1194,6 +1194,48 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       }
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    // THREATS
+    // ════════════════════════════════════════════════════════════════════
+
+    // GET /api/threats
+    if (route === "/threats" && method === "GET") {
+      const user = await getActiveUser(req, sb);
+      const { data } = await sb.from("threats").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
+      return json(res, 200, data ?? []);
+    }
+
+    // POST /api/threats
+    if (route === "/threats" && method === "POST") {
+      const user = await getActiveUser(req, sb);
+      const body = await readBody(req);
+      const now  = Date.now();
+      const { title = "", priority = 1 } = body;
+      const { data } = await sb.from("threats").insert({ user_id: user.id, title: title.trim(), priority, resolved: false, created_at: now, updated_at: now }).select().single();
+      return json(res, 200, data ?? {});
+    }
+
+    // PATCH /api/threats/:id  &  DELETE /api/threats/:id
+    {
+      const m = route.match(/^\/threats\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body  = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          if (body.title    !== undefined) patch.title    = body.title;
+          if (body.priority !== undefined) patch.priority = body.priority;
+          if (body.resolved !== undefined) patch.resolved = body.resolved;
+          const { data } = await sb.from("threats").update(patch).eq("id", id).select().single();
+          return json(res, 200, data ?? { error: "Not found" });
+        }
+        if (method === "DELETE") {
+          await sb.from("threats").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
     return json(res, 404, { error: `Not found: ${route}` });
 
   } catch (err: any) {
