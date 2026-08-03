@@ -467,9 +467,10 @@ export default function ConstellationMenu({ onClose }: Props) {
         if (selectedId) setSelectedId(null);
         else onClose();
       }
-      // E to toggle edit mode
+      // E to toggle edit mode — skip when typing in any input/textarea
       if (e.key === "e" || e.key === "E") {
-        if (!selectedId) setEditMode(v => !v);
+        const tag = (e.target as HTMLElement).tagName;
+        if (!selectedId && tag !== "INPUT" && tag !== "TEXTAREA") setEditMode(v => !v);
       }
     }
     window.addEventListener("keydown", onKey);
