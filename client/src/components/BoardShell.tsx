@@ -6,7 +6,7 @@
  * and renders the active board's content as children.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Plus, Trash2, ChevronLeft, PenLine, Check, Loader2, BookOpen } from "lucide-react";
@@ -38,6 +38,21 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
     queryKey: ["/boards", type],
     queryFn:  () => apiRequest("GET", `/api/boards?type=${type}`).then(r => r.json()),
   });
+
+  // Deep-link: if URL hash contains ?board=ID, auto-select that board once loaded
+  useEffect(() => {
+    if (boards.length === 0) return;
+    const hash = window.location.hash; // e.g. "#/idea-workshop?board=42"
+    const match = hash.match(/[?&]board=(\d+)/);
+    if (match) {
+      const id = parseInt(match[1]);
+      if (boards.find(b => b.id === id)) {
+        setActiveBoardId(id);
+        // Clean the param so back-nav works cleanly
+        window.history.replaceState(null, "", window.location.pathname + "#" + hash.replace(/[?&]board=\d+/, ""));
+      }
+    }
+  }, [boards]);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["/boards", type] });
 
