@@ -213,9 +213,13 @@ export default function WorldBrowser() {
   const [loading,    setLoading]    = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [error,      setError]      = useState("");
-  const iframeRef   = useRef<HTMLIFrameElement>(null); // kept for future inline embed
+  const canvasRef   = useRef<HTMLCanvasElement>(null);
+  const imgRef      = useRef<HTMLImageElement | null>(null);
   const pollRef     = useRef<ReturnType<typeof setInterval> | null>(null);
+  const screenshotRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const addressRef  = useRef<HTMLInputElement>(null);
+  const [screenshotTs, setScreenshotTs] = useState(0); // bump to force re-render
+  const sessionIdRef = useRef<string | null>(null); // stable ref for intervals
 
   // ── Check provider config on mount ────────────────────────────────────
   useEffect(() => {
@@ -237,6 +241,7 @@ export default function WorldBrowser() {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error ?? "Failed to create session");
       setSession(d);
+      sessionIdRef.current = d.sessionId;
       setTabs(d.tabs ?? []);
       setActiveTab(d.activeTabIdx ?? 0);
       setAddressBar(d.tabs?.[0]?.url ?? HOME_URL);
@@ -251,62 +256,94 @@ export default function WorldBrowser() {
   const endSession = useCallback(async () => {
     if (!session) return;
     if (pollRef.current) clearInterval(pollRef.current);
+    if (screenshotRef.current) clearInterval(screenshotRef.current);
     await apiRequest("DELETE", `/api/browser/sessions/${session.sessionId}`).catch(() => {});
+    sessionIdRef.current = null;
     setSession(null);
     setTabs([]);
     setSessionState("idle");
   }, [session]);
 
-  // ── Address bar submit — server validates URL, then iframe navigates ─────
+  // ── Send CDP input event ──────────────────────────────────────────
+  const sendInput = useCallback((body: Record<string, unknown>) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    apiRequest("POST", `/api/browser/sessions/${sid}/input`, body).catch(() => {});
+  }, []);
+
+  // ── Navigate via CDP ───────────────────────────────────────────────
   const navigate = useCallback(async (raw: string) => {
-    if (!session) return;
+    const sid = sessionIdRef.current;
+    if (!sid) return;
     setEditingAddr(false);
     setLoading(true);
     try {
-      const r = await apiRequest("POST", `/api/browser/sessions/${session.sessionId}/action`, { action: "navigate", url: raw });
+      const r = await apiRequest("POST", `/api/browser/sessions/${sid}/input`, { navigateTo: raw });
       const d = await r.json();
       if (r.status === 403 && d.error === "DANGEROUS_URL") {
         setError("Navigation blocked: internal or dangerous URL");
-        setLoading(false);
         return;
       }
-      setAddressBar(d.safeUrl ?? raw);
-      // Focus iframe so user can interact immediately
-      iframeRef.current?.focus();
+      setAddressBar(raw);
     } catch (e: any) {
       setError(e.message ?? "Navigation error");
     } finally {
-      setTimeout(() => setLoading(false), 600);
+      setTimeout(() => setLoading(false), 1200);
     }
-  }, [session]);
+  }, []);
 
   const onAddrKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter")  navigate(addressRef.current?.value ?? addressBar);
     if (e.key === "Escape") { setEditingAddr(false); addressRef.current?.blur(); }
   };
 
-  // ── Nav controls — iframe handles actual browser back/forward/reload ────
-  // The live-view iframe is fully interactive; these focus it with the right key.
+  // ── Nav controls — all via CDP input endpoint ────────────────────
   const newTab    = () => {};
   const closeTab  = (_i: number) => {};
   const switchTab = (i: number) => setActiveTab(i);
-  const goBack    = () => { iframeRef.current?.focus(); iframeRef.current?.contentWindow?.history.back(); };
-  const goForward = () => { iframeRef.current?.focus(); iframeRef.current?.contentWindow?.history.forward(); };
-  const reload    = () => {
-    setLoading(true);
-    try { iframeRef.current?.contentWindow?.location.reload(); } catch {}
-    setTimeout(() => setLoading(false), 800);
+  const goBack    = () => sendInput({ type: "back" });
+  const goForward = () => sendInput({ type: "forward" });
+  const reload    = () => { setLoading(true); sendInput({ type: "reload" }); setTimeout(() => setLoading(false), 1200); };
+  const stop      = () => { setLoading(false); sendInput({ type: "stop" }); };
+
+  // ── Canvas mouse/keyboard events — translate to CDP input ────────────
+  const canvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    // Scale from canvas display size to remote viewport (1280x800)
+    const scaleX = 1280 / rect.width;
+    const scaleY = 800  / rect.height;
+    return { x: Math.round((e.clientX - rect.left) * scaleX), y: Math.round((e.clientY - rect.top) * scaleY) };
   };
-  const stop = () => { setLoading(false); };
-
-  // Keep session alive on any interaction
-  const touchSession = useCallback(() => {
-    if (!session) return;
-    apiRequest("POST", `/api/browser/sessions/${session.sessionId}/action`, { action: "ping" }).catch(() => {});
-  }, [session]);
-
-  // ── Live-view iframe src — debuggerFullscreenUrl from Browserbase /debug
-  const liveViewSrc = session?.liveViewUrl || undefined;
+  const onCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    canvasRef.current?.focus();
+    const { x, y } = canvasCoords(e);
+    sendInput({ type: "mousedown", x, y, button: e.button === 2 ? "right" : e.button === 1 ? "middle" : "left" });
+  };
+  const onCanvasMouseUp   = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { x, y } = canvasCoords(e);
+    sendInput({ type: "mouseup",   x, y, button: e.button === 2 ? "right" : e.button === 1 ? "middle" : "left" });
+  };
+  const onCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (e.buttons === 0) return; // only send when dragging
+    const { x, y } = canvasCoords(e);
+    sendInput({ type: "mousemove", x, y });
+  };
+  const onCanvasWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    const { x, y } = canvasCoords(e as unknown as React.MouseEvent<HTMLCanvasElement>);
+    sendInput({ type: "wheel", x, y, deltaX: e.deltaX, deltaY: e.deltaY });
+  };
+  const onCanvasKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    sendInput({ type: "keydown", key: e.key, text: e.key.length === 1 ? e.key : "", modifiers: (e.ctrlKey ? 2 : 0) | (e.altKey ? 1 : 0) | (e.shiftKey ? 8 : 0) | (e.metaKey ? 4 : 0) });
+    if (e.key.length === 1) sendInput({ type: "char", text: e.key });
+  };
+  const onCanvasKeyUp = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    sendInput({ type: "keyup", key: e.key, modifiers: 0 });
+  };
+  const onCanvasContextMenu = (e: React.MouseEvent) => e.preventDefault();
 
   // ── Poll session status + refresh live-view URL ───────────────────────
   useEffect(() => {
@@ -330,6 +367,46 @@ export default function WorldBrowser() {
     }, POLL_MS);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [session, sessionState, editingAddr]);
+
+
+  // Screenshot polling loop — 2fps, draws CDP screenshots onto <canvas>
+  useEffect(() => {
+    if (!session || sessionState !== "connected") {
+      if (screenshotRef.current) clearInterval(screenshotRef.current);
+      return;
+    }
+    const sid = session.sessionId;
+    let active = true;
+    let inFlight = false;
+    const tick = async () => {
+      if (!active || inFlight) return;
+      inFlight = true;
+      try {
+        const r = await fetch(`/api/browser/sessions/${sid}/screenshot`, {
+          headers: { "x-session-token": localStorage.getItem("rome_session_token") ?? "" },
+        });
+        if (!r.ok || !active) return;
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const canvas = canvasRef.current;
+        if (canvas && active) {
+          const ctx = canvas.getContext("2d");
+          const img = new Image();
+          img.onload = () => {
+            if (!active) return;
+            canvas.width  = img.naturalWidth  || 1280;
+            canvas.height = img.naturalHeight || 800;
+            ctx?.drawImage(img, 0, 0);
+            URL.revokeObjectURL(url);
+          };
+          img.src = url;
+        }
+      } catch { /* swallow */ } finally { inFlight = false; }
+    };
+    screenshotRef.current = setInterval(tick, 500);
+    tick();
+    return () => { active = false; if (screenshotRef.current) clearInterval(screenshotRef.current); };
+  }, [session, sessionState]);
 
   // ── Show overlay? ──────────────────────────────────────────────────────
   const showOverlay = !["connected", "loading-page"].includes(sessionState);
@@ -563,28 +640,26 @@ export default function WorldBrowser() {
           )}
         </AnimatePresence>
 
-        {/* Live-view iframe — Browserbase debuggerFullscreenUrl embedded directly */}
-        {/* sandbox: allow-same-origin + allow-scripts per Browserbase docs; */}
-        {/* allow-forms + allow-popups needed for devtools WS handshake inside iframe */}
-        {session && liveViewSrc && (
-          <iframe
-            ref={iframeRef}
-            key={liveViewSrc}
-            src={liveViewSrc}
-            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
-            allow="clipboard-read; clipboard-write; fullscreen"
-            style={{
-              position: "absolute", inset: 0,
-              width: "100%", height: "100%",
-              border: "none",
-              background: "#fff",
-              opacity: showOverlay ? 0 : 1,
-              transition: "opacity 0.3s",
-              pointerEvents: showOverlay ? "none" : "auto",
-            }}
-            title="ROME World Browser"
-          />
-        )}
+        {/* Canvas-based remote browser — CDP screenshot stream, works in any browser */}
+        <canvas
+          ref={canvasRef}
+          tabIndex={0}
+          onMouseDown={onCanvasMouseDown}
+          onMouseUp={onCanvasMouseUp}
+          onMouseMove={onCanvasMouseMove}
+          onWheel={onCanvasWheel}
+          onKeyDown={onCanvasKeyDown}
+          onKeyUp={onCanvasKeyUp}
+          onContextMenu={onCanvasContextMenu}
+          style={{
+            position: "absolute", inset: 0,
+            width: "100%", height: "100%",
+            display: showOverlay ? "none" : "block",
+            background: "#fff",
+            cursor: "default",
+            outline: "none",
+          }}
+        />
 
         {/* Placeholder grid when no session */}
         {!session && (

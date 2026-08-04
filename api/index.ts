@@ -9,6 +9,7 @@ import { createClient } from "@supabase/supabase-js";
 import crypto from "crypto";
 import { promisify } from "util";
 import type { IncomingMessage, ServerResponse } from "http";
+import WebSocket from "ws";
 
 // ── Supabase ───────────────────────────────────────────────────────────────
 function getSupabase() {
@@ -1347,9 +1348,13 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         try {
           const dbg = await bbFetch(`/sessions/${bbSess.id}/debug`);
           const base = dbg.debuggerFullscreenUrl ?? dbg.debuggerUrl ?? "";
-          liveViewUrl = base ?? ""; // Browserbase navbar shown so user can navigate
+          liveViewUrl = base ?? "";
+          // Also store the raw CDP wsUrl so the screenshot relay can connect
+          const wsUrl: string = dbg.wsUrl ?? dbg.pages?.[0]?.debuggerUrl ?? "";
+          if (wsUrl) {
+            await sb.from("browser_sessions").update({ ws_url: wsUrl }).eq("id", row!.id);
+          }
         } catch (dbgErr: any) {
-          // non-fatal — session still works, URL will be fetched on next poll
           console.error("[browser] debug URL fetch failed:", dbgErr?.message);
         }
         return json(res, 200, { sessionId: row!.id, liveViewUrl, tabs, activeTabIdx: 0, status: "connected" });
@@ -1414,6 +1419,131 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           // are handled client-side via the iframe — just touch the session to keep it alive
           await touchSession(m[1]);
           return json(res, 200, { ok: true });
+        }
+      }
+
+      // ── CDP helper: send one command over a WS and return result ───────────────
+      async function cdpCommand(wsUrl: string, method: string, params: Record<string, unknown> = {}, timeoutMs = 8000): Promise<any> {
+        return new Promise((resolve, reject) => {
+          const ws = new WebSocket(wsUrl, {
+            headers: { "x-bb-api-key": BROWSERBASE_API_KEY },
+          });
+          const id = 1;
+          let done = false;
+          const timer = setTimeout(() => { if (!done) { done = true; ws.terminate(); reject(new Error("CDP timeout")); } }, timeoutMs);
+          ws.on("open", () => ws.send(JSON.stringify({ id, method, params })));
+          ws.on("message", (data: Buffer) => {
+            try {
+              const msg = JSON.parse(data.toString());
+              if (msg.id === id) { done = true; clearTimeout(timer); ws.terminate(); resolve(msg.result ?? msg); }
+            } catch {}
+          });
+          ws.on("error", (e) => { if (!done) { done = true; clearTimeout(timer); reject(e); } });
+          ws.on("close", () => { if (!done) { done = true; clearTimeout(timer); reject(new Error("CDP WS closed")); } });
+        });
+      }
+
+      // ── GET /api/browser/sessions/:id/screenshot — CDP screenshot ────────
+      {
+        const m = route.match(/^\/browser\/sessions\/([\w-]+)\/screenshot$/);
+        if (m && method === "GET") {
+          const user = await getActiveUser(req, sb);
+          const sess = await getOwnedSession(user, m[1]);
+          if (!sess || typeof (sess as any).id === "undefined") return;
+          let wsUrl: string = (sess as any).ws_url ?? "";
+          if (!wsUrl && sess.provider_session_id) {
+            // Fetch fresh wsUrl from Browserbase
+            try {
+              const dbg = await bbFetch(`/sessions/${sess.provider_session_id}/debug`);
+              wsUrl = dbg.wsUrl ?? dbg.pages?.[0]?.debuggerUrl ?? "";
+              if (wsUrl) await sb.from("browser_sessions").update({ ws_url: wsUrl }).eq("id", m[1]);
+            } catch {}
+          }
+          if (!wsUrl) return json(res, 503, { error: "No CDP WebSocket URL available" });
+          try {
+            const result = await cdpCommand(wsUrl, "Page.captureScreenshot", { format: "jpeg", quality: 80 });
+            const imgBuf = Buffer.from(result.data ?? "", "base64");
+            res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" });
+            res.end(imgBuf);
+            return;
+          } catch (e: any) {
+            return json(res, 502, { error: e.message });
+          }
+        }
+      }
+
+      // ── POST /api/browser/sessions/:id/input — CDP mouse/key input ──────
+      {
+        const m = route.match(/^\/browser\/sessions\/([\w-]+)\/input$/);
+        if (m && method === "POST") {
+          const user = await getActiveUser(req, sb);
+          const body = await readBody(req) as any;
+          const sess = await getOwnedSession(user, m[1]);
+          if (!sess || typeof (sess as any).id === "undefined") return;
+          let wsUrl: string = (sess as any).ws_url ?? "";
+          if (!wsUrl && sess.provider_session_id) {
+            try {
+              const dbg = await bbFetch(`/sessions/${sess.provider_session_id}/debug`);
+              wsUrl = dbg.wsUrl ?? dbg.pages?.[0]?.debuggerUrl ?? "";
+              if (wsUrl) await sb.from("browser_sessions").update({ ws_url: wsUrl }).eq("id", m[1]);
+            } catch {}
+          }
+          if (!wsUrl) return json(res, 503, { error: "No CDP WebSocket URL" });
+          try {
+            const { type, x, y, button, key, text, modifiers, deltaX, deltaY, navigateTo } = body;
+            if (navigateTo) {
+              // URL navigation via CDP
+              const target = normaliseUrl(navigateTo);
+              if (isDangerous(target)) return json(res, 403, { error: "DANGEROUS_URL" });
+              await cdpCommand(wsUrl, "Page.navigate", { url: target });
+              await sb.from("browser_sessions").update({ current_url: target }).eq("id", m[1]);
+              await touchSession(m[1]);
+              return json(res, 200, { ok: true });
+            }
+            if (type === "mousedown" || type === "mouseup" || type === "mousemove") {
+              const evtType = type === "mousedown" ? "mousePressed" : type === "mouseup" ? "mouseReleased" : "mouseMoved";
+              await cdpCommand(wsUrl, "Input.dispatchMouseEvent", { type: evtType, x: x ?? 0, y: y ?? 0, button: button ?? "left", clickCount: type === "mousedown" ? 1 : 0 }, 4000);
+            } else if (type === "wheel") {
+              await cdpCommand(wsUrl, "Input.dispatchMouseEvent", { type: "mouseWheel", x: x ?? 0, y: y ?? 0, deltaX: deltaX ?? 0, deltaY: deltaY ?? 0 }, 4000);
+            } else if (type === "keydown" || type === "keyup") {
+              const evtType = type === "keydown" ? "keyDown" : "keyUp";
+              await cdpCommand(wsUrl, "Input.dispatchKeyEvent", { type: evtType, key: key ?? "", text: text ?? "", modifiers: modifiers ?? 0 }, 4000);
+            } else if (type === "char") {
+              await cdpCommand(wsUrl, "Input.dispatchKeyEvent", { type: "char", text: text ?? key ?? "", modifiers: modifiers ?? 0 }, 4000);
+            } else if (type === "back") {
+              await cdpCommand(wsUrl, "Runtime.evaluate", { expression: "history.back()" }, 4000);
+            } else if (type === "forward") {
+              await cdpCommand(wsUrl, "Runtime.evaluate", { expression: "history.forward()" }, 4000);
+            } else if (type === "reload") {
+              await cdpCommand(wsUrl, "Page.reload", {}, 4000);
+            } else if (type === "stop") {
+              await cdpCommand(wsUrl, "Page.stopLoading", {}, 4000);
+            }
+            await touchSession(m[1]);
+            return json(res, 200, { ok: true });
+          } catch (e: any) {
+            return json(res, 502, { error: e.message });
+          }
+        }
+      }
+
+      // ── GET /api/browser/sessions/:id/url — get current page URL via CDP ──
+      {
+        const m = route.match(/^\/browser\/sessions\/([\w-]+)\/url$/);
+        if (m && method === "GET") {
+          const user = await getActiveUser(req, sb);
+          const sess = await getOwnedSession(user, m[1]);
+          if (!sess || typeof (sess as any).id === "undefined") return;
+          let wsUrl: string = (sess as any).ws_url ?? "";
+          if (!wsUrl) return json(res, 503, { error: "No CDP WS" });
+          try {
+            const result = await cdpCommand(wsUrl, "Runtime.evaluate", { expression: "JSON.stringify({url:location.href,title:document.title})" }, 4000);
+            const parsed = JSON.parse(result?.result?.value ?? "{}");
+            await sb.from("browser_sessions").update({ current_url: parsed.url ?? "", title: parsed.title ?? "" }).eq("id", m[1]);
+            return json(res, 200, { url: parsed.url, title: parsed.title });
+          } catch (e: any) {
+            return json(res, 502, { error: e.message });
+          }
         }
       }
 
