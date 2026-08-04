@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { apiRequest } from "@/lib/queryClient";
 import {
-  UserPlus, Users, Trash2, Edit2, Check, X,
+  Users, Trash2, Edit2, Check, X,
   Download, Upload, Crown, Shield,
 } from "lucide-react";
 import {
@@ -42,8 +42,6 @@ export default function ProfileManager() {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [showNewForm, setShowNewForm] = useState(false);
-  const [newName, setNewName] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ProfileWithStats | null>(null);
@@ -59,17 +57,6 @@ export default function ProfileManager() {
   // Invalidate everything on profile switch
   const invalidateAll = () => queryClient.invalidateQueries();
 
-  const createMutation = useMutation({
-    mutationFn: (name: string) =>
-      apiRequest("POST", "/api/profiles", { name }).then(r => r.json()),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      setNewName("");
-      setShowNewForm(false);
-      toast({ title: "Profile created" });
-    },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
-  });
 
   const renameMutation = useMutation({
     mutationFn: ({ id, name }: { id: number; name: string }) =>
@@ -302,49 +289,10 @@ export default function ProfileManager() {
         ))}
       </div>
 
-      {/* New profile form */}
-      {showNewForm ? (
-        <div className="rome-card rounded-xl p-5 border border-gold-500/20 bg-gold-500/3">
-          <p className="text-xs text-muted-foreground mb-3 font-roman tracking-wider uppercase">New Profile</p>
-          <div className="flex items-center gap-3">
-            <Input
-              className="h-9 bg-cave-800 border-gold-500/30 focus:border-gold-400/60 text-sm flex-1"
-              placeholder="Profile name…"
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === "Enter" && newName.trim()) createMutation.mutate(newName.trim());
-                if (e.key === "Escape") { setShowNewForm(false); setNewName(""); }
-              }}
-              autoFocus
-            />
-            <button
-              onClick={() => newName.trim() && createMutation.mutate(newName.trim())}
-              disabled={!newName.trim() || createMutation.isPending}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs bg-gold-600/20 text-gold-400 border border-gold-500/30 hover:bg-gold-600/30 transition-all disabled:opacity-50"
-            >
-              <Check className="w-3.5 h-3.5" />
-              Create
-            </button>
-            <button
-              onClick={() => { setShowNewForm(false); setNewName(""); }}
-              className="p-2 rounded-lg text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button
-          onClick={() => setShowNewForm(true)}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm text-gold-400 border border-gold-500/25 hover:bg-gold-500/8 transition-all"
-        >
-          <UserPlus className="w-4 h-4" />
-          New Profile
-        </button>
-      )}
 
-      {/* Import section */}
+      {/* New profile creation disabled — single-user app */}
+
+            {/* Import section */}
       <div className="rome-card rounded-xl p-5 border border-cave-700/40">
         <div className="flex items-center justify-between mb-4">
           <div>

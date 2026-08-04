@@ -8,10 +8,9 @@ interface Props {
 }
 
 export default function Login({ onLogin }: Props) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+  // Registration disabled — single-user app
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -23,18 +22,9 @@ export default function Login({ onLogin }: Props) {
       setError("Name and password are required.");
       return;
     }
-    if (mode === "register" && password !== confirm) {
-      setError("Passwords don't match.");
-      return;
-    }
-    if (mode === "register" && password.length < 4) {
-      setError("Password must be at least 4 characters.");
-      return;
-    }
-
     setLoading(true);
     try {
-      const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/register";
+      const endpoint = "/api/auth/login";
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -113,33 +103,7 @@ export default function Login({ onLogin }: Props) {
           </p>
         </div>
 
-        {/* Mode toggle */}
-        <div style={{
-          display: "flex", marginBottom: 28,
-          background: "hsl(222 20% 6%)",
-          borderRadius: 8, padding: 3,
-          border: "1px solid hsl(var(--accent-h) 15% 12%)",
-        }}>
-          {(["login", "register"] as const).map(m => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => { setMode(m); setError(null); }}
-              style={{
-                flex: 1, padding: "7px 0",
-                borderRadius: 6, border: "none",
-                fontSize: 11, fontFamily: "'Cinzel', serif",
-                letterSpacing: "0.1em", textTransform: "uppercase",
-                cursor: "pointer",
-                background: mode === m ? "hsl(var(--accent-h) 30% 12%)" : "transparent",
-                color: mode === m ? "hsl(var(--accent-h) 75% 58%)" : "hsl(214 15% 36%)",
-                transition: "all 0.2s ease",
-              }}
-            >
-              {m === "login" ? "Sign In" : "New Profile"}
-            </button>
-          ))}
-        </div>
+
 
         {/* Fields */}
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -192,31 +156,6 @@ export default function Login({ onLogin }: Props) {
             />
           </div>
 
-          {mode === "register" && (
-            <div>
-              <label style={{ display: "block", fontSize: 10, color: "hsl(var(--accent-h) 30% 38%)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6, fontFamily: "DM Mono, monospace" }}>
-                Confirm Password
-              </label>
-              <input
-                type="password"
-                value={confirm}
-                onChange={e => setConfirm(e.target.value)}
-                placeholder="••••••••"
-                style={{
-                  width: "100%", boxSizing: "border-box",
-                  padding: "10px 14px",
-                  background: "hsl(222 20% 6%)",
-                  border: "1px solid hsl(var(--accent-h) 15% 14%)",
-                  borderRadius: 8, color: "hsl(var(--accent-h) 30% 80%)",
-                  fontSize: 14, outline: "none",
-                  fontFamily: "DM Sans, sans-serif",
-                  transition: "border-color 0.2s",
-                }}
-                onFocus={e => e.target.style.borderColor = "hsl(var(--accent-h) 50% 30%)"}
-                onBlur={e => e.target.style.borderColor = "hsl(var(--accent-h) 15% 14%)"}
-              />
-            </div>
-          )}
         </div>
 
         {/* Error */}

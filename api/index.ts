@@ -150,6 +150,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     // AUTH
     // ════════════════════════════════════════════════════════════════════
     if (route === "/auth/register" && method === "POST") {
+        return json(res, 403, { error: "Registration is disabled." });
       const { name, password } = await readBody(req);
       if (!name?.trim() || !password) return json(res, 400, { error: "Name and password are required" });
       if (password.length < 4) return json(res, 400, { error: "Password must be at least 4 characters" });
