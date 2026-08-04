@@ -240,7 +240,6 @@ export default function WorldBrowser() {
       setTabs(d.tabs ?? []);
       setActiveTab(d.activeTabIdx ?? 0);
       setAddressBar(d.tabs?.[0]?.url ?? HOME_URL);
-      if (!d.liveViewUrl) throw new Error("No live view URL returned from provider");
       setSessionState("connected");
     } catch (e: any) {
       setError(e.message ?? "Unknown error");

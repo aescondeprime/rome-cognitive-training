@@ -1277,17 +1277,24 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
       // Fetch through Browserbase REST API
       async function bbFetch(path: string, method = "GET", body?: unknown): Promise<any> {
-        const res2 = await fetch(`${BB_BASE}${path}`, {
-          method,
-          headers: { "X-BB-API-Key": BROWSERBASE_API_KEY, "Content-Type": "application/json" },
-          ...(body ? { body: JSON.stringify(body) } : {}),
-          signal: AbortSignal.timeout(12_000),
-        });
-        if (!res2.ok) {
-          const txt = await res2.text().catch(() => "");
-          throw new Error(`BB ${res2.status}: ${txt.slice(0, 120)}`);
+        // Use manual AbortController instead of AbortSignal.timeout() for Node 18 compat
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 15_000);
+        try {
+          const res2 = await fetch(`${BB_BASE}${path}`, {
+            method,
+            headers: { "X-BB-API-Key": BROWSERBASE_API_KEY, "Content-Type": "application/json" },
+            ...(body ? { body: JSON.stringify(body) } : {}),
+            signal: ctrl.signal,
+          });
+          if (!res2.ok) {
+            const txt = await res2.text().catch(() => "");
+            throw new Error(`BB ${res2.status}: ${txt.slice(0, 200)}`);
+          }
+          return res2.json().catch(() => ({}));
+        } finally {
+          clearTimeout(timer);
         }
-        return res2.json().catch(() => ({}));
       }
 
       // Resolve + auth-guard a browser_session row
@@ -1328,10 +1335,12 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           created_at: now, last_active: now, expires_at: now + SESSION_INACTIVITY,
         }).select().single();
         // Fetch the embeddable live-view URL from Browserbase /debug endpoint
+        // Use debuggerFullscreenUrl + &navbar=false to hide Browserbase's own address bar
         let liveViewUrl = "";
         try {
           const dbg = await bbFetch(`/sessions/${bbSess.id}/debug`);
-          liveViewUrl = dbg.debuggerFullscreenUrl ?? dbg.debuggerUrl ?? "";
+          const base = dbg.debuggerFullscreenUrl ?? dbg.debuggerUrl ?? "";
+          liveViewUrl = base ? `${base}&navbar=false` : "";
         } catch { /* non-fatal — UI will show reconnecting state */ }
         return json(res, 200, { sessionId: row!.id, liveViewUrl, tabs, activeTabIdx: 0, status: "connected" });
       }
@@ -1347,7 +1356,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           if (sess.provider_session_id && sess.status === "connected") {
             try {
               const dbg = await bbFetch(`/sessions/${sess.provider_session_id}/debug`);
-              liveViewUrl = dbg.debuggerFullscreenUrl ?? dbg.debuggerUrl ?? "";
+              const base = dbg.debuggerFullscreenUrl ?? dbg.debuggerUrl ?? "";
+              liveViewUrl = base ? `${base}&navbar=false` : "";
             } catch { /* session may have ended on provider side */ }
           }
           return json(res, 200, { sessionId: sess.id, status: sess.status, currentUrl: sess.current_url, title: sess.title, tabs: sess.tabs ?? [], activeTabIdx: sess.active_tab_idx, expiresAt: sess.expires_at, liveViewUrl });
