@@ -1301,9 +1301,9 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       async function getOwnedSession(user: any, sessionId: string) {
         const now = Date.now();
         const { data } = await sb.from("browser_sessions").select("*").eq("id", sessionId).single();
-        if (!data)  throw { status: 404, msg: "Session not found" };
-        if (data.user_id !== user.id) throw { status: 403, msg: "Forbidden" };
-        if (data.expires_at < now)    throw { status: 410, msg: "Session expired" };
+        if (!data)                              return json(res, 404, { error: "Session not found" });
+        if (String(data.user_id) !== String(user.id)) return json(res, 403, { error: "Forbidden" });
+        if (data.expires_at < now)              return json(res, 410, { error: "Session expired" });
         return data;
       }
 
@@ -1318,15 +1318,21 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         const user = await getActiveUser(req, sb);
         requireBB();
         // Create a Browserbase session
-        const bbSess = await bbFetch("/sessions", "POST", {
-          projectId: BROWSERBASE_PROJECT,
-          browserSettings: { viewport: { width: 1280, height: 800 } },
-        });
+        let bbSess: any;
+        try {
+          bbSess = await bbFetch("/sessions", "POST", {
+            projectId: BROWSERBASE_PROJECT,
+            browserSettings: { viewport: { width: 1280, height: 800 } },
+          });
+        } catch (bbErr: any) {
+          return json(res, 502, { error: `Browserbase session create failed: ${bbErr?.message ?? bbErr}` });
+        }
+        if (!bbSess?.id) return json(res, 502, { error: `Browserbase returned no session id: ${JSON.stringify(bbSess)}` });
         const now = Date.now();
         const tabs = [{ id: 0, url: "https://www.google.com", title: "New Tab", loading: false }];
-        const { data: row } = await sb.from("browser_sessions").insert({
-          user_id: user.id,
-          provider_session_id: bbSess.id ?? "",
+        const { data: row, error: insertErr } = await sb.from("browser_sessions").insert({
+          user_id: String(user.id),
+          provider_session_id: bbSess.id,
           status: "connected",
           current_url: "https://www.google.com",
           title: "New Tab",
@@ -1334,6 +1340,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           tabs: JSON.stringify(tabs),
           created_at: now, last_active: now, expires_at: now + SESSION_INACTIVITY,
         }).select().single();
+        if (insertErr) return json(res, 500, { error: `DB insert failed: ${insertErr.message}` });
         // Fetch the embeddable live-view URL from Browserbase /debug endpoint
         // Use debuggerFullscreenUrl + &navbar=false to hide Browserbase's own address bar
         let liveViewUrl = "";
@@ -1341,7 +1348,10 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           const dbg = await bbFetch(`/sessions/${bbSess.id}/debug`);
           const base = dbg.debuggerFullscreenUrl ?? dbg.debuggerUrl ?? "";
           liveViewUrl = base ? `${base}&navbar=false` : "";
-        } catch { /* non-fatal — UI will show reconnecting state */ }
+        } catch (dbgErr: any) {
+          // non-fatal — session still works, URL will be fetched on next poll
+          console.error("[browser] debug URL fetch failed:", dbgErr?.message);
+        }
         return json(res, 200, { sessionId: row!.id, liveViewUrl, tabs, activeTabIdx: 0, status: "connected" });
       }
 
@@ -1459,7 +1469,9 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     return json(res, 404, { error: `Not found: ${route}` });
 
   } catch (err: any) {
-    console.error("[api] error:", err?.message ?? err);
-    return json(res, 500, { error: err?.message ?? "Internal server error" });
+    const msg = err?.message ?? String(err) ?? "Internal server error";
+    console.error("[api] error:", msg, err?.stack?.slice?.(0, 400));
+    // Return real message in non-prod to aid debugging; keep generic in future if needed
+    return json(res, 500, { error: msg });
   }
 }
