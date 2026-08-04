@@ -1,703 +1,417 @@
 /**
- * WorldBrowser — Integrated remote Chromium workspace.
+ * WorldBrowser — Integrated web browser using server-side HTTP proxy.
  *
  * Architecture:
- *   Frontend (this file) ─→ /api/browser/* ─→ Browserbase REST + live-view iframe
- *   Each authenticated user gets an isolated session.
- *   Provider credentials never reach the browser.
+ *   iframe src="/api/proxy?url=<target>" — server fetches the page, rewrites
+ *   links so they stay same-origin, injects a postMessage bridge for URL/title
+ *   tracking. No external services. Works in any browser.
  *
- * States: unconfigured | no-session | starting | connected | reconnecting | expired | error
+ * States: idle | loading | loaded | error
  */
 
 import {
   useState, useRef, useCallback, useEffect, KeyboardEvent,
 } from "react";
-import { apiRequest } from "@/lib/queryClient";
 import {
   Globe, ArrowLeft, ArrowRight, RotateCw, X, Plus,
-  Home, Wifi, WifiOff, Maximize2, Minimize2,
-  RefreshCw, AlertTriangle, StopCircle, Power, Loader2,
+  Home, Maximize2, Minimize2,
+  AlertTriangle, Loader2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { cn } from "@/lib/utils";
-
-// ── Types ──────────────────────────────────────────────────────────────────
-interface Tab {
-  id: number;
-  url: string;
-  title: string;
-  loading: boolean;
-}
-
-type SessionState =
-  | "unconfigured"   // BROWSERBASE_API_KEY not set
-  | "idle"           // no session yet
-  | "starting"       // creating session
-  | "connected"      // live
-  | "loading-page"   // page navigating
-  | "reconnecting"   // lost + retrying
-  | "expired"        // 2h timeout
-  | "error";         // unrecoverable
-
-interface Session {
-  sessionId: string;
-  liveViewUrl: string;  // debuggerFullscreenUrl from Browserbase /debug
-  tabs: Tab[];
-  activeTabIdx: number;
-  status: string;
-}
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const HOME_URL = "https://www.google.com";
-const POLL_MS  = 4_000;
+const PROXY    = (url: string) => `/api/proxy?url=${encodeURIComponent(url)}`;
+const ACC      = "hsl(43 88% 60%)";  // gold accent
 
-// ── Accent utilities ───────────────────────────────────────────────────────
-const ACC = "hsl(195 70% 52%)";   // world-node teal — used for active accents
+// ── Helpers ─────────────────────────────────────────────────────────────────
+function normalise(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return HOME_URL;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  // search term?
+  if (!trimmed.includes(".") || trimmed.includes(" ")) {
+    return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+  }
+  return "https://" + trimmed;
+}
 
-// ── Small sub-components ──────────────────────────────────────────────────
+function displayUrl(proxyUrl: string): string {
+  try {
+    const u = new URL(proxyUrl, location.origin);
+    const target = u.searchParams.get("url");
+    return target ? decodeURIComponent(target) : proxyUrl;
+  } catch { return proxyUrl; }
+}
 
-function Btn({
-  onClick, disabled, title, children, active = false, danger = false,
-}: {
-  onClick?: () => void; disabled?: boolean; title?: string;
-  children: React.ReactNode; active?: boolean; danger?: boolean;
+function faviconUrl(url: string) {
+  try { return `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=16`; }
+  catch { return undefined; }
+}
+
+// ── Decorative corners ──────────────────────────────────────────────────────
+function Corners() {
+  const c = "hsl(195 40% 30% / 0.35)";
+  const S: React.CSSProperties = { position: "absolute", width: 14, height: 14, pointerEvents: "none" };
+  return (
+    <>
+      <div style={{ ...S, top: 0, left: 0,  borderTop: `1px solid ${c}`, borderLeft:  `1px solid ${c}` }} />
+      <div style={{ ...S, top: 0, right: 0, borderTop: `1px solid ${c}`, borderRight: `1px solid ${c}` }} />
+      <div style={{ ...S, bottom: 0, left: 0,  borderBottom: `1px solid ${c}`, borderLeft:  `1px solid ${c}` }} />
+      <div style={{ ...S, bottom: 0, right: 0, borderBottom: `1px solid ${c}`, borderRight: `1px solid ${c}` }} />
+    </>
+  );
+}
+
+// ── Btn helper ──────────────────────────────────────────────────────────────
+function Btn({ children, onClick, disabled, title }: {
+  children: React.ReactNode; onClick?: () => void; disabled?: boolean; title?: string;
 }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={cn(
-        "flex items-center justify-center rounded-sm transition-all duration-150",
-        "w-7 h-7 flex-shrink-0",
-        active  ? "bg-[hsl(195_50%_18%)] text-[hsl(195_70%_62%)]" :
-        danger  ? "text-[hsl(0_55%_52%)] hover:bg-[hsl(0_30%_12%)]" :
-                  "text-[hsl(220_15%_45%)] hover:text-[hsl(220_10%_75%)] hover:bg-[hsl(222_14%_11%)]",
-        disabled ? "opacity-30 cursor-not-allowed" : "cursor-pointer",
-      )}
-      style={{ border: "none", background: active ? undefined : "none" }}
+      style={{
+        background: "none", border: "none", cursor: disabled ? "default" : "pointer",
+        color: disabled ? "hsl(220 8% 28%)" : "hsl(220 10% 55%)",
+        padding: "4px 6px", borderRadius: 3, display: "flex", alignItems: "center",
+        transition: "color 0.12s",
+      }}
+      onMouseEnter={e => { if (!disabled) (e.currentTarget as HTMLButtonElement).style.color = ACC; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = disabled ? "hsl(220 8% 28%)" : "hsl(220 10% 55%)"; }}
     >
       {children}
     </button>
   );
 }
 
-// ── Corner brackets (ROME style) ───────────────────────────────────────────
-function Corners({ color = ACC }: { color?: string }) {
-  const L = 10;
-  const corners = [
-    { style: { top: 0, left: 0 },             rot: 0 },
-    { style: { top: 0, right: 0 },             rot: 90 },
-    { style: { bottom: 0, right: 0 },          rot: 180 },
-    { style: { bottom: 0, left: 0 },           rot: 270 },
-  ];
-  return (
-    <>
-      {corners.map(({ style, rot }, i) => (
-        <svg key={i} width={L} height={L} viewBox="0 0 10 10" fill="none"
-          style={{ position: "absolute", opacity: 0.6, ...style }}>
-          <path d={`M1 ${L-1} L1 1 L${L-1} 1`} stroke={color} strokeWidth="1.4"
-            transform={`rotate(${rot} 5 5)`} />
-        </svg>
-      ))}
-    </>
-  );
+// ── Tab interface ───────────────────────────────────────────────────────────
+interface Tab {
+  id: number;
+  url: string;        // real URL (not proxied)
+  title: string;
 }
 
-// ── Loading spinner strip ──────────────────────────────────────────────────
-function LoadBar({ active }: { active: boolean }) {
-  return (
-    <div style={{ height: 2, background: "transparent", overflow: "hidden", flexShrink: 0 }}>
-      <AnimatePresence>
-        {active && (
-          <motion.div
-            initial={{ x: "-100%" }}
-            animate={{ x: "100%" }}
-            exit={{ opacity: 0 }}
-            transition={{ repeat: Infinity, duration: 1.1, ease: "linear" }}
-            style={{ height: "100%", width: "40%", background: `linear-gradient(90deg, transparent, ${ACC}, transparent)` }}
-          />
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-// ── State-specific full-screen overlays ────────────────────────────────────
-function StateOverlay({
-  state, error, onStart, onRestart,
-}: {
-  state: SessionState; error: string;
-  onStart: () => void; onRestart: () => void;
-}) {
-  const configs: Record<string, { icon: React.ReactNode; heading: string; sub: string; action?: { label: string; fn: () => void } }> = {
-    unconfigured: {
-      icon: <AlertTriangle size={28} color="hsl(43 88% 55%)" />,
-      heading: "Provider Not Configured",
-      sub: "Add BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID to your Vercel environment variables, then redeploy.",
-      action: { label: "Learn how →", fn: () => window.open("https://docs.browserbase.com/reference/introduction", "_blank") },
-    },
-    idle: {
-      icon: <Globe size={28} color={ACC} />,
-      heading: "World Browser",
-      sub: "Launch a secure isolated Chromium session. Sessions are ephemeral and expire after 2 hours of inactivity.",
-      action: { label: "Start Session", fn: onStart },
-    },
-    starting: {
-      icon: <Loader2 size={28} color={ACC} className="animate-spin" />,
-      heading: "Starting Session",
-      sub: "Allocating your remote Chromium instance…",
-    },
-    reconnecting: {
-      icon: <WifiOff size={28} color="hsl(43 70% 52%)" />,
-      heading: "Reconnecting",
-      sub: "Connection lost. Attempting to restore your session…",
-    },
-    expired: {
-      icon: <Power size={28} color="hsl(0 55% 52%)" />,
-      heading: "Session Expired",
-      sub: "Your browser session expired after 2 hours of inactivity.",
-      action: { label: "Start New Session", fn: onStart },
-    },
-    error: {
-      icon: <AlertTriangle size={28} color="hsl(0 55% 52%)" />,
-      heading: "Session Error",
-      sub: error || "An unexpected error occurred.",
-      action: { label: "Restart Session", fn: onRestart },
-    },
-  };
-
-  const cfg = configs[state];
-  if (!cfg) return null;
-
-  return (
-    <div style={{
-      position: "absolute", inset: 0, zIndex: 10,
-      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 18,
-      background: "hsl(222 14% 6% / 0.96)", backdropFilter: "blur(6px)",
-    }}>
-      <Corners />
-      <div>{cfg.icon}</div>
-      <div style={{ textAlign: "center", maxWidth: 340 }}>
-        <div style={{ fontFamily: "'Cinzel', serif", fontSize: 14, letterSpacing: "0.12em", color: "hsl(220 15% 82%)", marginBottom: 8 }}>
-          {cfg.heading}
-        </div>
-        <div style={{ fontFamily: "DM Sans, sans-serif", fontSize: 12, color: "hsl(220 10% 50%)", lineHeight: 1.6 }}>
-          {cfg.sub}
-        </div>
-      </div>
-      {cfg.action && (
-        <button onClick={cfg.action.fn} style={{
-          fontFamily: "DM Mono, monospace", fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase",
-          padding: "7px 20px", borderRadius: 2, cursor: "pointer",
-          background: "hsl(195 40% 14% / 0.9)", border: `1px solid ${ACC}`,
-          color: ACC, transition: "all 0.15s",
-        }}
-          onMouseEnter={e => { (e.currentTarget.style.background = "hsl(195 40% 22% / 0.9)"); }}
-          onMouseLeave={e => { (e.currentTarget.style.background = "hsl(195 40% 14% / 0.9)"); }}
-        >{cfg.action.label}</button>
-      )}
-    </div>
-  );
-}
-
-// ── Main component ─────────────────────────────────────────────────────────
+// ── Main component ──────────────────────────────────────────────────────────
 export default function WorldBrowser() {
-  const [configured, setConfigured] = useState<boolean | null>(null);
-  const [session,    setSession]    = useState<Session | null>(null);
-  const [sessionState, setSessionState] = useState<SessionState>("idle");
-  const [tabs,       setTabs]       = useState<Tab[]>([]);
-  const [activeTab,  setActiveTab]  = useState(0);
-  const [addressBar, setAddressBar] = useState("");
+  const [tabs,        setTabs]        = useState<Tab[]>([{ id: 0, url: HOME_URL, title: "New Tab" }]);
+  const [activeTab,   setActiveTab]   = useState(0);
+  const [addressBar,  setAddressBar]  = useState(HOME_URL);
   const [editingAddr, setEditingAddr] = useState(false);
-  const [loading,    setLoading]    = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
-  const [error,      setError]      = useState("");
-  const canvasRef   = useRef<HTMLCanvasElement>(null);
-  const imgRef      = useRef<HTMLImageElement | null>(null);
-  const pollRef     = useRef<ReturnType<typeof setInterval> | null>(null);
-  const screenshotRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const addressRef  = useRef<HTMLInputElement>(null);
-  const [screenshotTs, setScreenshotTs] = useState(0); // bump to force re-render
-  const sessionIdRef = useRef<string | null>(null); // stable ref for intervals
+  const [loading,     setLoading]     = useState(false);
+  const [fullscreen,  setFullscreen]  = useState(false);
+  const [error,       setError]       = useState("");
+  const iframeRef  = useRef<HTMLIFrameElement>(null);
+  const addressRef = useRef<HTMLInputElement>(null);
+  const nextId     = useRef(1);
 
-  // ── Check provider config on mount ────────────────────────────────────
+  const currentTab = tabs.find(t => t.id === activeTab) ?? tabs[0];
+
+  // ── iframe src: proxy the current tab's URL ─────────────────────────────
+  const iframeSrc = currentTab ? PROXY(currentTab.url) : PROXY(HOME_URL);
+
+  // ── Update tab url/title ─────────────────────────────────────────────────
+  const updateTab = useCallback((id: number, patch: Partial<Tab>) => {
+    setTabs(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t));
+  }, []);
+
+  // ── Listen for postMessage from proxied page (URL/title changes) ─────────
   useEffect(() => {
-    apiRequest("GET", "/api/browser/config")
-      .then(r => r.json())
-      .then(d => {
-        setConfigured(d.configured);
-        if (!d.configured) setSessionState("unconfigured");
-      })
-      .catch(() => { setConfigured(false); setSessionState("unconfigured"); });
-  }, []);
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type !== "PROXY_NAV") return;
+      const { url, title } = e.data;
+      // url here will be /api/proxy?url=... — extract real URL
+      const realUrl = (() => {
+        try {
+          const u = new URL(url, location.origin);
+          return u.searchParams.get("url") ? decodeURIComponent(u.searchParams.get("url")!) : url;
+        } catch { return url; }
+      })();
+      if (!editingAddr) setAddressBar(realUrl);
+      updateTab(activeTab, { url: realUrl, title: title || realUrl });
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [activeTab, editingAddr, updateTab]);
 
-  // ── Create session ─────────────────────────────────────────────────────
-  const startSession = useCallback(async () => {
-    setSessionState("starting");
-    setError("");
-    try {
-      const r = await apiRequest("POST", "/api/browser/sessions");
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error ?? "Failed to create session");
-      setSession(d);
-      sessionIdRef.current = d.sessionId;
-      setTabs(d.tabs ?? []);
-      setActiveTab(d.activeTabIdx ?? 0);
-      setAddressBar(d.tabs?.[0]?.url ?? HOME_URL);
-      setSessionState("connected");
-    } catch (e: any) {
-      setError(e.message ?? "Unknown error");
-      setSessionState("error");
-    }
-  }, []);
-
-  // ── End session ────────────────────────────────────────────────────────
-  const endSession = useCallback(async () => {
-    if (!session) return;
-    if (pollRef.current) clearInterval(pollRef.current);
-    if (screenshotRef.current) clearInterval(screenshotRef.current);
-    await apiRequest("DELETE", `/api/browser/sessions/${session.sessionId}`).catch(() => {});
-    sessionIdRef.current = null;
-    setSession(null);
-    setTabs([]);
-    setSessionState("idle");
-  }, [session]);
-
-  // ── Send CDP input event ──────────────────────────────────────────
-  const sendInput = useCallback((body: Record<string, unknown>) => {
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-    apiRequest("POST", `/api/browser/sessions/${sid}/input`, body).catch(() => {});
-  }, []);
-
-  // ── Navigate via CDP ───────────────────────────────────────────────
-  const navigate = useCallback(async (raw: string) => {
-    const sid = sessionIdRef.current;
-    if (!sid) return;
+  // ── Navigate ─────────────────────────────────────────────────────────────
+  const navigate = useCallback((raw: string) => {
+    const url = normalise(raw);
     setEditingAddr(false);
     setLoading(true);
-    try {
-      const r = await apiRequest("POST", `/api/browser/sessions/${sid}/input`, { navigateTo: raw });
-      const d = await r.json();
-      if (r.status === 403 && d.error === "DANGEROUS_URL") {
-        setError("Navigation blocked: internal or dangerous URL");
-        return;
-      }
-      setAddressBar(raw);
-    } catch (e: any) {
-      setError(e.message ?? "Navigation error");
-    } finally {
-      setTimeout(() => setLoading(false), 1200);
-    }
-  }, []);
+    setError("");
+    updateTab(activeTab, { url, title: "Loading…" });
+    setAddressBar(url);
+  }, [activeTab, updateTab]);
 
   const onAddrKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter")  navigate(addressRef.current?.value ?? addressBar);
     if (e.key === "Escape") { setEditingAddr(false); addressRef.current?.blur(); }
   };
 
-  // ── Nav controls — all via CDP input endpoint ────────────────────
-  const newTab    = () => {};
-  const closeTab  = (_i: number) => {};
-  const switchTab = (i: number) => setActiveTab(i);
-  const goBack    = () => sendInput({ type: "back" });
-  const goForward = () => sendInput({ type: "forward" });
-  const reload    = () => { setLoading(true); sendInput({ type: "reload" }); setTimeout(() => setLoading(false), 1200); };
-  const stop      = () => { setLoading(false); sendInput({ type: "stop" }); };
+  // ── Tab management ────────────────────────────────────────────────────────
+  const newTab = () => {
+    const id = nextId.current++;
+    setTabs(prev => [...prev, { id, url: HOME_URL, title: "New Tab" }]);
+    setActiveTab(id);
+    setAddressBar(HOME_URL);
+    setLoading(true);
+  };
 
-  // ── Canvas mouse/keyboard events — translate to CDP input ────────────
-  const canvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    // Scale from canvas display size to remote viewport (1280x800)
-    const scaleX = 1280 / rect.width;
-    const scaleY = 800  / rect.height;
-    return { x: Math.round((e.clientX - rect.left) * scaleX), y: Math.round((e.clientY - rect.top) * scaleY) };
+  const closeTab = (id: number) => {
+    if (tabs.length === 1) return; // keep at least one
+    setTabs(prev => {
+      const next = prev.filter(t => t.id !== id);
+      if (id === activeTab) {
+        const idx = Math.max(0, prev.findIndex(t => t.id === id) - 1);
+        const newActive = next[idx]?.id ?? next[0]?.id;
+        setActiveTab(newActive);
+        setAddressBar(next.find(t => t.id === newActive)?.url ?? HOME_URL);
+      }
+      return next;
+    });
   };
-  const onCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    canvasRef.current?.focus();
-    const { x, y } = canvasCoords(e);
-    sendInput({ type: "mousedown", x, y, button: e.button === 2 ? "right" : e.button === 1 ? "middle" : "left" });
-  };
-  const onCanvasMouseUp   = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const { x, y } = canvasCoords(e);
-    sendInput({ type: "mouseup",   x, y, button: e.button === 2 ? "right" : e.button === 1 ? "middle" : "left" });
-  };
-  const onCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (e.buttons === 0) return; // only send when dragging
-    const { x, y } = canvasCoords(e);
-    sendInput({ type: "mousemove", x, y });
-  };
-  const onCanvasWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    const { x, y } = canvasCoords(e as unknown as React.MouseEvent<HTMLCanvasElement>);
-    sendInput({ type: "wheel", x, y, deltaX: e.deltaX, deltaY: e.deltaY });
-  };
-  const onCanvasKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    sendInput({ type: "keydown", key: e.key, text: e.key.length === 1 ? e.key : "", modifiers: (e.ctrlKey ? 2 : 0) | (e.altKey ? 1 : 0) | (e.shiftKey ? 8 : 0) | (e.metaKey ? 4 : 0) });
-    if (e.key.length === 1) sendInput({ type: "char", text: e.key });
-  };
-  const onCanvasKeyUp = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    sendInput({ type: "keyup", key: e.key, modifiers: 0 });
-  };
-  const onCanvasContextMenu = (e: React.MouseEvent) => e.preventDefault();
 
-  // ── Poll session status + refresh live-view URL ───────────────────────
-  useEffect(() => {
-    if (!session || sessionState !== "connected") return;
-    pollRef.current = setInterval(async () => {
-      try {
-        const r = await apiRequest("GET", `/api/browser/sessions/${session.sessionId}`);
-        const d = await r.json();
-        if (d.status === "disconnected" || d.status === "expired") {
-          setSessionState("expired");
-          if (pollRef.current) clearInterval(pollRef.current);
-          return;
-        }
-        if (d.tabs) setTabs(typeof d.tabs === "string" ? JSON.parse(d.tabs) : d.tabs);
-        if (d.currentUrl && !editingAddr) setAddressBar(d.currentUrl);
-        // Update live-view URL if it changed (Browserbase refreshes these)
-        if (d.liveViewUrl && d.liveViewUrl !== session.liveViewUrl) {
-          setSession(prev => prev ? { ...prev, liveViewUrl: d.liveViewUrl } : prev);
-        }
-      } catch {}
-    }, POLL_MS);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [session, sessionState, editingAddr]);
+  const switchTab = (id: number) => {
+    setActiveTab(id);
+    setAddressBar(tabs.find(t => t.id === id)?.url ?? HOME_URL);
+    setLoading(true);
+  };
 
+  // ── Nav controls ──────────────────────────────────────────────────────────
+  const goBack    = () => { try { iframeRef.current?.contentWindow?.history.back();    } catch {} };
+  const goForward = () => { try { iframeRef.current?.contentWindow?.history.forward(); } catch {} };
+  const reload    = () => { setLoading(true); try { iframeRef.current?.contentWindow?.location.reload(); } catch { updateTab(activeTab, { url: currentTab.url }); } };
+  const goHome    = () => navigate(HOME_URL);
 
-  // Screenshot polling loop — 2fps, draws CDP screenshots onto <canvas>
-  useEffect(() => {
-    if (!session || sessionState !== "connected") {
-      if (screenshotRef.current) clearInterval(screenshotRef.current);
-      return;
-    }
-    const sid = session.sessionId;
-    let active = true;
-    let inFlight = false;
-    const tick = async () => {
-      if (!active || inFlight) return;
-      inFlight = true;
-      try {
-        const r = await fetch(`/api/browser/sessions/${sid}/screenshot`, {
-          headers: { "x-session-token": localStorage.getItem("rome_session_token") ?? "" },
-        });
-        if (!r.ok || !active) return;
-        const blob = await r.blob();
-        const url = URL.createObjectURL(blob);
-        const canvas = canvasRef.current;
-        if (canvas && active) {
-          const ctx = canvas.getContext("2d");
-          const img = new Image();
-          img.onload = () => {
-            if (!active) return;
-            canvas.width  = img.naturalWidth  || 1280;
-            canvas.height = img.naturalHeight || 800;
-            ctx?.drawImage(img, 0, 0);
-            URL.revokeObjectURL(url);
-          };
-          img.src = url;
-        }
-      } catch { /* swallow */ } finally { inFlight = false; }
-    };
-    screenshotRef.current = setInterval(tick, 500);
-    tick();
-    return () => { active = false; if (screenshotRef.current) clearInterval(screenshotRef.current); };
-  }, [session, sessionState]);
+  // ── iframe load events ────────────────────────────────────────────────────
+  const onIframeLoad = () => {
+    setLoading(false);
+    setError("");
+    try {
+      const loc = iframeRef.current?.contentWindow?.location?.href ?? "";
+      if (loc && loc !== "about:blank") {
+        const real = displayUrl(loc);
+        if (!editingAddr) setAddressBar(real);
+        updateTab(activeTab, { url: real });
+      }
+    } catch {} // cross-origin; handled by postMessage bridge instead
+  };
 
-  // ── Show overlay? ──────────────────────────────────────────────────────
-  const showOverlay = !["connected", "loading-page"].includes(sessionState);
+  const onIframeError = () => {
+    setLoading(false);
+    setError("Page failed to load");
+  };
 
-  // ── Tab label truncation ───────────────────────────────────────────────
+  // ── Tab label truncation ──────────────────────────────────────────────────
   function tabLabel(tab: Tab) {
     if (!tab.title || tab.title === "Loading…" || tab.title === "New Tab") {
       try { return new URL(tab.url).hostname || "New Tab"; } catch { return "New Tab"; }
     }
-    return tab.title.length > 18 ? tab.title.slice(0, 17) + "…" : tab.title;
+    return tab.title.length > 20 ? tab.title.slice(0, 19) + "…" : tab.title;
   }
 
-  // ── Favicon ────────────────────────────────────────────────────────────
-  function faviconUrl(url: string) {
-    try {
-      const origin = new URL(url).origin;
-      return `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=16`;
-    } catch { return null; }
-  }
-
-  const currentTab = tabs[activeTab];
+  // ── Styles ─────────────────────────────────────────────────────────────────
+  const bg       = "hsl(222 14% 6%)";
+  const surface  = "hsl(222 14% 9%)";
+  const border   = "hsl(220 12% 14%)";
+  const textDim  = "hsl(220 8% 35%)";
 
   return (
     <div style={{
-      position: fullscreen ? "fixed" : "relative",
-      inset: fullscreen ? 0 : undefined,
-      zIndex: fullscreen ? 500 : undefined,
-      width: "100%",
-      height: fullscreen ? "100vh" : "calc(100vh - 56px)",
-      display: "flex",
-      flexDirection: "column",
-      background: "hsl(222 14% 7%)",
-      fontFamily: "DM Mono, monospace",
+      position: "fixed", inset: 0,
+      background: bg,
+      display: "flex", flexDirection: "column",
+      fontFamily: "DM Sans, sans-serif",
       overflow: "hidden",
     }}>
+      <Corners />
 
-      {/* ── Tab strip ─────────────────────────────────────────────────── */}
+      {/* ── Tab bar ────────────────────────────────────────────────────── */}
       <div style={{
-        display: "flex", alignItems: "stretch",
-        background: "hsl(222 16% 5%)",
-        borderBottom: "1px solid hsl(222 12% 11%)",
-        height: 34, paddingLeft: 8, paddingRight: 8,
-        gap: 2, overflowX: "auto", flexShrink: 0,
+        height: 36,
+        background: surface,
+        borderBottom: `1px solid ${border}`,
+        display: "flex", alignItems: "center",
+        paddingLeft: 8, paddingRight: 8, gap: 2,
+        overflowX: "auto", overflowY: "hidden",
+        flexShrink: 0,
       }}>
-        {tabs.map((tab, i) => (
-          <div key={tab.id}
-            onClick={() => switchTab(i)}
+        {tabs.map(tab => (
+          <div
+            key={tab.id}
+            onClick={() => switchTab(tab.id)}
             style={{
-              display: "flex", alignItems: "center", gap: 5,
-              padding: "0 10px 0 8px", height: "100%",
-              minWidth: 100, maxWidth: 160, flexShrink: 0,
-              cursor: "pointer",
-              background: i === activeTab ? "hsl(222 14% 9%)" : "transparent",
-              borderTop: i === activeTab ? `1px solid ${ACC}` : "1px solid transparent",
-              borderLeft: "1px solid transparent",
-              borderRight: "1px solid transparent",
+              display: "flex", alignItems: "center", gap: 6,
+              padding: "4px 10px", borderRadius: 4,
+              background: tab.id === activeTab ? "hsl(220 12% 13%)" : "transparent",
+              border: tab.id === activeTab ? `1px solid ${border}` : "1px solid transparent",
+              cursor: "pointer", flexShrink: 0, maxWidth: 180,
+              color: tab.id === activeTab ? "hsl(220 10% 72%)" : textDim,
+              fontSize: 11, fontFamily: "DM Mono, monospace",
               transition: "all 0.12s",
-              position: "relative",
             }}
           >
-            {/* Favicon */}
-            {faviconUrl(tab.url)
-              ? <img src={faviconUrl(tab.url)!} width={12} height={12} style={{ flexShrink: 0, opacity: 0.75 }} onError={e => (e.currentTarget.style.display = "none")} />
-              : <Globe size={11} style={{ flexShrink: 0, opacity: 0.4, color: ACC }} />}
-            {/* Title */}
-            <span style={{ flex: 1, fontSize: 9, letterSpacing: "0.06em", color: i === activeTab ? "hsl(220 12% 75%)" : "hsl(220 8% 40%)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+            {faviconUrl(tab.url) && (
+              <img src={faviconUrl(tab.url)!} width={12} height={12}
+                style={{ flexShrink: 0, opacity: 0.75 }}
+                onError={e => (e.currentTarget.style.display = "none")} />
+            )}
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {tabLabel(tab)}
             </span>
-            {/* Loading indicator */}
-            {tab.loading && <Loader2 size={9} style={{ color: ACC, flexShrink: 0, animation: "spin 1s linear infinite" }} />}
-            {/* Close */}
             {tabs.length > 1 && (
-              <button onClick={e => { e.stopPropagation(); closeTab(i); }}
-                style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", flexShrink: 0, opacity: 0.4, color: "currentColor" }}
-                onMouseEnter={e => (e.currentTarget.style.opacity = "1")}
-                onMouseLeave={e => (e.currentTarget.style.opacity = "0.4")}>
-                <X size={9} />
-              </button>
+              <X size={10} style={{ flexShrink: 0, opacity: 0.5 }}
+                onClick={e => { e.stopPropagation(); closeTab(tab.id); }} />
             )}
           </div>
         ))}
+        <Btn onClick={newTab} title="New tab"><Plus size={13} /></Btn>
 
-        {/* New tab button */}
-        <button onClick={newTab} title="New tab"
-          style={{
-            alignSelf: "center", marginLeft: 2,
-            background: "none", border: "none", cursor: "pointer",
-            color: "hsl(220 12% 38%)", display: "flex", alignItems: "center",
-            padding: "3px 5px", borderRadius: 2, transition: "color 0.12s",
-          }}
-          onMouseEnter={e => (e.currentTarget.style.color = ACC)}
-          onMouseLeave={e => (e.currentTarget.style.color = "hsl(220 12% 38%)")}>
-          <Plus size={13} />
-        </button>
-
-        {/* Spacer + session controls */}
+        {/* Spacer + right controls */}
         <div style={{ flex: 1 }} />
-        <div style={{ display: "flex", alignItems: "center", gap: 2, paddingRight: 4 }}>
-          {/* Connection status */}
-          <div title={sessionState === "connected" ? "Connected" : "Disconnected"}
-            style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            {sessionState === "connected"
-              ? <Wifi size={11} color={ACC} style={{ opacity: 0.75 }} />
-              : <WifiOff size={11} color="hsl(0 55% 48%)" style={{ opacity: 0.75 }} />}
-          </div>
-          {/* End session */}
-          {session && (
-            <Btn onClick={endSession} title="End session" danger>
-              <Power size={13} />
-            </Btn>
-          )}
-          {/* Fullscreen */}
-          <Btn onClick={() => setFullscreen(f => !f)} title={fullscreen ? "Exit fullscreen" : "Fullscreen"}>
-            {fullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-          </Btn>
-        </div>
+        <Btn onClick={() => setFullscreen(f => !f)} title={fullscreen ? "Exit fullscreen" : "Fullscreen"}>
+          {fullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+        </Btn>
       </div>
 
-      {/* ── Navigation bar ───────────────────────────────────────────── */}
+      {/* ── Nav bar ────────────────────────────────────────────────────── */}
       <div style={{
-        display: "flex", alignItems: "center", gap: 4,
-        padding: "0 10px",
-        height: 38, flexShrink: 0,
-        background: "hsl(222 14% 8%)",
-        borderBottom: "1px solid hsl(222 12% 11%)",
+        height: 44,
+        background: surface,
+        borderBottom: `1px solid ${border}`,
+        display: "flex", alignItems: "center",
+        paddingLeft: 8, paddingRight: 8, gap: 4,
+        flexShrink: 0,
       }}>
-        {/* Back */}
-        <Btn onClick={goBack} disabled={!session || sessionState !== "connected"} title="Back">
-          <ArrowLeft size={14} />
+        <Btn onClick={goBack}    title="Back"><ArrowLeft  size={15} /></Btn>
+        <Btn onClick={goForward} title="Forward"><ArrowRight size={15} /></Btn>
+        <Btn onClick={reload}    title="Reload">
+          {loading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <RotateCw size={15} />}
         </Btn>
-        {/* Forward */}
-        <Btn onClick={goForward} disabled={!session || sessionState !== "connected"} title="Forward">
-          <ArrowRight size={14} />
-        </Btn>
-        {/* Reload / Stop */}
-        {loading
-          ? <Btn onClick={stop} title="Stop"><StopCircle size={14} /></Btn>
-          : <Btn onClick={reload} disabled={!session || sessionState !== "connected"} title="Reload"><RotateCw size={13} /></Btn>}
-        {/* Home */}
-        <Btn onClick={() => navigate(HOME_URL)} disabled={!session || sessionState !== "connected"} title="Home">
-          <Home size={13} />
-        </Btn>
+        <Btn onClick={goHome}    title="Home"><Home size={14} /></Btn>
 
         {/* Address bar */}
-        <div style={{
-          flex: 1, position: "relative", display: "flex", alignItems: "center",
-          background: "hsl(222 18% 5%)",
-          border: `1px solid ${editingAddr ? ACC : "hsl(222 12% 13%)"}`,
-          borderRadius: 2, height: 26, padding: "0 10px",
-          transition: "border-color 0.15s",
-          gap: 6,
-        }}>
-          {/* Lock / globe icon */}
-          {currentTab?.url?.startsWith("https://")
-            ? <svg width="9" height="11" viewBox="0 0 9 11" fill="none" style={{ flexShrink: 0, opacity: 0.5 }}><rect x="1.5" y="5" width="6" height="5.5" rx="0.8" stroke={ACC} strokeWidth="1.1"/><path d="M3 5 V3.5 A1.5 1.5 0 0 1 6 3.5 V5" stroke={ACC} strokeWidth="1.1" strokeLinecap="round"/></svg>
-            : <Globe size={10} style={{ flexShrink: 0, opacity: 0.4, color: ACC }} />}
-          <input
-            ref={addressRef}
-            value={editingAddr ? undefined : addressBar}
-            defaultValue={addressBar}
-            onFocus={() => { setEditingAddr(true); setTimeout(() => addressRef.current?.select(), 10); }}
-            onBlur={() => setEditingAddr(false)}
-            onKeyDown={onAddrKey}
-            placeholder="Search or enter URL…"
-            style={{
-              flex: 1, background: "transparent", border: "none", outline: "none",
-              fontFamily: "DM Mono, monospace", fontSize: 10,
-              color: "hsl(220 10% 72%)", letterSpacing: "0.04em",
-            }}
-          />
-          {/* Loading spinner inline */}
-          {loading && <Loader2 size={11} style={{ flexShrink: 0, color: ACC, animation: "spin 0.8s linear infinite" }} />}
-          {/* Clear */}
-          {editingAddr && (
-            <button onClick={() => { if (addressRef.current) addressRef.current.value = ""; }}
-              style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", opacity: 0.45, padding: 0, color: "currentColor" }}
-              onMouseEnter={e => (e.currentTarget.style.opacity = "1")}
-              onMouseLeave={e => (e.currentTarget.style.opacity = "0.45")}>
-              <X size={10} />
-            </button>
+        <div
+          onClick={() => { setEditingAddr(true); setTimeout(() => { addressRef.current?.select(); }, 10); }}
+          style={{
+            flex: 1, height: 28,
+            background: editingAddr ? "hsl(220 14% 11%)" : "hsl(220 12% 10%)",
+            border: editingAddr ? `1px solid ${ACC}` : `1px solid ${border}`,
+            borderRadius: 4, display: "flex", alignItems: "center",
+            paddingLeft: 10, paddingRight: 6, gap: 6,
+            cursor: "text", transition: "border 0.15s",
+          }}
+        >
+          <Globe size={11} color={textDim} style={{ flexShrink: 0 }} />
+          {editingAddr ? (
+            <input
+              ref={addressRef}
+              defaultValue={addressBar}
+              onKeyDown={onAddrKey}
+              onBlur={() => setEditingAddr(false)}
+              autoFocus
+              style={{
+                flex: 1, background: "none", border: "none", outline: "none",
+                color: "hsl(220 10% 78%)", fontSize: 12,
+                fontFamily: "DM Mono, monospace",
+              }}
+            />
+          ) : (
+            <span style={{
+              flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              color: "hsl(220 10% 55%)", fontSize: 12,
+              fontFamily: "DM Mono, monospace",
+            }}>
+              {addressBar}
+            </span>
           )}
         </div>
-
-        {/* Restart session */}
-        {session && (
-          <Btn onClick={() => { endSession().then(startSession); }} title="Restart session">
-            <RefreshCw size={13} />
-          </Btn>
-        )}
       </div>
 
-      {/* ── Loading bar ───────────────────────────────────────────────── */}
-      <LoadBar active={loading || sessionState === "starting"} />
-
-      {/* ── Error banner ──────────────────────────────────────────────── */}
+      {/* ── Error banner ───────────────────────────────────────────────── */}
       <AnimatePresence>
         {error && (
           <motion.div
-            initial={{ height: 0, opacity: 0 }} animate={{ height: 28, opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            initial={{ height: 0, opacity: 0 }} animate={{ height: 32, opacity: 1 }} exit={{ height: 0, opacity: 0 }}
             style={{
+              background: "hsl(0 52% 22%)", borderBottom: `1px solid hsl(0 52% 30%)`,
               display: "flex", alignItems: "center", gap: 8,
-              padding: "0 12px", fontSize: 9, letterSpacing: "0.1em",
-              background: "hsl(0 25% 8%)", borderBottom: "1px solid hsl(0 30% 18%)",
-              color: "hsl(0 55% 60%)", flexShrink: 0, overflow: "hidden",
-            }}>
-            <AlertTriangle size={11} />
-            <span style={{ flex: 1 }}>{error}</span>
-            <button onClick={() => setError("")}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", opacity: 0.5 }}>
-              <X size={10} />
-            </button>
+              paddingLeft: 14, fontSize: 11,
+              color: "hsl(0 60% 75%)", flexShrink: 0, overflow: "hidden",
+            }}
+          >
+            <AlertTriangle size={12} />
+            {error}
+            <X size={12} style={{ marginLeft: "auto", marginRight: 10, cursor: "pointer" }} onClick={() => setError("")} />
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* ── Viewport ─────────────────────────────────────────────────── */}
+      {/* ── Loading bar ────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {loading && (
+          <motion.div
+            initial={{ scaleX: 0, opacity: 1 }} animate={{ scaleX: 0.9 }} exit={{ scaleX: 1, opacity: 0 }}
+            transition={{ duration: 1.8, ease: "easeOut" }}
+            style={{
+              height: 2, background: ACC, transformOrigin: "left",
+              flexShrink: 0,
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* ── Viewport ───────────────────────────────────────────────────── */}
       <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+        {/* Grid background when showing placeholder */}
+        <div style={{
+          position: "absolute", inset: 0, pointerEvents: "none",
+          backgroundImage: `
+            linear-gradient(hsl(195 40% 15% / 0.04) 1px, transparent 1px),
+            linear-gradient(90deg, hsl(195 40% 15% / 0.04) 1px, transparent 1px)
+          `,
+          backgroundSize: "40px 40px",
+        }} />
 
-        {/* State overlays */}
-        <AnimatePresence>
-          {showOverlay && (
-            <motion.div key="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              style={{ position: "absolute", inset: 0, zIndex: 10 }}>
-              <StateOverlay
-                state={sessionState}
-                error={error}
-                onStart={startSession}
-                onRestart={() => { endSession().then(startSession); }}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Canvas-based remote browser — CDP screenshot stream, works in any browser */}
-        <canvas
-          ref={canvasRef}
-          tabIndex={0}
-          onMouseDown={onCanvasMouseDown}
-          onMouseUp={onCanvasMouseUp}
-          onMouseMove={onCanvasMouseMove}
-          onWheel={onCanvasWheel}
-          onKeyDown={onCanvasKeyDown}
-          onKeyUp={onCanvasKeyUp}
-          onContextMenu={onCanvasContextMenu}
+        {/* Proxy iframe — always same-origin, no CORS or X-Frame issues */}
+        <iframe
+          ref={iframeRef}
+          key={`${activeTab}-${currentTab?.url}`}
+          src={iframeSrc}
+          onLoad={onIframeLoad}
+          onError={onIframeError}
+          sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
+          allow="clipboard-read; clipboard-write"
           style={{
             position: "absolute", inset: 0,
             width: "100%", height: "100%",
-            display: showOverlay ? "none" : "block",
+            border: "none",
             background: "#fff",
-            cursor: "default",
-            outline: "none",
           }}
+          title="ROME World Browser"
         />
-
-        {/* Placeholder grid when no session */}
-        {!session && (
-          <div style={{
-            position: "absolute", inset: 0,
-            backgroundImage: `
-              linear-gradient(hsl(195 40% 15% / 0.04) 1px, transparent 1px),
-              linear-gradient(90deg, hsl(195 40% 15% / 0.04) 1px, transparent 1px)
-            `,
-            backgroundSize: "40px 40px",
-          }} />
-        )}
       </div>
 
-      {/* ── Bottom status bar ─────────────────────────────────────────── */}
+      {/* ── Status bar ─────────────────────────────────────────────────── */}
       <div style={{
-        height: 20, display: "flex", alignItems: "center", gap: 12,
-        padding: "0 12px", flexShrink: 0,
-        background: "hsl(222 16% 5%)", borderTop: "1px solid hsl(222 12% 10%)",
-        fontSize: 8, letterSpacing: "0.14em", color: "hsl(220 8% 32%)",
+        height: 20, flexShrink: 0,
+        background: surface,
+        borderTop: `1px solid ${border}`,
+        display: "flex", alignItems: "center",
+        paddingLeft: 12, paddingRight: 12, gap: 12,
       }}>
-        <span style={{ textTransform: "uppercase" }}>
-          {sessionState === "connected" ? "SECURE — Browserbase" :
-           sessionState === "starting"  ? "INITIALISING…" :
-           sessionState === "expired"   ? "SESSION EXPIRED" :
-           sessionState === "unconfigured" ? "PROVIDER NOT CONFIGURED" : "IDLE"}
+        <span style={{ fontSize: 9, letterSpacing: "0.14em", color: textDim, textTransform: "uppercase" }}>
+          {loading ? "Loading…" : currentTab?.title && currentTab.title !== "New Tab" ? currentTab.title : "Ready"}
         </span>
         <div style={{ flex: 1 }} />
-        {session && (
-          <span style={{ color: "hsl(220 8% 25%)" }}>
-            SESSION · {session.sessionId.slice(0, 8).toUpperCase()}
-          </span>
-        )}
-        {/* Limitations notice */}
-        <span style={{ color: "hsl(220 8% 22%)" }}>
-          DRM · CAPTCHA · HW AUTH MAY BE LIMITED
+        <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "hsl(220 8% 22%)", textTransform: "uppercase" }}>
+          ROME World
         </span>
       </div>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

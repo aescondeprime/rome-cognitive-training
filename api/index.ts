@@ -1553,6 +1553,134 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       }
     }
 
+    // ── GET /api/proxy?url=... — server-side HTTP fetch proxy ────────────────
+    // Fetches the target URL server-side, rewrites all links so they also go
+    // through this proxy, injects a postMessage script so the parent frame can
+    // read navigation/title changes, and streams the response to the client.
+    // All requests appear same-origin to the iframe — no CORS / X-Frame issues.
+    if (route === "/proxy" && method === "GET") {
+      const rawUrl = (req as any).query?.url ?? new URL(req.url ?? "", "http://x").searchParams.get("url") ?? "";
+      if (!rawUrl) return json(res, 400, { error: "Missing url param" });
+
+      // Parse and validate target URL
+      let target: URL;
+      try { target = new URL(decodeURIComponent(rawUrl)); }
+      catch { return json(res, 400, { error: "Invalid URL" }); }
+
+      // Block internal/dangerous hosts
+      const dangerousHosts = ["localhost", "127.0.0.1", "0.0.0.0", "::1", "169.254.169.254"];
+      if (dangerousHosts.some(h => target.hostname === h) || target.hostname.endsWith(".local")) {
+        return json(res, 403, { error: "Blocked: internal host" });
+      }
+      if (target.protocol !== "http:" && target.protocol !== "https:") {
+        return json(res, 403, { error: "Only http/https allowed" });
+      }
+
+      const PROXY_BASE = "/api/proxy?url=";
+      const rewriteUrl = (href: string, base: URL): string => {
+        if (!href || href.startsWith("#") || href.startsWith("javascript:") || href.startsWith("data:") || href.startsWith("blob:")) return href;
+        try {
+          const abs = new URL(href, base).toString();
+          return PROXY_BASE + encodeURIComponent(abs);
+        } catch { return href; }
+      };
+
+      try {
+        const upstream = await fetch(target.toString(), {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+          },
+          redirect: "follow",
+          signal: AbortSignal.timeout ? AbortSignal.timeout(12000) : (() => { const c = new AbortController(); setTimeout(() => c.abort(), 12000); return c.signal; })(),
+        });
+
+        const ct = upstream.headers.get("content-type") ?? "";
+
+        // Non-HTML: pass through binary as-is (images, fonts, CSS, JS)
+        if (!ct.includes("text/html") && !ct.includes("application/xhtml")) {
+          const buf = await upstream.arrayBuffer();
+          res.writeHead(upstream.status, {
+            "Content-Type": ct || "application/octet-stream",
+            "Cache-Control": "public, max-age=60",
+            "Access-Control-Allow-Origin": "*",
+          });
+          res.end(Buffer.from(buf));
+          return;
+        }
+
+        // HTML: rewrite links
+        let html = await upstream.text();
+        const finalUrl = new URL(upstream.url || target.toString()); // follows redirects
+
+        // Rewrite <a href>, <link href>, <script src>, <img src>, <form action>, <iframe src>
+        html = html
+          .replace(/(<a\s[^>]*href=")([^"#][^"]*?)(")/gi, (_m, pre, href, post) => pre + rewriteUrl(href, finalUrl) + post)
+          .replace(/(<a\s[^>]*href=')([^'#][^']*?)(')/gi, (_m, pre, href, post) => pre + rewriteUrl(href, finalUrl) + post)
+          .replace(/(<link\s[^>]*href=")([^"][^"]*?)(")/gi, (_m, pre, href, post) => pre + rewriteUrl(href, finalUrl) + post)
+          .replace(/(<link\s[^>]*href=')([^'][^']*?)(')/gi, (_m, pre, href, post) => pre + rewriteUrl(href, finalUrl) + post)
+          .replace(/(<script\s[^>]*src=")([^"][^"]*?)(")/gi, (_m, pre, src, post) => pre + rewriteUrl(src, finalUrl) + post)
+          .replace(/(<script\s[^>]*src=')([^'][^']*?)(')/gi, (_m, pre, src, post) => pre + rewriteUrl(src, finalUrl) + post)
+          .replace(/(<img\s[^>]*src=")([^"][^"]*?)(")/gi, (_m, pre, src, post) => pre + rewriteUrl(src, finalUrl) + post)
+          .replace(/(<img\s[^>]*src=')([^'][^']*?)(')/gi, (_m, pre, src, post) => pre + rewriteUrl(src, finalUrl) + post)
+          .replace(/(<form\s[^>]*action=")([^"][^"]*?)(")/gi, (_m, pre, act, post) => pre + rewriteUrl(act, finalUrl) + post)
+          .replace(/url\(["']?([^"')]+)["']?\)/gi, (_m, u) => `url(${rewriteUrl(u, finalUrl)})`);
+
+        // Inject postMessage bridge so parent iframe knows current URL + title
+        const bridge = `<script>
+(function(){
+  var _title = document.title;
+  function notify(){
+    var t = document.title;
+    try { parent.postMessage({ type:'PROXY_NAV', url: location.href, title: t }, '*'); } catch(e){}
+    if(t !== _title){ _title = t; }
+  }
+  // Notify on load
+  window.addEventListener('load', notify);
+  // Watch title changes
+  var obs = new MutationObserver(notify);
+  obs.observe(document.documentElement, { subtree: true, childList: true, characterData: true });
+  // Override pushState/replaceState
+  ['pushState','replaceState'].forEach(function(fn){
+    var orig = history[fn];
+    history[fn] = function(){ orig.apply(this, arguments); notify(); };
+  });
+  window.addEventListener('popstate', notify);
+})();
+</script>`;
+        // Inject right after <head> or at top of <body>
+        if (html.includes('<head>')) {
+          html = html.replace('<head>', '<head>' + bridge);
+        } else if (html.includes('<body')) {
+          html = html.replace(/<body([^>]*)>/, '<body$1>' + bridge);
+        } else {
+          html = bridge + html;
+        }
+
+        // Remove X-Frame-Options and CSP headers that would block embedding
+        res.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        });
+        res.end(html);
+        return;
+      } catch (fetchErr: any) {
+        const msg = fetchErr?.message ?? String(fetchErr);
+        // Return a friendly error page
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(`<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px;background:#111;color:#ccc">
+<h2 style="color:#e66">Could not load page</h2>
+<p>${msg}</p>
+<p style="font-size:11px;opacity:0.5">Target: ${target.toString()}</p>
+</body></html>`);
+        return;
+      }
+    }
+
     return json(res, 404, { error: `Not found: ${route}` });
 
   } catch (err: any) {
