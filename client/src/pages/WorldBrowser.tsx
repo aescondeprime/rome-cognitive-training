@@ -257,47 +257,53 @@ export default function WorldBrowser() {
     setSessionState("idle");
   }, [session]);
 
-  // ── Send action ────────────────────────────────────────────────────────
-  const sendAction = useCallback(async (action: string, extra: Record<string, unknown> = {}) => {
+  // ── Address bar submit — server validates URL, then iframe navigates ─────
+  const navigate = useCallback(async (raw: string) => {
     if (!session) return;
-    try {
-      const r = await apiRequest("POST", `/api/browser/sessions/${session.sessionId}/action`, { action, ...extra });
-      const d = await r.json();
-      if (r.status === 403 && d.error === "DANGEROUS_URL") {
-        setError(`Navigation blocked: internal or dangerous URL`);
-        return;
-      }
-      if (!r.ok) { setError(d.error ?? "Action failed"); return; }
-      if (d.tabs) setTabs(typeof d.tabs === "string" ? JSON.parse(d.tabs) : d.tabs);
-      if (d.activeTabIdx !== undefined) setActiveTab(d.activeTabIdx);
-      if (d.currentUrl) setAddressBar(d.currentUrl);
-    } catch (e: any) {
-      setError(e.message ?? "Network error");
-    }
-  }, [session]);
-
-  // ── Address bar submit ─────────────────────────────────────────────────
-  const navigate = useCallback((raw: string) => {
     setEditingAddr(false);
     setLoading(true);
-    setAddressBar(raw);
-    sendAction("navigate", { url: raw }).finally(() => setLoading(false));
-  }, [sendAction]);
+    try {
+      const r = await apiRequest("POST", `/api/browser/sessions/${session.sessionId}/action`, { action: "navigate", url: raw });
+      const d = await r.json();
+      if (r.status === 403 && d.error === "DANGEROUS_URL") {
+        setError("Navigation blocked: internal or dangerous URL");
+        setLoading(false);
+        return;
+      }
+      setAddressBar(d.safeUrl ?? raw);
+      // Focus iframe so user can interact immediately
+      iframeRef.current?.focus();
+    } catch (e: any) {
+      setError(e.message ?? "Navigation error");
+    } finally {
+      setTimeout(() => setLoading(false), 600);
+    }
+  }, [session]);
 
   const onAddrKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter")  navigate(addressRef.current?.value ?? addressBar);
     if (e.key === "Escape") { setEditingAddr(false); addressRef.current?.blur(); }
   };
 
-  // ── New / close / switch tabs ──────────────────────────────────────────
-  const newTab    = () => sendAction("newtab");
-  const closeTab  = (i: number) => sendAction("closetab", { tabIdx: i });
-  const switchTab = (i: number) => { setActiveTab(i); sendAction("switchtab", { tabIdx: i }); };
+  // ── Nav controls — iframe handles actual browser back/forward/reload ────
+  // The live-view iframe is fully interactive; these focus it with the right key.
+  const newTab    = () => {};
+  const closeTab  = (_i: number) => {};
+  const switchTab = (i: number) => setActiveTab(i);
+  const goBack    = () => { iframeRef.current?.focus(); iframeRef.current?.contentWindow?.history.back(); };
+  const goForward = () => { iframeRef.current?.focus(); iframeRef.current?.contentWindow?.history.forward(); };
+  const reload    = () => {
+    setLoading(true);
+    try { iframeRef.current?.contentWindow?.location.reload(); } catch {}
+    setTimeout(() => setLoading(false), 800);
+  };
+  const stop = () => { setLoading(false); };
 
-  const goBack    = () => sendAction("back");
-  const goForward = () => sendAction("forward");
-  const reload    = () => { setLoading(true); sendAction("reload").finally(() => setTimeout(() => setLoading(false), 800)); };
-  const stop      = () => { setLoading(false); sendAction("stop"); };
+  // Keep session alive on any interaction
+  const touchSession = useCallback(() => {
+    if (!session) return;
+    apiRequest("POST", `/api/browser/sessions/${session.sessionId}/action`, { action: "ping" }).catch(() => {});
+  }, [session]);
 
   // ── Live-view iframe src — debuggerFullscreenUrl from Browserbase /debug
   const liveViewSrc = session?.liveViewUrl || undefined;

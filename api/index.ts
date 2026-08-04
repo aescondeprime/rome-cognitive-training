@@ -1385,78 +1385,35 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         }
       }
 
-      // ── POST /api/browser/sessions/:id/action — send a CDP command ──
+      // ── POST /api/browser/sessions/:id/action — metadata-only actions ──
+      // Note: Browserbase REST API does not support execute/navigate/CDP commands.
+      // All browser interaction happens via the live-view iframe directly.
+      // This endpoint only handles metadata updates (tab tracking, URL recording,
+      // dangerous-URL validation) that the client needs server-side.
       {
         const m = route.match(/^\/browser\/sessions\/([\w-]+)\/action$/);
         if (m && method === "POST") {
           const user  = await getActiveUser(req, sb);
           const body  = await readBody(req);
           const sess  = await getOwnedSession(user, m[1]);
-          if (sess.status !== "connected") return json(res, 409, { error: "Session not connected" });
+          if (!sess || typeof (sess as any).id === "undefined") return; // already responded
 
-          const { action, url: rawUrl, tabIdx } = body as { action: string; url?: string; tabIdx?: number };
-          const bbId = sess.provider_session_id;
-          let  patch: Record<string, unknown> = {};
-          const currentTabs: any[] = Array.isArray(sess.tabs) ? sess.tabs : JSON.parse(sess.tabs as any ?? "[]");
+          const { action, url: rawUrl } = body as { action: string; url?: string };
 
-          switch (action) {
-            case "navigate": {
-              const target = normaliseUrl(rawUrl ?? "");
-              if (isDangerous(target)) return json(res, 403, { error: "DANGEROUS_URL", url: target });
-              // Use Browserbase Sessions API to navigate via CDP
-              await bbFetch(`/sessions/${bbId}/navigate`, "POST", { url: target }).catch(async () => {
-                // fallback: use CDP execute via REST
-                await bbFetch(`/sessions/${bbId}/execute`, "POST", { method: "Page.navigate", params: { url: target } });
-              });
-              const ai = sess.active_tab_idx ?? 0;
-              currentTabs[ai] = { ...(currentTabs[ai] ?? {}), url: target, title: "Loading…", loading: true };
-              patch = { current_url: target, tabs: JSON.stringify(currentTabs) };
-              break;
-            }
-            case "back":
-              await bbFetch(`/sessions/${bbId}/execute`, "POST", { method: "Runtime.evaluate", params: { expression: "history.back()" } }).catch(() => {});
-              break;
-            case "forward":
-              await bbFetch(`/sessions/${bbId}/execute`, "POST", { method: "Runtime.evaluate", params: { expression: "history.forward()" } }).catch(() => {});
-              break;
-            case "reload":
-              await bbFetch(`/sessions/${bbId}/execute`, "POST", { method: "Page.reload", params: {} }).catch(() => {});
-              break;
-            case "stop":
-              await bbFetch(`/sessions/${bbId}/execute`, "POST", { method: "Page.stopLoading", params: {} }).catch(() => {});
-              break;
-            case "newtab": {
-              const newTab = { id: currentTabs.length, url: "https://www.google.com", title: "New Tab", loading: false };
-              currentTabs.push(newTab);
-              patch = { active_tab_idx: currentTabs.length - 1, tabs: JSON.stringify(currentTabs), current_url: newTab.url };
-              break;
-            }
-            case "closetab": {
-              const ci = tabIdx ?? sess.active_tab_idx;
-              if (currentTabs.length > 1) {
-                currentTabs.splice(ci, 1);
-                const newActive = Math.min(ci, currentTabs.length - 1);
-                patch = { active_tab_idx: newActive, tabs: JSON.stringify(currentTabs), current_url: currentTabs[newActive]?.url ?? "" };
-              }
-              break;
-            }
-            case "switchtab": {
-              const ni = tabIdx ?? 0;
-              if (ni >= 0 && ni < currentTabs.length) {
-                patch = { active_tab_idx: ni, current_url: currentTabs[ni]?.url ?? "" };
-              }
-              break;
-            }
-            default:
-              return json(res, 400, { error: `Unknown action: ${action}` });
+          // Only action we validate server-side: URL safety check before navigating
+          if (action === "navigate") {
+            const target = normaliseUrl(rawUrl ?? "");
+            if (isDangerous(target)) return json(res, 403, { error: "DANGEROUS_URL", url: target });
+            // Record URL in DB for polling / address bar sync
+            await touchSession(m[1]);
+            await sb.from("browser_sessions").update({ current_url: target }).eq("id", m[1]);
+            return json(res, 200, { ok: true, safeUrl: target });
           }
 
+          // All other actions (back/forward/reload/stop/newtab/closetab/switchtab)
+          // are handled client-side via the iframe — just touch the session to keep it alive
           await touchSession(m[1]);
-          if (Object.keys(patch).length) {
-            await sb.from("browser_sessions").update(patch).eq("id", m[1]);
-          }
-          const { data: updated } = await sb.from("browser_sessions").select("*").eq("id", m[1]).single();
-          return json(res, 200, { ok: true, currentUrl: updated?.current_url ?? "", tabs: updated?.tabs ?? [], activeTabIdx: updated?.active_tab_idx ?? 0, title: updated?.title ?? "" });
+          return json(res, 200, { ok: true });
         }
       }
 
