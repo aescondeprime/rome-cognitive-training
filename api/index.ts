@@ -1236,6 +1236,204 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       }
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    // WORLD BROWSER — remote Browserbase sessions
+    // ════════════════════════════════════════════════════════════════════
+    if (route.startsWith("/browser")) {
+      // ── helpers ──────────────────────────────────────────────────────
+      const BROWSERBASE_API_KEY  = process.env.BROWSERBASE_API_KEY  ?? "";
+      const BROWSERBASE_PROJECT  = process.env.BROWSERBASE_PROJECT_ID ?? "";
+      const BB_BASE              = "https://www.browserbase.com/v1";
+      const SESSION_INACTIVITY   = 2 * 60 * 60 * 1000; // 2 h
+
+      // Private IP / dangerous URL guard
+      function isDangerous(rawUrl: string): boolean {
+        try {
+          const u = new URL(rawUrl);
+          if (u.protocol === "file:" || u.protocol === "ftp:" || u.protocol === "javascript:") return true;
+          const h = u.hostname;
+          if (h === "localhost" || h === "127.0.0.1" || h === "::1") return true;
+          if (/^169\.254\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h)) return true;
+          if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(h)) return true;
+          if (h === "metadata.google.internal" || h === "100.100.100.200") return true;
+          return false;
+        } catch { return false; }
+      }
+
+      function normaliseUrl(input: string): string {
+        const trimmed = input.trim();
+        if (!trimmed) return "https://www.google.com";
+        if (/^https?:\/\//i.test(trimmed)) return trimmed;
+        if (/^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+/.test(trimmed) && !trimmed.includes(" ")) {
+          return "https://" + trimmed;
+        }
+        return "https://www.google.com/search?q=" + encodeURIComponent(trimmed);
+      }
+
+      // Check Browserbase configured
+      function requireBB() {
+        if (!BROWSERBASE_API_KEY || !BROWSERBASE_PROJECT) throw new Error("BROWSERBASE_NOT_CONFIGURED");
+      }
+
+      // Fetch through Browserbase REST API
+      async function bbFetch(path: string, method = "GET", body?: unknown): Promise<any> {
+        const res2 = await fetch(`${BB_BASE}${path}`, {
+          method,
+          headers: { "X-BB-API-Key": BROWSERBASE_API_KEY, "Content-Type": "application/json" },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+          signal: AbortSignal.timeout(12_000),
+        });
+        if (!res2.ok) {
+          const txt = await res2.text().catch(() => "");
+          throw new Error(`BB ${res2.status}: ${txt.slice(0, 120)}`);
+        }
+        return res2.json().catch(() => ({}));
+      }
+
+      // Resolve + auth-guard a browser_session row
+      async function getOwnedSession(user: any, sessionId: string) {
+        const now = Date.now();
+        const { data } = await sb.from("browser_sessions").select("*").eq("id", sessionId).single();
+        if (!data)  throw { status: 404, msg: "Session not found" };
+        if (data.user_id !== user.id) throw { status: 403, msg: "Forbidden" };
+        if (data.expires_at < now)    throw { status: 410, msg: "Session expired" };
+        return data;
+      }
+
+      // Touch last_active + reset expiry
+      async function touchSession(sessionId: string) {
+        const now = Date.now();
+        await sb.from("browser_sessions").update({ last_active: now, expires_at: now + SESSION_INACTIVITY }).eq("id", sessionId);
+      }
+
+      // ── POST /api/browser/sessions — create a new isolated session ──
+      if (route === "/browser/sessions" && method === "POST") {
+        const user = await getActiveUser(req, sb);
+        requireBB();
+        // Create a Browserbase session
+        const bbSess = await bbFetch("/sessions", "POST", {
+          projectId: BROWSERBASE_PROJECT,
+          browserSettings: { viewport: { width: 1280, height: 800 } },
+        });
+        const now = Date.now();
+        const tabs = [{ id: 0, url: "https://www.google.com", title: "New Tab", loading: false }];
+        const { data: row } = await sb.from("browser_sessions").insert({
+          user_id: user.id,
+          provider_session_id: bbSess.id ?? "",
+          status: "connected",
+          current_url: "https://www.google.com",
+          title: "New Tab",
+          active_tab_idx: 0,
+          tabs: JSON.stringify(tabs),
+          created_at: now, last_active: now, expires_at: now + SESSION_INACTIVITY,
+        }).select().single();
+        // Return connection URL (live-view websocket proxy via Browserbase)
+        const connectUrl = `wss://connect.browserbase.com?apiKey=${BROWSERBASE_API_KEY}&sessionId=${bbSess.id}`;
+        return json(res, 200, { sessionId: row!.id, connectUrl, tabs, activeTabIdx: 0, status: "connected" });
+      }
+
+      // ── GET /api/browser/sessions/:id — poll status ─────────────────
+      {
+        const m = route.match(/^\/browser\/sessions\/([\w-]+)$/);
+        if (m && method === "GET") {
+          const user = await getActiveUser(req, sb);
+          const sess = await getOwnedSession(user, m[1]);
+          return json(res, 200, { sessionId: sess.id, status: sess.status, currentUrl: sess.current_url, title: sess.title, tabs: sess.tabs ?? [], activeTabIdx: sess.active_tab_idx, expiresAt: sess.expires_at });
+        }
+
+        // ── DELETE /api/browser/sessions/:id — end session ─────────────
+        if (m && method === "DELETE") {
+          const user = await getActiveUser(req, sb);
+          const sess = await getOwnedSession(user, m[1]);
+          if (sess.provider_session_id) {
+            await bbFetch(`/sessions/${sess.provider_session_id}`, "PUT", { status: "REQUEST_RELEASE" }).catch(() => {});
+          }
+          await sb.from("browser_sessions").update({ status: "disconnected" }).eq("id", m[1]);
+          return json(res, 200, { ok: true });
+        }
+      }
+
+      // ── POST /api/browser/sessions/:id/action — send a CDP command ──
+      {
+        const m = route.match(/^\/browser\/sessions\/([\w-]+)\/action$/);
+        if (m && method === "POST") {
+          const user  = await getActiveUser(req, sb);
+          const body  = await readBody(req);
+          const sess  = await getOwnedSession(user, m[1]);
+          if (sess.status !== "connected") return json(res, 409, { error: "Session not connected" });
+
+          const { action, url: rawUrl, tabIdx } = body as { action: string; url?: string; tabIdx?: number };
+          const bbId = sess.provider_session_id;
+          let  patch: Record<string, unknown> = {};
+          const currentTabs: any[] = Array.isArray(sess.tabs) ? sess.tabs : JSON.parse(sess.tabs as any ?? "[]");
+
+          switch (action) {
+            case "navigate": {
+              const target = normaliseUrl(rawUrl ?? "");
+              if (isDangerous(target)) return json(res, 403, { error: "DANGEROUS_URL", url: target });
+              // Use Browserbase Sessions API to navigate via CDP
+              await bbFetch(`/sessions/${bbId}/navigate`, "POST", { url: target }).catch(async () => {
+                // fallback: use CDP execute via REST
+                await bbFetch(`/sessions/${bbId}/execute`, "POST", { method: "Page.navigate", params: { url: target } });
+              });
+              const ai = sess.active_tab_idx ?? 0;
+              currentTabs[ai] = { ...(currentTabs[ai] ?? {}), url: target, title: "Loading…", loading: true };
+              patch = { current_url: target, tabs: JSON.stringify(currentTabs) };
+              break;
+            }
+            case "back":
+              await bbFetch(`/sessions/${bbId}/execute`, "POST", { method: "Runtime.evaluate", params: { expression: "history.back()" } }).catch(() => {});
+              break;
+            case "forward":
+              await bbFetch(`/sessions/${bbId}/execute`, "POST", { method: "Runtime.evaluate", params: { expression: "history.forward()" } }).catch(() => {});
+              break;
+            case "reload":
+              await bbFetch(`/sessions/${bbId}/execute`, "POST", { method: "Page.reload", params: {} }).catch(() => {});
+              break;
+            case "stop":
+              await bbFetch(`/sessions/${bbId}/execute`, "POST", { method: "Page.stopLoading", params: {} }).catch(() => {});
+              break;
+            case "newtab": {
+              const newTab = { id: currentTabs.length, url: "https://www.google.com", title: "New Tab", loading: false };
+              currentTabs.push(newTab);
+              patch = { active_tab_idx: currentTabs.length - 1, tabs: JSON.stringify(currentTabs), current_url: newTab.url };
+              break;
+            }
+            case "closetab": {
+              const ci = tabIdx ?? sess.active_tab_idx;
+              if (currentTabs.length > 1) {
+                currentTabs.splice(ci, 1);
+                const newActive = Math.min(ci, currentTabs.length - 1);
+                patch = { active_tab_idx: newActive, tabs: JSON.stringify(currentTabs), current_url: currentTabs[newActive]?.url ?? "" };
+              }
+              break;
+            }
+            case "switchtab": {
+              const ni = tabIdx ?? 0;
+              if (ni >= 0 && ni < currentTabs.length) {
+                patch = { active_tab_idx: ni, current_url: currentTabs[ni]?.url ?? "" };
+              }
+              break;
+            }
+            default:
+              return json(res, 400, { error: `Unknown action: ${action}` });
+          }
+
+          await touchSession(m[1]);
+          if (Object.keys(patch).length) {
+            await sb.from("browser_sessions").update(patch).eq("id", m[1]);
+          }
+          const { data: updated } = await sb.from("browser_sessions").select("*").eq("id", m[1]).single();
+          return json(res, 200, { ok: true, currentUrl: updated?.current_url ?? "", tabs: updated?.tabs ?? [], activeTabIdx: updated?.active_tab_idx ?? 0, title: updated?.title ?? "" });
+        }
+      }
+
+      // ── GET /api/browser/config — tells client if BB is configured ──
+      if (route === "/browser/config" && method === "GET") {
+        return json(res, 200, { configured: Boolean(BROWSERBASE_API_KEY && BROWSERBASE_PROJECT) });
+      }
+    }
+
     return json(res, 404, { error: `Not found: ${route}` });
 
   } catch (err: any) {

@@ -34,6 +34,7 @@ import PASAT from "@/pages/games/PASAT";
 
 // Placeholder nodes
 import PlaceholderNode from "@/pages/PlaceholderNode";
+import WorldBrowser from "@/pages/WorldBrowser";
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -133,6 +134,9 @@ export default function App() {
                     </Route>
                     <Route path="/component-board" component={ComponentBoard} />
                     <Route path="/research-lab" component={ResearchLab} />
+
+                    {/* World Browser */}
+                    <Route path="/world" component={WorldBrowser} />
 
                     {/* Profiles + Settings */}
                     <Route path="/settings"  component={Settings} />

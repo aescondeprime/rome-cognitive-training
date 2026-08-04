@@ -180,6 +180,26 @@ function CrownShape({ color, s }: { color: string; s: number }) {
   );
 }
 
+function GlobeShape({ color, s }: { color: string; s: number }) {
+  return (
+    <svg width={s} height={s} viewBox="0 0 40 40" fill="none" x={-s/2} y={-s/2}>
+      {/* Outer circle */}
+      <circle cx="20" cy="20" r="15" stroke={color} strokeWidth="1.5" />
+      {/* Equator */}
+      <ellipse cx="20" cy="20" rx="15" ry="5.5" stroke={color} strokeWidth="1.1" />
+      {/* Vertical meridian */}
+      <ellipse cx="20" cy="20" rx="7.5" ry="15" stroke={color} strokeWidth="1.1" />
+      {/* Lat line upper */}
+      <ellipse cx="20" cy="14" rx="11.5" ry="3.2" stroke={color} strokeWidth="0.9" opacity="0.65" />
+      {/* Lat line lower */}
+      <ellipse cx="20" cy="26" rx="11.5" ry="3.2" stroke={color} strokeWidth="0.9" opacity="0.65" />
+      {/* North/south poles */}
+      <circle cx="20" cy="5"  r="1" fill={color} opacity="0.8" />
+      <circle cx="20" cy="35" r="1" fill={color} opacity="0.8" />
+    </svg>
+  );
+}
+
 function SparklesShape({ color, s }: { color: string; s: number }) {
   return (
     <svg width={s} height={s} viewBox="0 0 24 24" fill="none" x={-s/2} y={-s/2}>
@@ -280,6 +300,7 @@ export default memo(function ConstellationNode({
         {node.id === "athena"        && <SwordsShape   color={iconColor} s={s} />}
         {node.id === "strategic"     && <CrownShape    color={iconColor} s={s} />}
         {node.id === "creative"      && <SparklesShape color={iconColor} s={s} />}
+        {node.id === "world"          && <GlobeShape    color={iconColor} s={s} />}
       </g>
 
       {/* Label — fades in on hover/select */}

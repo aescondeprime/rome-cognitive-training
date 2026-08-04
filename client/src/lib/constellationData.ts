@@ -135,6 +135,24 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
       { id: "inv-case",     label: "Component Board", icon: "◉", href: "/component-board", description: "Detective caseboard with evidence pins and thread lines" },
       { id: "inv-research", label: "Research Lab",     icon: "⊕", href: "/research-lab",    description: "Evidence-based cognitive training research brief" },
     ],
+    connections: ["world"],
+  },
+
+  // ── World — browser workspace, standalone bottom-right
+  {
+    id: "world",
+    label: "World",
+    symbol: "⊕",
+    lucideIcon: "Globe",
+    accent: "hsl(195 70% 52%)",
+    x: 72, y: 87,
+    size: 15,
+    depth: 1.0,
+    href: "/world",
+    tagline: "Integrated remote browser workspace",
+    subnodes: [
+      { id: "wr-browser", label: "Browser", icon: "◌", href: "/world", description: "Secure remote Chromium session" },
+    ],
     connections: [],
   },
 
