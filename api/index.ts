@@ -1559,7 +1559,14 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     // read navigation/title changes, and streams the response to the client.
     // All requests appear same-origin to the iframe — no CORS / X-Frame issues.
     if (route === "/proxy" && method === "GET") {
-      const rawUrl = (req as any).query?.url ?? new URL(req.url ?? "", "http://x").searchParams.get("url") ?? "";
+      // Auth guard — token accepted as header (fetch calls) or query param (iframe src= loads)
+      const reqUrl = new URL(req.url ?? "", "http://x");
+      const proxyToken = (req.headers["x-session-token"] as string | undefined) ?? reqUrl.searchParams.get("_t") ?? "";
+      if (!proxyToken) return json(res, 401, { error: "Unauthorized: no session token" });
+      const { data: proxySess } = await sb.from("auth_sessions").select("user_id, expires_at").eq("id", proxyToken).single();
+      if (!proxySess || proxySess.expires_at < Date.now()) return json(res, 401, { error: "Invalid or expired session" });
+
+      const rawUrl = reqUrl.searchParams.get("url") ?? "";
       if (!rawUrl) return json(res, 400, { error: "Missing url param" });
 
       // Parse and validate target URL
@@ -1576,12 +1583,14 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         return json(res, 403, { error: "Only http/https allowed" });
       }
 
+      // Rewrite links to stay same-origin through the proxy, forwarding the auth token
+      const tokenParam = proxyToken ? `&_t=${encodeURIComponent(proxyToken)}` : "";
       const PROXY_BASE = "/api/proxy?url=";
       const rewriteUrl = (href: string, base: URL): string => {
         if (!href || href.startsWith("#") || href.startsWith("javascript:") || href.startsWith("data:") || href.startsWith("blob:")) return href;
         try {
           const abs = new URL(href, base).toString();
-          return PROXY_BASE + encodeURIComponent(abs);
+          return PROXY_BASE + encodeURIComponent(abs) + tokenParam;
         } catch { return href; }
       };
 

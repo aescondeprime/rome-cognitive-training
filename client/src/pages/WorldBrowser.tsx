@@ -21,8 +21,17 @@ import { motion, AnimatePresence } from "framer-motion";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const HOME_URL = "https://www.google.com";
-const PROXY    = (url: string) => `/api/proxy?url=${encodeURIComponent(url)}`;
 const ACC      = "hsl(43 88% 60%)";  // gold accent
+
+function getToken(): string {
+  return localStorage.getItem("rome_session_token") ?? "";
+}
+// All proxy requests include the session token as _t query param
+// (iframe src= loads can't send custom headers, so query param is required)
+const PROXY = (url: string) => {
+  const t = getToken();
+  return `/api/proxy?url=${encodeURIComponent(url)}${t ? `&_t=${encodeURIComponent(t)}` : ""}`;
+};
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function normalise(raw: string): string {
