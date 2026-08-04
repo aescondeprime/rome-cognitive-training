@@ -41,7 +41,7 @@ type SessionState =
 
 interface Session {
   sessionId: string;
-  connectUrl: string;   // wss:// for live-view iframe src
+  liveViewUrl: string;  // debuggerFullscreenUrl from Browserbase /debug
   tabs: Tab[];
   activeTabIdx: number;
   status: string;
@@ -240,6 +240,7 @@ export default function WorldBrowser() {
       setTabs(d.tabs ?? []);
       setActiveTab(d.activeTabIdx ?? 0);
       setAddressBar(d.tabs?.[0]?.url ?? HOME_URL);
+      if (!d.liveViewUrl) throw new Error("No live view URL returned from provider");
       setSessionState("connected");
     } catch (e: any) {
       setError(e.message ?? "Unknown error");
@@ -299,16 +300,10 @@ export default function WorldBrowser() {
   const reload    = () => { setLoading(true); sendAction("reload").finally(() => setTimeout(() => setLoading(false), 800)); };
   const stop      = () => { setLoading(false); sendAction("stop"); };
 
-  // ── Live-view iframe src (Browserbase provides a hosted viewer) ────────
-  const liveViewSrc = session?.connectUrl
-    ? `https://live.browserbase.com/devtools/inspector.html?wss=${encodeURIComponent(session.connectUrl.replace("wss://", ""))}`
-    : undefined;
+  // ── Live-view iframe src — debuggerFullscreenUrl from Browserbase /debug
+  const liveViewSrc = session?.liveViewUrl || undefined;
 
-  // Alternatively Browserbase provides a direct debug live view URL
-  // We use: https://www.browserbase.com/sessions/<bbId>/live
-  // — but the safest universal approach is the devtools viewer above.
-
-  // ── Poll session status ────────────────────────────────────────────────
+  // ── Poll session status + refresh live-view URL ───────────────────────
   useEffect(() => {
     if (!session || sessionState !== "connected") return;
     pollRef.current = setInterval(async () => {
@@ -316,11 +311,16 @@ export default function WorldBrowser() {
         const r = await apiRequest("GET", `/api/browser/sessions/${session.sessionId}`);
         const d = await r.json();
         if (d.status === "disconnected" || d.status === "expired") {
-          setSessionState(d.status === "expired" ? "expired" : "expired");
+          setSessionState("expired");
           if (pollRef.current) clearInterval(pollRef.current);
+          return;
         }
         if (d.tabs) setTabs(typeof d.tabs === "string" ? JSON.parse(d.tabs) : d.tabs);
         if (d.currentUrl && !editingAddr) setAddressBar(d.currentUrl);
+        // Update live-view URL if it changed (Browserbase refreshes these)
+        if (d.liveViewUrl && d.liveViewUrl !== session.liveViewUrl) {
+          setSession(prev => prev ? { ...prev, liveViewUrl: d.liveViewUrl } : prev);
+        }
       } catch {}
     }, POLL_MS);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
@@ -563,8 +563,8 @@ export default function WorldBrowser() {
           <iframe
             ref={iframeRef}
             src={liveViewSrc}
-            allow="fullscreen"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+            allow="clipboard-read; clipboard-write; fullscreen"
+            sandbox="allow-same-origin allow-scripts"
             style={{
               width: "100%", height: "100%",
               border: "none",

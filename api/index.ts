@@ -1327,9 +1327,13 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           tabs: JSON.stringify(tabs),
           created_at: now, last_active: now, expires_at: now + SESSION_INACTIVITY,
         }).select().single();
-        // Return connection URL (live-view websocket proxy via Browserbase)
-        const connectUrl = `wss://connect.browserbase.com?apiKey=${BROWSERBASE_API_KEY}&sessionId=${bbSess.id}`;
-        return json(res, 200, { sessionId: row!.id, connectUrl, tabs, activeTabIdx: 0, status: "connected" });
+        // Fetch the embeddable live-view URL from Browserbase /debug endpoint
+        let liveViewUrl = "";
+        try {
+          const dbg = await bbFetch(`/sessions/${bbSess.id}/debug`);
+          liveViewUrl = dbg.debuggerFullscreenUrl ?? dbg.debuggerUrl ?? "";
+        } catch { /* non-fatal — UI will show reconnecting state */ }
+        return json(res, 200, { sessionId: row!.id, liveViewUrl, tabs, activeTabIdx: 0, status: "connected" });
       }
 
       // ── GET /api/browser/sessions/:id — poll status ─────────────────
@@ -1338,7 +1342,15 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (m && method === "GET") {
           const user = await getActiveUser(req, sb);
           const sess = await getOwnedSession(user, m[1]);
-          return json(res, 200, { sessionId: sess.id, status: sess.status, currentUrl: sess.current_url, title: sess.title, tabs: sess.tabs ?? [], activeTabIdx: sess.active_tab_idx, expiresAt: sess.expires_at });
+          // Refresh the live-view URL (Browserbase URLs are short-lived)
+          let liveViewUrl = "";
+          if (sess.provider_session_id && sess.status === "connected") {
+            try {
+              const dbg = await bbFetch(`/sessions/${sess.provider_session_id}/debug`);
+              liveViewUrl = dbg.debuggerFullscreenUrl ?? dbg.debuggerUrl ?? "";
+            } catch { /* session may have ended on provider side */ }
+          }
+          return json(res, 200, { sessionId: sess.id, status: sess.status, currentUrl: sess.current_url, title: sess.title, tabs: sess.tabs ?? [], activeTabIdx: sess.active_tab_idx, expiresAt: sess.expires_at, liveViewUrl });
         }
 
         // ── DELETE /api/browser/sessions/:id — end session ─────────────
