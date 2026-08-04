@@ -1243,7 +1243,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       // ── helpers ──────────────────────────────────────────────────────
       const BROWSERBASE_API_KEY  = process.env.BROWSERBASE_API_KEY  ?? "";
       const BROWSERBASE_PROJECT  = process.env.BROWSERBASE_PROJECT_ID ?? "";
-      const BB_BASE              = "https://www.browserbase.com/v1";
+      const BB_BASE              = "https://api.browserbase.com/v1";
       const SESSION_INACTIVITY   = 2 * 60 * 60 * 1000; // 2 h
 
       // Private IP / dangerous URL guard
