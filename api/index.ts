@@ -1342,12 +1342,12 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         }).select().single();
         if (insertErr) return json(res, 500, { error: `DB insert failed: ${insertErr.message}` });
         // Fetch the embeddable live-view URL from Browserbase /debug endpoint
-        // Use debuggerFullscreenUrl + &navbar=false to hide Browserbase's own address bar
+        // Use debuggerFullscreenUrl — Browserbase navbar is shown so the user can navigate inside the iframe
         let liveViewUrl = "";
         try {
           const dbg = await bbFetch(`/sessions/${bbSess.id}/debug`);
           const base = dbg.debuggerFullscreenUrl ?? dbg.debuggerUrl ?? "";
-          liveViewUrl = base ? `${base}&navbar=false` : "";
+          liveViewUrl = base ?? ""; // Browserbase navbar shown so user can navigate
         } catch (dbgErr: any) {
           // non-fatal — session still works, URL will be fetched on next poll
           console.error("[browser] debug URL fetch failed:", dbgErr?.message);
@@ -1367,7 +1367,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
             try {
               const dbg = await bbFetch(`/sessions/${sess.provider_session_id}/debug`);
               const base = dbg.debuggerFullscreenUrl ?? dbg.debuggerUrl ?? "";
-              liveViewUrl = base ? `${base}&navbar=false` : "";
+              liveViewUrl = base ?? ""; // Browserbase navbar shown so user can navigate
             } catch { /* session may have ended on provider side */ }
           }
           return json(res, 200, { sessionId: sess.id, status: sess.status, currentUrl: sess.current_url, title: sess.title, tabs: sess.tabs ?? [], activeTabIdx: sess.active_tab_idx, expiresAt: sess.expires_at, liveViewUrl });

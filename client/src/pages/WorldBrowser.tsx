@@ -563,59 +563,27 @@ export default function WorldBrowser() {
           )}
         </AnimatePresence>
 
-        {/* Live view — Browserbase WebSocket viewer must open in its own tab */}
-        {session && liveViewSrc && !showOverlay && (
-          <div style={{
-            position: "absolute", inset: 0,
-            display: "flex", flexDirection: "column",
-            alignItems: "center", justifyContent: "center",
-            gap: 20,
-            background: "hsl(222 14% 6%)",
-          }}>
-            <Corners />
-            {/* Grid background */}
-            <div style={{
-              position: "absolute", inset: 0, pointerEvents: "none",
-              backgroundImage: `
-                linear-gradient(hsl(195 40% 15% / 0.04) 1px, transparent 1px),
-                linear-gradient(90deg, hsl(195 40% 15% / 0.04) 1px, transparent 1px)
-              `,
-              backgroundSize: "40px 40px",
-            }} />
-            <Globe size={32} color={ACC} style={{ opacity: 0.6 }} />
-            <div style={{ textAlign: "center", maxWidth: 380, zIndex: 1 }}>
-              <div style={{ fontFamily: "'Cinzel', serif", fontSize: 13, letterSpacing: "0.14em", color: "hsl(220 12% 78%)", marginBottom: 10 }}>
-                Remote Session Active
-              </div>
-              <div style={{ fontFamily: "DM Sans, sans-serif", fontSize: 11, color: "hsl(220 10% 44%)", lineHeight: 1.7, marginBottom: 20 }}>
-                Your Chromium session is running. Open the live view in a dedicated tab for full interaction — the WebSocket viewer requires a direct browser connection.
-              </div>
-              <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-                <button
-                  onClick={() => window.open(liveViewSrc, "_blank", "noopener")}
-                  style={{
-                    fontFamily: "DM Mono, monospace", fontSize: 10, letterSpacing: "0.14em",
-                    textTransform: "uppercase", padding: "8px 22px", borderRadius: 2,
-                    cursor: "pointer", background: "hsl(195 40% 14% / 0.9)",
-                    border: `1px solid ${ACC}`, color: ACC, transition: "all 0.15s",
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.background = "hsl(195 40% 22% / 0.9)")}
-                  onMouseLeave={e => (e.currentTarget.style.background = "hsl(195 40% 14% / 0.9)")}
-                >
-                  Open Live View →
-                </button>
-              </div>
-            </div>
-            {/* Session info */}
-            <div style={{ zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-              <div style={{ fontSize: 8, letterSpacing: "0.18em", color: "hsl(220 8% 28%)", textTransform: "uppercase" }}>
-                Session · {session.sessionId.slice(0, 8).toUpperCase()}
-              </div>
-              <div style={{ fontSize: 8, letterSpacing: "0.14em", color: "hsl(220 8% 22%)", textTransform: "uppercase" }}>
-                {addressBar || "https://www.google.com"}
-              </div>
-            </div>
-          </div>
+        {/* Live-view iframe — Browserbase debuggerFullscreenUrl embedded directly */}
+        {/* sandbox: allow-same-origin + allow-scripts per Browserbase docs; */}
+        {/* allow-forms + allow-popups needed for devtools WS handshake inside iframe */}
+        {session && liveViewSrc && (
+          <iframe
+            ref={iframeRef}
+            key={liveViewSrc}
+            src={liveViewSrc}
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
+            allow="clipboard-read; clipboard-write; fullscreen"
+            style={{
+              position: "absolute", inset: 0,
+              width: "100%", height: "100%",
+              border: "none",
+              background: "#fff",
+              opacity: showOverlay ? 0 : 1,
+              transition: "opacity 0.3s",
+              pointerEvents: showOverlay ? "none" : "auto",
+            }}
+            title="ROME World Browser"
+          />
         )}
 
         {/* Placeholder grid when no session */}
