@@ -2,7 +2,6 @@ appId: com.rome.cognitivetraining
 productName: ROME
 copyright: "Copyright © 2026 ROME Cognitive Training Lab"
 
-main: dist-electron/main.js
 
 files:
   - dist/**/*
