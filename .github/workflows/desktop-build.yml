@@ -16,7 +16,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -24,11 +24,12 @@ jobs:
 
       - name: Build Electron app
         run: npm run desktop:build
+        env:
+          npm_config_build_from_source: true
 
       - name: Package macOS DMG
         run: npx electron-builder --mac --publish never
         env:
-          # Skip code signing — personal use build
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Upload macOS artifact
@@ -47,7 +48,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -55,6 +56,8 @@ jobs:
 
       - name: Build Electron app
         run: npm run desktop:build
+        env:
+          npm_config_build_from_source: true
 
       - name: Package Windows installer
         run: npx electron-builder --win --publish never
