@@ -10,6 +10,7 @@ const allowlist = [
   "cors",
   "date-fns",
   "dotenv",
+  "@supabase/supabase-js",
   "drizzle-orm",
   "drizzle-zod",
   "express",
