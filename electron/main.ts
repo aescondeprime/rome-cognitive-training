@@ -8,6 +8,7 @@ import {
 import path from "path";
 import { spawn, ChildProcess } from "child_process";
 import fs from "fs";
+import net from "net";
 
 declare const __dirname: string;
 
@@ -15,6 +16,7 @@ declare const __dirname: string;
 
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ChildProcess | null = null;
+let isQuitting = false;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -38,14 +40,12 @@ export function getDbPath(): string {
   return path.join(dir, "rome.db");
 }
 
-// ── Load .env file from app userData directory ────────────────────────────
-// Production: ~/Library/Application Support/ROME/.env
-// Development: <project-root>/.env
+// ── Load .env file ────────────────────────────────────────────────────────
 
 function loadEnvFile(): Record<string, string> {
   const envPaths = [
     path.join(getDataDir(), ".env"),
-    path.join(app.getAppPath(), "..", ".env"),
+    path.join(process.resourcesPath, ".env"),
     path.join(process.cwd(), ".env"),
   ];
 
@@ -57,34 +57,36 @@ function loadEnvFile(): Record<string, string> {
     const content = fs.readFileSync(envPath, "utf-8");
     const vars: Record<string, string> = {};
 
-    for (const line of content.split("\n")) {
+    for (const line of content.split(/\r?\n/)) {
       const trimmed = line.trim();
 
       if (!trimmed || trimmed.startsWith("#")) {
         continue;
       }
 
-      const eqIdx = trimmed.indexOf("=");
+      const equalsIndex = trimmed.indexOf("=");
 
-      if (eqIdx === -1) {
+      if (equalsIndex === -1) {
         continue;
       }
 
-      const key = trimmed.slice(0, eqIdx).trim();
+      const key = trimmed.slice(0, equalsIndex).trim();
       const value = trimmed
-        .slice(eqIdx + 1)
+        .slice(equalsIndex + 1)
         .trim()
         .replace(/^["']|["']$/g, "");
 
-      vars[key] = value;
+      if (key) {
+        vars[key] = value;
+      }
     }
 
-    console.log(`[ROME] Loaded env from: ${envPath}`);
+    console.log(`[ROME] Loaded environment file: ${envPath}`);
     return vars;
   }
 
   console.warn(
-    "[ROME] No .env file found — server will use process environment"
+    "[ROME] No .env file found; server will use process environment"
   );
 
   return {};
@@ -94,138 +96,275 @@ function loadEnvFile(): Record<string, string> {
 
 const SERVER_PORT = 5000;
 
-function startServer(): Promise<void> {
-  if (serverProcess && !serverProcess.killed) {
-    console.log("[ROME] Server process already exists");
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve, reject) => {
-    const serverEntry = path.join(
-      __dirname,
-      "..",
+function getServerEntry(): string {
+  if (app.isPackaged) {
+    /*
+     * electron-builder places files matched by asarUnpack here:
+     *
+     * macOS:
+     * ROME.app/Contents/Resources/app.asar.unpacked/dist/index.cjs
+     *
+     * Windows:
+     * resources/app.asar.unpacked/dist/index.cjs
+     */
+    return path.join(
+      process.resourcesPath,
+      "app.asar.unpacked",
       "dist",
       "index.cjs"
     );
+  }
 
-    if (!fs.existsSync(serverEntry)) {
-      const message =
-        `Server bundle not found at:\n${serverEntry}\n\n` +
-        "Please rebuild the app.";
+  /*
+   * Development/compiled structure:
+   *
+   * dist-electron/main.js
+   * dist/index.cjs
+   */
+  return path.join(
+    __dirname,
+    "..",
+    "dist",
+    "index.cjs"
+  );
+}
 
-      dialog.showErrorBox("ROME — Startup Error", message);
-      reject(new Error(message));
-      return;
-    }
+function waitForServer(
+  port: number,
+  timeoutMs = 15000
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    let settled = false;
 
-    const envVars = loadEnvFile();
-
-    let startupComplete = false;
-    let stderrOutput = "";
-
-    const startupTimer = setTimeout(() => {
-      if (!startupComplete) {
-        startupComplete = true;
-        console.log("[ROME] Server startup fallback reached");
-        resolve();
-      }
-    }, 4000);
-
-    /*
-     * process.execPath is the packaged ROME executable.
-     *
-     * ELECTRON_RUN_AS_NODE prevents it from opening another
-     * copy of ROME and instead runs index.cjs as a Node process.
-     */
-    serverProcess = spawn(process.execPath, [serverEntry], {
-      cwd: path.dirname(serverEntry),
-
-      env: {
-        ...process.env,
-        ...envVars,
-
-        ELECTRON_RUN_AS_NODE: "1",
-        NODE_ENV: "production",
-        PORT: String(SERVER_PORT),
-        ROME_DB_PATH: getDbPath(),
-      },
-
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    serverProcess.stdout?.on("data", (data: Buffer) => {
-      const message = data.toString().trim();
-
-      if (!message) {
+    const attemptConnection = () => {
+      if (settled) {
         return;
       }
 
-      console.log("[server]", message);
+      const socket = net.createConnection({
+        host: "127.0.0.1",
+        port,
+      });
 
-      const normalized = message.toLowerCase();
+      let attemptFinished = false;
 
-      if (
-        !startupComplete &&
-        (
-          normalized.includes("listening") ||
-          normalized.includes(`localhost:${SERVER_PORT}`) ||
-          normalized.includes(`port ${SERVER_PORT}`) ||
-          normalized.includes("server started") ||
-          normalized.includes("server ready")
-        )
-      ) {
-        startupComplete = true;
-        clearTimeout(startupTimer);
+      const retry = (error: Error) => {
+        if (attemptFinished || settled) {
+          return;
+        }
+
+        attemptFinished = true;
+        socket.destroy();
+
+        if (Date.now() >= deadline) {
+          settled = true;
+
+          reject(
+            new Error(
+              `ROME server did not begin listening on port ${port} ` +
+                `within ${timeoutMs / 1000} seconds.\n\n` +
+                `Last connection error: ${error.message}`
+            )
+          );
+
+          return;
+        }
+
+        setTimeout(attemptConnection, 250);
+      };
+
+      socket.setTimeout(1000);
+
+      socket.once("connect", () => {
+        if (attemptFinished || settled) {
+          return;
+        }
+
+        attemptFinished = true;
+        settled = true;
+
+        socket.end();
         resolve();
-      }
-    });
+      });
 
-    serverProcess.stderr?.on("data", (data: Buffer) => {
-      const message = data.toString();
+      socket.once("timeout", () => {
+        retry(new Error("Connection timed out"));
+      });
 
-      stderrOutput += message;
+      socket.once("error", (error) => {
+        retry(error);
+      });
+    };
+
+    attemptConnection();
+  });
+}
+
+async function startServer(): Promise<void> {
+  if (serverProcess && !serverProcess.killed) {
+    console.log("[ROME] Server process already exists");
+    await waitForServer(SERVER_PORT);
+    return;
+  }
+
+  const serverEntry = getServerEntry();
+  const serverWorkingDirectory = path.dirname(serverEntry);
+
+  console.log("[ROME] Packaged:", app.isPackaged);
+  console.log("[ROME] Resources path:", process.resourcesPath);
+  console.log("[ROME] Server entry:", serverEntry);
+  console.log(
+    "[ROME] Server working directory:",
+    serverWorkingDirectory
+  );
+
+  if (!fs.existsSync(serverEntry)) {
+    throw new Error(
+      `Server bundle was not found at:\n\n${serverEntry}\n\n` +
+        "Confirm that electron-builder.yml contains:\n\n" +
+        "asarUnpack:\n" +
+        '  - "dist/**/*"'
+    );
+  }
+
+  const entryStats = fs.statSync(serverEntry);
+
+  if (!entryStats.isFile()) {
+    throw new Error(
+      `The server entry exists but is not a file:\n\n${serverEntry}`
+    );
+  }
+
+  if (!fs.existsSync(serverWorkingDirectory)) {
+    throw new Error(
+      `Server working directory does not exist:\n\n` +
+        serverWorkingDirectory
+    );
+  }
+
+  const workingDirectoryStats = fs.statSync(
+    serverWorkingDirectory
+  );
+
+  if (!workingDirectoryStats.isDirectory()) {
+    throw new Error(
+      `Server working path is not a directory:\n\n` +
+        serverWorkingDirectory
+    );
+  }
+
+  const envVars = loadEnvFile();
+  let stderrOutput = "";
+  let serverReady = false;
+
+  /*
+   * process.execPath normally points to the packaged ROME executable.
+   * ELECTRON_RUN_AS_NODE makes that executable run index.cjs as Node
+   * instead of opening another copy of ROME.
+   */
+  const child = spawn(process.execPath, [serverEntry], {
+    cwd: serverWorkingDirectory,
+
+    env: {
+      ...process.env,
+      ...envVars,
+
+      ELECTRON_RUN_AS_NODE: "1",
+      NODE_ENV: "production",
+      PORT: String(SERVER_PORT),
+      ROME_DB_PATH: getDbPath(),
+    },
+
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  serverProcess = child;
+
+  child.stdout?.on("data", (data: Buffer) => {
+    const message = data.toString().trim();
+
+    if (message) {
+      console.log("[server]", message);
+    }
+  });
+
+  child.stderr?.on("data", (data: Buffer) => {
+    const message = data.toString();
+
+    stderrOutput += message;
+
+    if (message.trim()) {
       console.error("[server err]", message.trim());
-    });
+    }
+  });
 
-    serverProcess.on("error", (error) => {
-      clearTimeout(startupTimer);
-      serverProcess = null;
-
-      if (!startupComplete) {
-        startupComplete = true;
-        reject(error);
+  const earlyFailure = new Promise<never>((_, reject) => {
+    child.once("error", (error) => {
+      if (serverProcess === child) {
+        serverProcess = null;
       }
+
+      reject(
+        new Error(
+          `Could not launch the ROME server process.\n\n${error.message}`
+        )
+      );
     });
 
-    serverProcess.on("exit", (code, signal) => {
-      clearTimeout(startupTimer);
-      serverProcess = null;
+    child.once("exit", (code, signal) => {
+      if (serverProcess === child) {
+        serverProcess = null;
+      }
 
-      console.error(
-        `[ROME] Server exited. Code: ${code}; signal: ${signal}`
-      );
+      const details =
+        stderrOutput.trim() ||
+        `Exit code: ${code ?? "unknown"}\n` +
+          `Signal: ${signal ?? "none"}`;
 
-      if (!startupComplete) {
-        startupComplete = true;
-
-        const details =
-          stderrOutput.trim() ||
-          `The server exited with code ${code ?? "unknown"}.`;
-
+      if (!serverReady) {
         reject(
           new Error(
             `ROME server stopped before startup completed.\n\n${details}`
           )
         );
+
+        return;
+      }
+
+      if (!isQuitting) {
+        console.error(
+          "[ROME] Server stopped unexpectedly:",
+          details
+        );
+
+        dialog.showErrorBox(
+          "ROME — Server Stopped",
+          `The local ROME server stopped unexpectedly.\n\n${details}`
+        );
+
+        app.quit();
       }
     });
   });
+
+  const readinessCheck = waitForServer(SERVER_PORT).then(() => {
+    serverReady = true;
+  });
+
+  await Promise.race([
+    readinessCheck,
+    earlyFailure,
+  ]);
+
+  console.log(
+    `[ROME] Server is listening on port ${SERVER_PORT}`
+  );
 }
 
 // ── Main window ───────────────────────────────────────────────────────────
 
 async function createWindow(): Promise<void> {
-  // Never create a duplicate BrowserWindow.
   if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) {
       mainWindow.restore();
@@ -243,18 +382,24 @@ async function createWindow(): Promise<void> {
     minHeight: 640,
     title: "ROME — Cognitive Training Lab",
     backgroundColor: "#070a0f",
+
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
     },
+
     titleBarStyle:
-      process.platform === "darwin" ? "hiddenInset" : "default",
+      process.platform === "darwin"
+        ? "hiddenInset"
+        : "default",
+
     trafficLightPosition: {
       x: 16,
       y: 16,
     },
+
     show: false,
   });
 
@@ -273,17 +418,30 @@ async function createWindow(): Promise<void> {
     }
   });
 
-  /*
-   * Prevent window.open() or target="_blank" links from
-   * creating additional Electron BrowserWindows.
-   */
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
-    return { action: "deny" };
+    try {
+      const parsedUrl = new URL(url);
+
+      if (
+        parsedUrl.protocol === "http:" ||
+        parsedUrl.protocol === "https:" ||
+        parsedUrl.protocol === "mailto:"
+      ) {
+        void shell.openExternal(url);
+      }
+    } catch (error) {
+      console.error("[ROME] Invalid external URL:", error);
+    }
+
+    return {
+      action: "deny",
+    };
   });
 
   try {
-    await window.loadURL(`http://localhost:${SERVER_PORT}`);
+    await window.loadURL(
+      `http://127.0.0.1:${SERVER_PORT}`
+    );
   } catch (error) {
     if (!window.isDestroyed()) {
       window.destroy();
@@ -302,18 +460,19 @@ ipcMain.handle("get-app-version", () => app.getVersion());
 // ── App lifecycle ─────────────────────────────────────────────────────────
 
 if (!gotSingleInstanceLock) {
-  /*
-   * Another ROME instance already owns the application lock.
-   * Exit this instance immediately.
-   */
   app.quit();
 } else {
   app.on("second-instance", () => {
-    /*
-     * A second launch should focus the existing window,
-     * not create another application or server.
-     */
     if (!mainWindow || mainWindow.isDestroyed()) {
+      if (app.isReady()) {
+        void createWindow().catch((error) => {
+          console.error(
+            "[ROME] Could not recreate the main window:",
+            error
+          );
+        });
+      }
+
       return;
     }
 
@@ -329,16 +488,19 @@ if (!gotSingleInstanceLock) {
     .whenReady()
     .then(async () => {
       try {
-        console.log("[ROME] Starting server...");
+        console.log("[ROME] Starting local server...");
         await startServer();
 
-        console.log("[ROME] Server ready, opening window...");
+        console.log(
+          "[ROME] Server ready; opening application window..."
+        );
+
         await createWindow();
       } catch (error) {
         const message =
           error instanceof Error
             ? error.message
-            : "An unknown startup error occurred.";
+            : String(error);
 
         console.error("[ROME] Startup failed:", error);
 
@@ -354,7 +516,10 @@ if (!gotSingleInstanceLock) {
       app.on("activate", () => {
         if (BrowserWindow.getAllWindows().length === 0) {
           void createWindow().catch((error) => {
-            console.error("[ROME] Failed to reopen window:", error);
+            console.error(
+              "[ROME] Failed to reopen window:",
+              error
+            );
           });
 
           return;
@@ -367,7 +532,11 @@ if (!gotSingleInstanceLock) {
       });
     })
     .catch((error) => {
-      console.error("[ROME] Application initialization failed:", error);
+      console.error(
+        "[ROME] Application initialization failed:",
+        error
+      );
+
       app.quit();
     });
 }
@@ -379,8 +548,11 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  isQuitting = true;
+
   if (serverProcess) {
-    console.log("[ROME] Stopping server process...");
+    console.log("[ROME] Stopping local server...");
+
     serverProcess.kill();
     serverProcess = null;
   }
