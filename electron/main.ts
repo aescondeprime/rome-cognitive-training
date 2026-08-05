@@ -4,9 +4,9 @@ import {
   shell,
   ipcMain,
   dialog,
-  utilityProcess,
 } from "electron";
 import path from "path";
+import { spawn, ChildProcess } from "child_process";
 import fs from "fs";
 
 declare const __dirname: string;
@@ -14,7 +14,7 @@ declare const __dirname: string;
 // ── Application state ─────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null;
-let serverProcess: ReturnType<typeof utilityProcess.fork> | null = null;
+let serverProcess: ChildProcess | null = null;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -95,8 +95,7 @@ function loadEnvFile(): Record<string, string> {
 const SERVER_PORT = 5000;
 
 function startServer(): Promise<void> {
-  // Prevent the application from starting a second server process.
-  if (serverProcess) {
+  if (serverProcess && !serverProcess.killed) {
     console.log("[ROME] Server process already exists");
     return Promise.resolve();
   }
@@ -115,138 +114,111 @@ function startServer(): Promise<void> {
         "Please rebuild the app.";
 
       dialog.showErrorBox("ROME — Startup Error", message);
-      reject(new Error("Server bundle not found"));
+      reject(new Error(message));
       return;
     }
 
     const envVars = loadEnvFile();
 
-    let startupSettled = false;
-    let startupTimer: NodeJS.Timeout | null = null;
+    let startupComplete = false;
+    let stderrOutput = "";
 
-    const finishStartup = () => {
-      if (startupSettled) {
+    const startupTimer = setTimeout(() => {
+      if (!startupComplete) {
+        startupComplete = true;
+        console.log("[ROME] Server startup fallback reached");
+        resolve();
+      }
+    }, 4000);
+
+    /*
+     * process.execPath is the packaged ROME executable.
+     *
+     * ELECTRON_RUN_AS_NODE prevents it from opening another
+     * copy of ROME and instead runs index.cjs as a Node process.
+     */
+    serverProcess = spawn(process.execPath, [serverEntry], {
+      cwd: path.dirname(serverEntry),
+
+      env: {
+        ...process.env,
+        ...envVars,
+
+        ELECTRON_RUN_AS_NODE: "1",
+        NODE_ENV: "production",
+        PORT: String(SERVER_PORT),
+        ROME_DB_PATH: getDbPath(),
+      },
+
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    serverProcess.stdout?.on("data", (data: Buffer) => {
+      const message = data.toString().trim();
+
+      if (!message) {
         return;
       }
 
-      startupSettled = true;
+      console.log("[server]", message);
 
-      if (startupTimer) {
+      const normalized = message.toLowerCase();
+
+      if (
+        !startupComplete &&
+        (
+          normalized.includes("listening") ||
+          normalized.includes(`localhost:${SERVER_PORT}`) ||
+          normalized.includes(`port ${SERVER_PORT}`) ||
+          normalized.includes("server started") ||
+          normalized.includes("server ready")
+        )
+      ) {
+        startupComplete = true;
         clearTimeout(startupTimer);
-        startupTimer = null;
+        resolve();
       }
+    });
 
-      resolve();
-    };
+    serverProcess.stderr?.on("data", (data: Buffer) => {
+      const message = data.toString();
 
-    const failStartup = (error: Error) => {
-      if (startupSettled) {
-        return;
-      }
+      stderrOutput += message;
+      console.error("[server err]", message.trim());
+    });
 
-      startupSettled = true;
-
-      if (startupTimer) {
-        clearTimeout(startupTimer);
-        startupTimer = null;
-      }
-
-      reject(error);
-    };
-
-    try {
-      /*
-       * Run the Express server as an Electron utility process.
-       *
-       * This is the critical correction. Do not replace this with:
-       *
-       * spawn(process.execPath, [serverEntry])
-       *
-       * That can relaunch the packaged ROME executable recursively.
-       */
-      const child = utilityProcess.fork(serverEntry, [], {
-        env: {
-          ...process.env,
-          ...envVars,
-          NODE_ENV: "production",
-          PORT: String(SERVER_PORT),
-          ROME_DB_PATH: getDbPath(),
-        },
-        stdio: "pipe",
-        serviceName: "ROME Server",
-      });
-
-      serverProcess = child;
-
-      child.on("spawn", () => {
-        console.log(`[ROME] Server process started. PID: ${child.pid}`);
-      });
-
-      child.stdout?.on("data", (data: Buffer) => {
-        const message = data.toString().trim();
-
-        if (!message) {
-          return;
-        }
-
-        console.log("[server]", message);
-
-        const normalizedMessage = message.toLowerCase();
-
-        if (
-          normalizedMessage.includes("listening") ||
-          normalizedMessage.includes(String(SERVER_PORT)) ||
-          normalizedMessage.includes("started") ||
-          normalizedMessage.includes("ready")
-        ) {
-          finishStartup();
-        }
-      });
-
-      child.stderr?.on("data", (data: Buffer) => {
-        const message = data.toString().trim();
-
-        if (message) {
-          console.error("[server err]", message);
-        }
-      });
-
-      child.on("exit", (code) => {
-        console.log(`[ROME] Server process exited with code ${code}`);
-
-        if (serverProcess === child) {
-          serverProcess = null;
-        }
-
-        if (!startupSettled) {
-          failStartup(
-            new Error(
-              `ROME server stopped before startup completed. Exit code: ${code}`
-            )
-          );
-        }
-      });
-
-      /*
-       * Preserve the original four-second fallback.
-       * Ideally the server resolves earlier through its startup log.
-       */
-      startupTimer = setTimeout(() => {
-        console.log(
-          "[ROME] Server startup timeout reached; attempting to open application"
-        );
-
-        finishStartup();
-      }, 4000);
-    } catch (error) {
-      const normalizedError =
-        error instanceof Error
-          ? error
-          : new Error("Unknown server startup error");
-
+    serverProcess.on("error", (error) => {
+      clearTimeout(startupTimer);
       serverProcess = null;
-      failStartup(normalizedError);
-    }
+
+      if (!startupComplete) {
+        startupComplete = true;
+        reject(error);
+      }
+    });
+
+    serverProcess.on("exit", (code, signal) => {
+      clearTimeout(startupTimer);
+      serverProcess = null;
+
+      console.error(
+        `[ROME] Server exited. Code: ${code}; signal: ${signal}`
+      );
+
+      if (!startupComplete) {
+        startupComplete = true;
+
+        const details =
+          stderrOutput.trim() ||
+          `The server exited with code ${code ?? "unknown"}.`;
+
+        reject(
+          new Error(
+            `ROME server stopped before startup completed.\n\n${details}`
+          )
+        );
+      }
+    });
   });
 }
 
