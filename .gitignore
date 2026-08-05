@@ -8,3 +8,7 @@ data.db-wal
 *.log
 .DS_Store
 .vercel
+
+# Electron build output
+release/
+dist-electron/

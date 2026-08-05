@@ -1,16 +1,11 @@
-import { app, BrowserWindow, shell, ipcMain } from "electron";
+import { app, BrowserWindow, shell, ipcMain, dialog } from "electron";
 import path from "path";
 import { spawn, ChildProcess } from "child_process";
 import fs from "fs";
 
-// In the compiled CJS output, __dirname is available natively.
-// We declare it here for TypeScript — esbuild injects it at compile time.
 declare const __dirname: string;
 
 // ── Persistent data directory ──────────────────────────────────────────────
-// Windows: %APPDATA%\ROME\
-// macOS:   ~/Library/Application Support/ROME/
-// Dev:     ./data  (relative to project root)
 export function getDataDir(): string {
   if (process.env.NODE_ENV === "development") {
     return path.join(process.cwd(), "data");
@@ -24,6 +19,37 @@ export function getDbPath(): string {
   return path.join(dir, "rome.db");
 }
 
+// ── Load .env file from app userData dir ──────────────────────────────────
+// In production: ~/Library/Application Support/ROME/.env
+// In dev: <project-root>/.env (already loaded by dotenv in server)
+function loadEnvFile(): Record<string, string> {
+  const envPaths = [
+    path.join(getDataDir(), ".env"),           // production
+    path.join(app.getAppPath(), "..", ".env"), // alongside app
+    path.join(process.cwd(), ".env"),          // dev fallback
+  ];
+
+  for (const envPath of envPaths) {
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, "utf-8");
+      const vars: Record<string, string> = {};
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eqIdx = trimmed.indexOf("=");
+        if (eqIdx === -1) continue;
+        const key = trimmed.slice(0, eqIdx).trim();
+        const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, "");
+        vars[key] = val;
+      }
+      console.log(`[ROME] Loaded env from: ${envPath}`);
+      return vars;
+    }
+  }
+  console.warn("[ROME] No .env file found — server will use process environment");
+  return {};
+}
+
 // ── Express server ─────────────────────────────────────────────────────────
 let serverProcess: ChildProcess | null = null;
 const SERVER_PORT = 5000;
@@ -33,14 +59,20 @@ function startServer(): Promise<void> {
     const serverEntry = path.join(__dirname, "..", "dist", "index.cjs");
 
     if (!fs.existsSync(serverEntry)) {
-      console.error("Server entry not found:", serverEntry);
+      dialog.showErrorBox(
+        "ROME — Startup Error",
+        `Server bundle not found at:\n${serverEntry}\n\nPlease rebuild the app.`
+      );
       reject(new Error("Server not built"));
       return;
     }
 
+    const envVars = loadEnvFile();
+
     serverProcess = spawn(process.execPath, [serverEntry], {
       env: {
         ...process.env,
+        ...envVars,
         NODE_ENV: "production",
         PORT: String(SERVER_PORT),
         ROME_DB_PATH: getDbPath(),
@@ -49,60 +81,68 @@ function startServer(): Promise<void> {
     });
 
     serverProcess.stdout?.on("data", (d) => {
-      const msg = d.toString();
-      console.log("[server]", msg.trim());
-      if (msg.includes("listening") || msg.includes("5000") || msg.includes("started")) {
+      const msg = d.toString().trim();
+      console.log("[server]", msg);
+      if (
+        msg.includes("listening") ||
+        msg.includes("5000") ||
+        msg.includes("started") ||
+        msg.includes("ready")
+      ) {
         resolve();
       }
     });
 
-    serverProcess.stderr?.on("data", (d) => console.error("[server err]", d.toString().trim()));
+    serverProcess.stderr?.on("data", (d) => {
+      console.error("[server err]", d.toString().trim());
+    });
 
-    serverProcess.on("error", reject);
+    serverProcess.on("error", (err) => {
+      dialog.showErrorBox("ROME — Server Error", err.message);
+      reject(err);
+    });
 
-    // Fallback: resolve after 3s even if no "listening" message
-    setTimeout(resolve, 3000);
+    // Fallback resolve after 4s
+    setTimeout(resolve, 4000);
   });
 }
 
-// ── Window ─────────────────────────────────────────────────────────────────
+// ── Main window ────────────────────────────────────────────────────────────
 let mainWindow: BrowserWindow | null = null;
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    minWidth: 900,
-    minHeight: 600,
+    width: 1440,
+    height: 900,
+    minWidth: 960,
+    minHeight: 640,
     title: "ROME — Cognitive Training Lab",
     backgroundColor: "#070a0f",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
     },
-    // macOS traffic lights
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    trafficLightPosition: { x: 16, y: 16 },
     show: false,
   });
 
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.once("ready-to-show", () => {
+    mainWindow?.show();
+    mainWindow?.focus();
+  });
 
-  // Open external links in browser, not Electron
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
   });
 
-  const url =
-    process.env.NODE_ENV === "development"
-      ? `http://localhost:${SERVER_PORT}`
-      : `http://localhost:${SERVER_PORT}`;
-
-  await mainWindow.loadURL(url);
+  await mainWindow.loadURL(`http://localhost:${SERVER_PORT}`);
 }
 
-// ── IPC ────────────────────────────────────────────────────────────────────
+// ── IPC handlers ───────────────────────────────────────────────────────────
 ipcMain.handle("get-data-dir", () => getDataDir());
 ipcMain.handle("get-db-path", () => getDbPath());
 ipcMain.handle("get-app-version", () => app.getVersion());
@@ -110,10 +150,13 @@ ipcMain.handle("get-app-version", () => app.getVersion());
 // ── App lifecycle ──────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   try {
+    console.log("[ROME] Starting server...");
     await startServer();
+    console.log("[ROME] Server ready, opening window...");
     await createWindow();
   } catch (err) {
-    console.error("Startup error:", err);
+    console.error("[ROME] Startup failed:", err);
+    app.quit();
   }
 
   app.on("activate", () => {
