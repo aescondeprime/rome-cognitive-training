@@ -24,7 +24,7 @@ run(
   `node_modules/.bin/esbuild electron/main.ts \
     --bundle --platform=node --target=node18 --format=cjs \
     --external:electron --external:better-sqlite3 \
-    --outfile=dist-electron/main.js`,
+    --outfile=dist-electron/main.cjs`,
   "Compiling Electron main"
 );
 
@@ -33,7 +33,7 @@ run(
   `node_modules/.bin/esbuild electron/preload.ts \
     --bundle --platform=node --target=node18 --format=cjs \
     --external:electron \
-    --outfile=dist-electron/preload.js`,
+    --outfile=dist-electron/preload.cjs`,
   "Compiling Electron preload"
 );
 
