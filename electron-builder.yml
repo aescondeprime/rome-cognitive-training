@@ -2,12 +2,20 @@ appId: com.rome.cognitivetraining
 productName: ROME
 copyright: "Copyright © 2026 ROME Cognitive Training Lab"
 
-
 files:
   - dist/**/*
   - dist-electron/**/*
   - package.json
   - node_modules/better-sqlite3/**/*
+
+# Package most application files into app.asar, but keep the Express
+# server and native SQLite module on the physical filesystem.
+asar: true
+
+asarUnpack:
+  - dist/**/*
+  - node_modules/better-sqlite3/**/*
+  - "**/*.node"
 
 npmRebuild: true
 
@@ -19,13 +27,17 @@ directories:
 mac:
   category: public.app-category.education
   icon: build-resources/icon.icns
-  # Allow running without Apple Developer cert (for personal use)
+
+  # Allow running without an Apple Developer certificate.
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false
+
   target:
     - target: dmg
-      arch: [x64, arm64]
+      arch:
+        - x64
+        - arm64
 
 dmg:
   title: "ROME — Cognitive Training Lab"
@@ -37,7 +49,9 @@ dmg:
 win:
   target:
     - target: nsis
-      arch: [x64]
+      arch:
+        - x64
+
   icon: build-resources/icon.ico
 
 nsis:
@@ -47,7 +61,7 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: ROME
 
-# ── Auto-update (GitHub Releases) ────────────────────────────────────────
+# ── Auto-update / GitHub Releases ────────────────────────────────────────
 publish:
   provider: github
   owner: aescondeprime
