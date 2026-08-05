@@ -46,20 +46,28 @@ async function buildAll() {
   ];
   const externals = allDeps.filter((dep) => !allowlist.includes(dep));
 
-  await esbuild({
-    entryPoints: ["server/index.ts"],
-    platform: "node",
-    bundle: true,
-    format: "cjs",
-    outfile: "dist/index.cjs",
-    define: {
-      "process.env.NODE_ENV": '"production"',
-    },
-    minify: true,
-    external: externals,
-    logLevel: "info",
-  });
-}
+await esbuild({
+  entryPoints: ["server/index.ts"],
+  platform: "node",
+  bundle: true,
+  format: "cjs",
+  outfile: "dist/index.cjs",
+
+  // Produce syntax compatible with Electron's Node runtime.
+  target: "node20",
+
+  // Keep the server readable and produce useful stack traces.
+  minify: false,
+  sourcemap: true,
+  keepNames: true,
+
+  define: {
+    "process.env.NODE_ENV": '"production"',
+  },
+
+  external: externals,
+  logLevel: "info",
+});
 
 buildAll().catch((err) => {
   console.error(err);
