@@ -119,7 +119,7 @@ async function createWindow() {
     title: "ROME — Cognitive Training Lab",
     backgroundColor: "#070a0f",
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
