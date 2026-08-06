@@ -88,3 +88,7 @@ const host = "127.0.0.1";
 httpServer.listen(port, host, () => {
   log(`serving on http://${host}:${port}`);
 });
+})().catch((error) => {
+  console.error("[ROME] Server startup failed:", error);
+  process.exit(1);
+});
