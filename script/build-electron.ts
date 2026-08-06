@@ -1,48 +1,78 @@
 /**
- * Build script for ROME Electron desktop app.
- * 1. Builds the web frontend (Vite) + Express server (esbuild)
- * 2. Compiles Electron main + preload (esbuild → dist-electron/)
- * 3. Rebuilds native modules (better-sqlite3) for the Electron version
+ * Build script for the ROME Electron desktop application.
  */
-import { execSync } from "child_process";
-import path from "path";
-import { fileURLToPath } from "url";
+
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
 
-function run(cmd: string, label: string) {
-  console.log(`\n⚡ ${label}...`);
-  execSync(cmd, { cwd: root, stdio: "inherit" });
+function run(command: string, label: string): void {
+  console.log(`\n[ROME] ${label}...`);
+
+  const result = spawnSync(command, {
+    cwd: root,
+    shell: true,
+    stdio: "inherit",
+    env: process.env,
+  });
+
+  if (result.error) {
+    console.error(
+      `\n[ROME] ${label} could not be started:\n`,
+      result.error
+    );
+    process.exit(1);
+  }
+
+  if (result.status !== 0) {
+    console.error(
+      `\n[ROME] ${label} failed with exit code ${result.status ?? 1}.`
+    );
+    process.exit(result.status ?? 1);
+  }
 }
 
-// 1. Web + server bundle
-run("tsx script/build.ts", "Building web + server");
+// 1. Build Vite frontend and Express server.
+run("npx tsx script/build.ts", "Building web and server");
 
-// 2. Compile Electron main process
+// 2. Compile Electron main process.
 run(
-  `node_modules/.bin/esbuild electron/main.ts \
-    --bundle --platform=node --target=node18 --format=cjs \
-    --external:electron --external:better-sqlite3 \
-    --outfile=dist-electron/main.cjs`,
-  "Compiling Electron main"
+  [
+    "npx esbuild electron/main.ts",
+    "--bundle",
+    "--platform=node",
+    "--target=node20",
+    "--format=cjs",
+    "--external:electron",
+    "--external:better-sqlite3",
+    "--outfile=dist-electron/main.cjs",
+  ].join(" "),
+  "Compiling Electron main process"
 );
 
-// 3. Compile Electron preload
+// 3. Compile Electron preload.
 run(
-  `node_modules/.bin/esbuild electron/preload.ts \
-    --bundle --platform=node --target=node18 --format=cjs \
-    --external:electron \
-    --outfile=dist-electron/preload.cjs`,
+  [
+    "npx esbuild electron/preload.ts",
+    "--bundle",
+    "--platform=node",
+    "--target=node20",
+    "--format=cjs",
+    "--external:electron",
+    "--outfile=dist-electron/preload.cjs",
+  ].join(" "),
   "Compiling Electron preload"
 );
 
-// 4. Rebuild native modules for this Electron version
-// This is critical for better-sqlite3 — it's a C++ addon that must be
-// compiled against the exact Electron Node.js ABI, not the system Node.js.
+// 4. Rebuild native module against Electron.
 run(
-  `node_modules/.bin/electron-rebuild -f -w better-sqlite3`,
-  "Rebuilding native modules for Electron"
+  "npx electron-rebuild -f -w better-sqlite3",
+  "Rebuilding better-sqlite3"
 );
 
-console.log("\n✅ Electron build complete → dist-electron/");
+console.log(
+  "\n[ROME] Electron compilation completed: dist-electron/"
+);
