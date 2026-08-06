@@ -45,7 +45,6 @@ async function buildAll() {
     ...Object.keys(pkg.devDependencies || {}),
   ];
   const externals = allDeps.filter((dep) => !allowlist.includes(dep));
-
   await esbuild({
     entryPoints: ["server/index.ts"],
     platform: "node",
@@ -53,10 +52,7 @@ async function buildAll() {
     format: "cjs",
     outfile: "dist/index.cjs",
 
-    // Produce syntax compatible with Electron's Node runtime.
     target: "node20",
-
-    // Keep the server readable and produce useful stack traces.
     minify: false,
     sourcemap: true,
     keepNames: true,
