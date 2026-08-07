@@ -188,7 +188,7 @@ export default function Login({ onLogin }: Props) {
           onMouseEnter={e => { if (!loading) (e.target as HTMLButtonElement).style.background = "hsl(var(--accent-h) 35% 18%)"; }}
           onMouseLeave={e => { if (!loading) (e.target as HTMLButtonElement).style.background = "hsl(var(--accent-h) 35% 14%)"; }}
         >
-          {loading ? "…" : mode === "login" ? "Enter" : "Create Profile"}
+          {loading ? "…" : "Enter"}
         </button>
       </form>
     </div>
