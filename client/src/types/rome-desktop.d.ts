@@ -81,6 +81,7 @@ interface RomeBrowserBridge {
   onDownload: (listener: (download: RomeBrowserDownload) => void) => () => void;
   onPermissionRequest: (listener: (request: RomeBrowserPermissionRequest) => void) => () => void;
   onRequestBounds: (listener: () => void) => () => void;
+  onConstellationToggle: (listener: () => void) => () => void;
 }
 
 interface Window {

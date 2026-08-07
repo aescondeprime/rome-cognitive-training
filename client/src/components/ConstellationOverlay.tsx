@@ -75,6 +75,22 @@ export function ConstellationPortal() {
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, []);
 
+  // Native WebContentsViews render above the React compositor regardless of
+  // CSS z-index. Keep the browser page detached while the map owns the screen.
+  useEffect(() => {
+    document.documentElement.dataset.romeConstellationOpen = open ? "true" : "false";
+    window.dispatchEvent(new CustomEvent("rome:constellation-visibility", { detail: { visible: open } }));
+    return () => {
+      if (open) document.documentElement.dataset.romeConstellationOpen = "false";
+    };
+  }, [open]);
+
+  // When a remote page has focus its key events never reach this renderer.
+  // Electron main intercepts ROME's Tab shortcut and forwards only this toggle.
+  useEffect(() => {
+    return window.romeDesktop?.browser.onConstellationToggle(() => setOpen(v => !v));
+  }, []);
+
   // Expose openMap so the trigger button inside AppShell can call it
   useEffect(() => {
     (window as any).__romeOpenConstellation = openMap;

@@ -52,5 +52,10 @@ contextBridge.exposeInMainWorld("romeDesktop", {
       ipcRenderer.on("rome:browser:request-bounds", handler);
       return () => ipcRenderer.removeListener("rome:browser:request-bounds", handler);
     },
+    onConstellationToggle: (listener: () => void) => {
+      const handler = () => listener();
+      ipcRenderer.on("rome:constellation:toggle", handler);
+      return () => ipcRenderer.removeListener("rome:constellation:toggle", handler);
+    },
   },
 });

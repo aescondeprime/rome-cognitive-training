@@ -388,10 +388,13 @@ function DesktopWorldBrowser() {
   const [fullscreen, setFullscreen] = useState(false);
   const [ready, setReady] = useState(false);
   const [bridgeError, setBridgeError] = useState("");
+  const [constellationOpen, setConstellationOpen] = useState(
+    () => document.documentElement.dataset.romeConstellationOpen === "true",
+  );
 
   const active = tabs.find(tab => tab.active) ?? null;
   const activeBookmarked = Boolean(active?.url && bookmarks.some(bookmark => bookmark.url === active.url));
-  const overlayVisible = Boolean(panel || permission || active?.error || active?.crashed || bridgeError);
+  const overlayVisible = Boolean(constellationOpen || panel || permission || active?.error || active?.crashed || bridgeError);
 
   const measureViewport = () => {
     const rect = viewportRef.current?.getBoundingClientRect();
@@ -445,6 +448,15 @@ function DesktopWorldBrowser() {
       offPermission();
       void bridge.setViewport({ x: 0, y: 0, width: 0, height: 0, visible: false }).catch(() => undefined);
     };
+  }, []);
+
+  useEffect(() => {
+    const onConstellationVisibility = (event: Event) => {
+      const visible = (event as CustomEvent<{ visible?: boolean }>).detail?.visible;
+      setConstellationOpen(Boolean(visible));
+    };
+    window.addEventListener("rome:constellation-visibility", onConstellationVisibility);
+    return () => window.removeEventListener("rome:constellation-visibility", onConstellationVisibility);
   }, []);
 
   useEffect(() => {
