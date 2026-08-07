@@ -151,6 +151,7 @@ export class TabManager {
       this.publish();
     });
     contents.on("did-navigate", (_event, url) => {
+      this.permissions.clearForTab(tab.id, this.originFor(url));
       this.sync(tab);
       if (tab.sessionKind !== "incognito" && isWebUrl(url)) {
         this.storage.recordHistory(url, contents.getTitle());
@@ -191,6 +192,23 @@ export class TabManager {
         event.preventDefault();
         tab.state.error = "ROME blocked a non-web navigation request.";
         this.publish();
+      }
+    });
+    contents.on("before-input-event", (event, input) => {
+      if (
+        input.type === "keyDown" &&
+        input.key === "Tab" &&
+        !input.shift &&
+        !input.control &&
+        !input.alt &&
+        !input.meta &&
+        !input.isAutoRepeat
+      ) {
+        event.preventDefault();
+        this.viewport = { ...this.viewport, visible: false };
+        this.detachView();
+        this.host.webContents.focus();
+        this.emit("rome:constellation:toggle", null);
       }
     });
     contents.setWindowOpenHandler(({ url }) => {
@@ -241,6 +259,7 @@ export class TabManager {
     if (!tab) return;
     const wasActive = this.activeId === id;
     if (this.attachedView === tab.view) this.detachView();
+    this.permissions.clearForTab(id);
     this.tabs.delete(id);
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
 
@@ -368,6 +387,14 @@ export class TabManager {
     return true;
   }
 
+  private originFor(url: string): string | undefined {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return undefined;
+    }
+  }
+
   private requireTab(id: string): ManagedTab {
     const tab = this.tabs.get(id);
     if (!tab) throw new Error("Unknown browser tab");
@@ -381,6 +408,7 @@ export class TabManager {
   dispose(): void {
     this.detachView();
     for (const tab of this.tabs.values()) {
+      this.permissions.clearForTab(tab.id);
       if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     }
     this.tabs.clear();
