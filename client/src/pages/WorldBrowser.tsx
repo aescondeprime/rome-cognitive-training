@@ -481,6 +481,31 @@ function DesktopWorldBrowser() {
     };
   }, [ready, overlayVisible, active?.id]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const commandOrControl = navigator.platform.toLowerCase().includes("mac") ? event.metaKey : event.ctrlKey;
+      if (commandOrControl && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "t") {
+        event.preventDefault();
+        run(bridge.createTab());
+        return;
+      }
+      if (commandOrControl && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "w" && active) {
+        event.preventDefault();
+        run(bridge.closeTab(active.id));
+        return;
+      }
+      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key === "Tab" && tabs.length > 1) {
+        event.preventDefault();
+        const currentIndex = Math.max(0, tabs.findIndex(tab => tab.active));
+        const direction = event.shiftKey ? -1 : 1;
+        const nextIndex = (currentIndex + direction + tabs.length) % tabs.length;
+        run(bridge.activateTab(tabs[nextIndex].id));
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active?.id, tabs]);
+
   const run = (action: Promise<unknown>) => {
     void action.catch(error => setBridgeError(error instanceof Error ? error.message : "Browser action failed."));
   };
@@ -546,13 +571,13 @@ function DesktopWorldBrowser() {
         <div style={{ height: 37, width: 26, display: "grid", placeItems: "center", flexShrink: 0 }} title="Local Chromium">
           <Globe size={13} color={ACC} />
         </div>
-        <div style={{ display: "flex", flex: 1, minWidth: 0, gap: 3, overflow: "hidden" }}>
+        <div className="rome-browser-tab-strip" style={{ display: "flex", flex: 1, minWidth: 0, gap: 3, overflowX: "auto", overflowY: "hidden" }}>
           {tabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => run(bridge.activateTab(tab.id))}
               style={{
-                height: 32, minWidth: 108, maxWidth: 210, flex: "1 1 170px",
+                height: 32, minWidth: 120, maxWidth: 210, flex: "0 1 190px",
                 border: `1px solid ${tab.active ? "hsl(43 50% 25%)" : border}`,
                 borderBottom: tab.active ? `1px solid ${surface}` : undefined,
                 background: tab.active ? surface : "hsl(222 15% 6.8%)",
@@ -578,7 +603,11 @@ function DesktopWorldBrowser() {
             </button>
           ))}
         </div>
-        <button title="New tab" onClick={() => run(bridge.createTab())} style={iconButton}><Plus size={13} /></button>
+        <button
+          title="New tab (⌘/Ctrl+T)"
+          onClick={() => run(bridge.createTab())}
+          style={{ ...iconButton, width: 62, gap: 4, display: "flex", font: "8px DM Mono, monospace", letterSpacing: "0.08em" }}
+        ><Plus size={13} /> NEW</button>
         <button title="New incognito tab" onClick={() => run(bridge.createTab(undefined, "incognito"))} style={iconButton}><Shield size={12} /></button>
       </div>
 
@@ -670,6 +699,8 @@ function DesktopWorldBrowser() {
       </div>
 
       <style>{`
+        .rome-browser-tab-strip { scrollbar-width: none; }
+        .rome-browser-tab-strip::-webkit-scrollbar { display: none; }
         @keyframes romeBrowserSpin { to { transform: rotate(360deg); } }
         @keyframes romeBrowserProgress { from { transform: translateX(-110%); } to { transform: translateX(330%); } }
         button:disabled { cursor: default !important; }

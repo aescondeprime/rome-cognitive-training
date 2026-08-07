@@ -98,10 +98,10 @@ export default function PhilosophyChambers() {
       setSelectedId(note.id);
       setMobileView("editor");   // jump to editor on mobile after create
     },
-    onError: () => {
+    onError: (error: Error) => {
       toast({
         title: "Could not create note",
-        description: "The backend server isn't reachable. Run the app locally with `npm run dev` to use Philosophy Chambers.",
+        description: error.message || "The note could not be saved.",
         variant: "destructive",
       });
     },

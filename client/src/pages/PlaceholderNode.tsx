@@ -10,10 +10,13 @@ interface Props {
   description?: string;
   /** If provided, renders a CTA button linking to this route within the app */
   subRoute?: { label: string; path: string };
+  /** Multiple tools exposed directly from a chamber landing page. */
+  subRoutes?: { label: string; path: string }[];
 }
 
-export default function PlaceholderNode({ title, symbol, accent, description, subRoute }: Props) {
+export default function PlaceholderNode({ title, symbol, accent, description, subRoute, subRoutes }: Props) {
   const [, navigate] = useHashLocation();
+  const routes = subRoutes ?? (subRoute ? [subRoute] : []);
 
   return (
     <div className="max-w-lg mx-auto py-4">
@@ -35,20 +38,25 @@ export default function PlaceholderNode({ title, symbol, accent, description, su
         </p>
         <div className="w-12 h-px" style={{ background: `${accent}30` }} />
 
-        {subRoute ? (
-          <button
-            onClick={() => navigate(subRoute.path)}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-mono tracking-widest uppercase transition-all hover:scale-105"
-            style={{
-              background: `${accent}18`,
-              border: `1px solid ${accent}40`,
-              color: accent,
-              boxShadow: `0 0 20px ${accent}20`,
-            }}
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            {subRoute.label}
-          </button>
+        {routes.length ? (
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {routes.map(route => (
+              <button
+                key={route.path}
+                onClick={() => navigate(route.path)}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-mono tracking-widest uppercase transition-all hover:scale-105"
+                style={{
+                  background: `${accent}18`,
+                  border: `1px solid ${accent}40`,
+                  color: accent,
+                  boxShadow: `0 0 20px ${accent}20`,
+                }}
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                {route.label}
+              </button>
+            ))}
+          </div>
         ) : (
           <p className="text-[10px]" style={{ color: "hsl(214 20% 25%)", fontFamily: "DM Mono, monospace" }}>
             Coming soon
