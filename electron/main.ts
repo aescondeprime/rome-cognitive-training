@@ -405,6 +405,82 @@ async function createWindow(): Promise<void> {
 
   mainWindow = window;
 
+// ── TEMPORARY RENDERER DIAGNOSTICS ──────────────────────────────────────
+
+// Open DevTools automatically so we can see React/browser errors.
+window.webContents.openDevTools({
+  mode: "detach",
+  activate: true,
+});
+
+// Capture console.log / console.error from the React renderer.
+window.webContents.on("console-message", (_event, details) => {
+  console.log(
+    `[renderer:${details.level}] ${details.message} ` +
+      `(${details.sourceId}:${details.lineNumber})`
+  );
+});
+
+// Detect preload script failures.
+window.webContents.on(
+  "preload-error",
+  (_event, preloadPath, error) => {
+    dialog.showErrorBox(
+      "ROME — Preload Error",
+      [
+        `Preload: ${preloadPath}`,
+        "",
+        error.stack || error.message,
+      ].join("\n")
+    );
+  }
+);
+
+// Detect failures loading http://127.0.0.1:5000.
+window.webContents.on(
+  "did-fail-load",
+  (
+    _event,
+    errorCode,
+    errorDescription,
+    validatedURL,
+    isMainFrame
+  ) => {
+    if (!isMainFrame) return;
+
+    dialog.showErrorBox(
+      "ROME — Page Load Failed",
+      [
+        `URL: ${validatedURL}`,
+        "",
+        `Error ${errorCode}: ${errorDescription}`,
+      ].join("\n")
+    );
+  }
+);
+
+// Detect an actual Chromium renderer crash.
+window.webContents.on(
+  "render-process-gone",
+  (_event, details) => {
+    dialog.showErrorBox(
+      "ROME — Renderer Stopped",
+      [
+        `Reason: ${details.reason}`,
+        `Exit code: ${details.exitCode}`,
+      ].join("\n")
+    );
+  }
+);
+
+// Confirm that the HTML document itself loaded.
+window.webContents.on("did-finish-load", () => {
+  console.log(
+    "[ROME] Renderer finished loading:",
+    window.webContents.getURL()
+  );
+});
+
   window.once("ready-to-show", () => {
     if (!window.isDestroyed()) {
       window.show();
