@@ -9,14 +9,19 @@ import path from "path";
 import { spawn, ChildProcess } from "child_process";
 import fs from "fs";
 import net from "net";
+import { BrowserController } from "./browser/browser-controller";
+import { registerBrowserIpc } from "./browser/browser-ipc";
 
 declare const __dirname: string;
 
 // ── Application state ─────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null;
+let browserController: BrowserController | null = null;
 let serverProcess: ChildProcess | null = null;
 let isQuitting = false;
+
+registerBrowserIpc(() => browserController);
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -387,7 +392,9 @@ async function createWindow(): Promise<void> {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      webviewTag: true,
+      sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
     },
 
     titleBarStyle:
@@ -404,12 +411,38 @@ async function createWindow(): Promise<void> {
   });
 
   mainWindow = window;
+  browserController = new BrowserController(window, getDataDir());
+
+  const isTrustedShellUrl = (value: string) => {
+    try {
+      const url = new URL(value);
+      return url.protocol === "http:" && url.hostname === "127.0.0.1" && url.port === String(SERVER_PORT);
+    } catch {
+      return false;
+    }
+  };
+
+  const keepShellOnTrustedOrigin = (event: Electron.Event, url: string) => {
+    if (isTrustedShellUrl(url)) return;
+    event.preventDefault();
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") void shell.openExternal(url);
+    } catch {
+      // Invalid/non-web protocols stay blocked.
+    }
+  };
+
+  // The preload bridge belongs only to ROME's local React shell. A normal
+  // navigation or server redirect must never carry that bridge to a website.
+  window.webContents.on("will-navigate", keepShellOnTrustedOrigin);
+  window.webContents.on("will-redirect", keepShellOnTrustedOrigin);
 
 // ── TEMPORARY RENDERER DIAGNOSTICS ──────────────────────────────────────
 
 
 // Capture console.log / console.error from the React renderer.
-window.webContents.on("console-message", (_event, details) => {
+window.webContents.on("console-message", (details) => {
   console.log(
     `[renderer:${details.level}] ${details.message} ` +
       `(${details.sourceId}:${details.lineNumber})`
@@ -484,6 +517,10 @@ window.webContents.on("did-finish-load", () => {
   });
 
   window.on("closed", () => {
+    if (browserController) {
+      browserController.dispose();
+      browserController = null;
+    }
     if (mainWindow === window) {
       mainWindow = null;
     }
@@ -524,9 +561,28 @@ window.webContents.on("did-finish-load", () => {
 
 // ── IPC handlers ──────────────────────────────────────────────────────────
 
-ipcMain.handle("get-data-dir", () => getDataDir());
-ipcMain.handle("get-db-path", () => getDbPath());
-ipcMain.handle("get-app-version", () => app.getVersion());
+function assertTrustedRenderer(event: Electron.IpcMainInvokeEvent): void {
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    event.sender.id !== mainWindow.webContents.id
+  ) {
+    throw new Error("Unauthorized IPC sender");
+  }
+}
+
+ipcMain.handle("get-data-dir", (event) => {
+  assertTrustedRenderer(event);
+  return getDataDir();
+});
+ipcMain.handle("get-db-path", (event) => {
+  assertTrustedRenderer(event);
+  return getDbPath();
+});
+ipcMain.handle("get-app-version", (event) => {
+  assertTrustedRenderer(event);
+  return app.getVersion();
+});
 
 // ── App lifecycle ─────────────────────────────────────────────────────────
 

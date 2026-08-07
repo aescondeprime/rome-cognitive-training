@@ -149,9 +149,9 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     size: 15,
     depth: 1.0,
     href: "/world",
-    tagline: "Integrated remote browser workspace",
+    tagline: "Integrated browser workspace",
     subnodes: [
-      { id: "wr-browser", label: "Browser", icon: "◌", href: "/world", description: "Secure remote Chromium session" },
+      { id: "wr-browser", label: "Browser", icon: "◌", href: "/world", description: "Local Chromium on desktop, streamed session on web" },
     ],
     connections: [],
   },

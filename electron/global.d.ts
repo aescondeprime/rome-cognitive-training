@@ -5,5 +5,6 @@ interface Window {
     getDbPath: () => Promise<string>;
     getAppVersion: () => Promise<string>;
     isDesktop: boolean;
+    browser: Record<string, (...args: any[]) => any>;
   };
 }
