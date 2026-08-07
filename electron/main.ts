@@ -407,11 +407,6 @@ async function createWindow(): Promise<void> {
 
 // ── TEMPORARY RENDERER DIAGNOSTICS ──────────────────────────────────────
 
-// Open DevTools automatically so we can see React/browser errors.
-window.webContents.openDevTools({
-  mode: "detach",
-  activate: true,
-});
 
 // Capture console.log / console.error from the React renderer.
 window.webContents.on("console-message", (_event, details) => {
