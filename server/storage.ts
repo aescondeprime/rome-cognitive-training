@@ -480,23 +480,27 @@ class SupabaseStorage implements IStorage {
 
   // ── Notes ───────────────────────────────────────────────────────────
   async getNotes(userId: number): Promise<Note[]> {
-    const { data } = await this.sb.from("notes").select("*")
+    const { data, error } = await this.sb.from("notes").select("*")
       .eq("user_id", userId).order("updated_at", { ascending: false });
+    if (error) throw new Error(error.message);
     return (data ?? []).map(mapNote);
   }
 
   async getNote(id: number): Promise<Note | undefined> {
-    const { data } = await this.sb.from("notes").select("*").eq("id", id).single();
+    const { data, error } = await this.sb.from("notes").select("*").eq("id", id).maybeSingle();
+    if (error) throw new Error(error.message);
     return data ? mapNote(data) : undefined;
   }
 
   async createNote(data: InsertNote): Promise<Note> {
     const now = Date.now();
-    const { data: r } = await this.sb.from("notes").insert({
+    const { data: r, error } = await this.sb.from("notes").insert({
       user_id: data.userId, title: data.title ?? "Untitled",
       content: data.content ?? "", tags: data.tags ?? "[]",
-      pinned: data.pinned ?? 0, created_at: now, updated_at: now,
+      pinned: data.pinned ? 1 : 0, created_at: now, updated_at: now,
     }).select().single();
+    if (error) throw new Error(error.message);
+    if (!r) throw new Error("Note creation returned no record");
     return mapNote(r);
   }
 
@@ -505,13 +509,15 @@ class SupabaseStorage implements IStorage {
     if (data.title !== undefined) patch.title = data.title;
     if (data.content !== undefined) patch.content = data.content;
     if (data.tags !== undefined) patch.tags = data.tags;
-    if (data.pinned !== undefined) patch.pinned = data.pinned;
-    const { data: r } = await this.sb.from("notes").update(patch).eq("id", id).select().single();
+    if (data.pinned !== undefined) patch.pinned = data.pinned ? 1 : 0;
+    const { data: r, error } = await this.sb.from("notes").update(patch).eq("id", id).select().maybeSingle();
+    if (error) throw new Error(error.message);
     return r ? mapNote(r) : undefined;
   }
 
   async deleteNote(id: number): Promise<void> {
-    await this.sb.from("notes").delete().eq("id", id);
+    const { error } = await this.sb.from("notes").delete().eq("id", id);
+    if (error) throw new Error(error.message);
   }
 
   // ── App Config ──────────────────────────────────────────────────────

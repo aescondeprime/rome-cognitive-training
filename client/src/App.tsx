@@ -117,20 +117,38 @@ export default function App() {
 
                     {/* Strategic — Taskboard + Kronos Keep */}
                     <Route path="/strategic">
-                      <PlaceholderNode title="Strategic" symbol="♛" accent="hsl(var(--accent-h) 88% 60%)" description="Planning and execution intelligence. Taskboard and Kronos Keep are accessible below." />
+                      <PlaceholderNode
+                        title="Strategic"
+                        symbol="♛"
+                        accent="hsl(var(--accent-h) 88% 60%)"
+                        description="Planning and execution intelligence. Taskboard and Kronos Keep are accessible below."
+                        subRoutes={[
+                          { label: "Taskboard", path: "/taskboard" },
+                          { label: "Kronos Keep", path: "/kronos-keep" },
+                        ]}
+                      />
                     </Route>
                     <Route path="/taskboard"    component={Taskboard} />
                     <Route path="/kronos-keep"  component={KronosKeep} />
 
                     {/* Creative */}
                     <Route path="/creative">
-                      <PlaceholderNode title="Creative" symbol="✦" accent="hsl(270 60% 65%)" description="Divergent thinking and ideation. Open your Idea Workshop below." subRoute={{ label: "Idea Workshop", path: "/idea-workshop" }} />
+                      <PlaceholderNode title="Creative" symbol="✦" accent="hsl(270 60% 65%)" description="Divergent thinking and ideation. Open your Idea Workshop below." subRoutes={[{ label: "Idea Workshop", path: "/idea-workshop" }]} />
                     </Route>
                     <Route path="/idea-workshop" component={IdeaWorkshop} />
 
                     {/* Investigative */}
                     <Route path="/investigative">
-                      <PlaceholderNode title="Investigative" symbol="◉" accent="hsl(175 55% 48%)" description="Pattern recognition and deep inquiry. Open your Component Board below." subRoute={{ label: "Component Board", path: "/component-board" }} />
+                      <PlaceholderNode
+                        title="Investigative"
+                        symbol="◉"
+                        accent="hsl(175 55% 48%)"
+                        description="Pattern recognition and deep inquiry. Open your investigation tools below."
+                        subRoutes={[
+                          { label: "Component Board", path: "/component-board" },
+                          { label: "Research Lab", path: "/research-lab" },
+                        ]}
+                      />
                     </Route>
                     <Route path="/component-board" component={ComponentBoard} />
                     <Route path="/research-lab" component={ResearchLab} />

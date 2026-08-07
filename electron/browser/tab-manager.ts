@@ -195,6 +195,27 @@ export class TabManager {
       }
     });
     contents.on("before-input-event", (event, input) => {
+      const commandOrControl = process.platform === "darwin" ? input.meta : input.control;
+      if (input.type === "keyDown" && commandOrControl && !input.alt && !input.isAutoRepeat) {
+        if (input.key.toLowerCase() === "t" && !input.shift) {
+          event.preventDefault();
+          this.createTab(HOME_URL, tab.sessionKind, true);
+          return;
+        }
+        if (input.key.toLowerCase() === "w" && !input.shift) {
+          event.preventDefault();
+          this.close(tab.id);
+          return;
+        }
+      }
+      if (
+        input.type === "keyDown" && input.key === "Tab" && input.control &&
+        !input.alt && !input.meta && !input.isAutoRepeat
+      ) {
+        event.preventDefault();
+        this.cycleActive(input.shift ? -1 : 1);
+        return;
+      }
       if (
         input.type === "keyDown" &&
         input.key === "Tab" &&
@@ -252,6 +273,14 @@ export class TabManager {
     for (const tab of this.tabs.values()) tab.state.active = tab.id === id;
     this.attachActiveView();
     this.publish();
+  }
+
+  cycleActive(direction: -1 | 1): void {
+    const ids = Array.from(this.tabs.keys());
+    if (ids.length < 2) return;
+    const currentIndex = this.activeId ? ids.indexOf(this.activeId) : 0;
+    const nextIndex = (currentIndex + direction + ids.length) % ids.length;
+    this.activate(ids[nextIndex]);
   }
 
   close(id: string): void {

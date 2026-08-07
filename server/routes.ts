@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { z } from "zod";
 import crypto from "crypto";
 import { promisify } from "util";
+import { registerWorkspaceRoutes } from "./workspace-routes";
 
 const scryptAsync = promisify(crypto.scrypt);
 
@@ -111,6 +112,11 @@ async function getActiveUser(req?: Request) {
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
+
+  // The Vercel build serves the newer chamber/workspace APIs from api/index.ts.
+  // Electron runs this Express server instead, so register the same feature set
+  // here as well.
+  registerWorkspaceRoutes(app, getActiveUser);
 
   // Auth routes
   app.post("/api/auth/register", async (req, res) => {
@@ -397,6 +403,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/notes/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
+      const user = await getActiveUser(req);
+      const existing = await storage.getNote(id);
+      if (!existing || existing.userId !== user.id) return res.status(404).json({ message: "Note not found" });
       const { title, content, tags, pinned } = req.body;
       const patch: any = {};
       if (title !== undefined) patch.title = title;
@@ -410,7 +419,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.delete("/api/notes/:id", async (req, res) => {
-    try { await storage.deleteNote(parseInt(req.params.id)); res.json({ ok: true }); }
+    try {
+      const id = parseInt(req.params.id);
+      const user = await getActiveUser(req);
+      const existing = await storage.getNote(id);
+      if (!existing || existing.userId !== user.id) return res.status(404).json({ message: "Note not found" });
+      await storage.deleteNote(id);
+      res.json({ ok: true });
+    }
     catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
