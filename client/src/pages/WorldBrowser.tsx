@@ -563,27 +563,32 @@ function DesktopWorldBrowser() {
   const dim = "hsl(220 8% 40%)";
 
   return (
-    <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", background: bg, color: "hsl(210 10% 74%)", fontFamily: "DM Sans, sans-serif" }}>
+    <div style={{ position: "relative", width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", background: bg, color: "hsl(210 10% 74%)", fontFamily: "DM Sans, sans-serif" }}>
       <Corners />
 
       {/* Tab lattice */}
-      <div style={{ height: 38, flexShrink: 0, display: "flex", alignItems: "end", padding: "0 10px 0 12px", gap: 3, background: "hsl(222 17% 6%)", borderBottom: `1px solid ${border}` }}>
-        <div style={{ height: 37, width: 26, display: "grid", placeItems: "center", flexShrink: 0 }} title="Local Chromium">
-          <Globe size={13} color={ACC} />
+      <div className="rome-browser-lattice" style={{ height: 42, flexShrink: 0, display: "flex", alignItems: "end", padding: "0 10px 0 12px", gap: 4, background: "hsl(222 18% 5.5%)", borderBottom: `1px solid ${border}`, position: "relative", isolation: "isolate" }}>
+        <div style={{ height: 41, width: 34, display: "grid", placeItems: "center", flexShrink: 0, position: "relative" }} title="Local Chromium constellation">
+          <span className="rome-browser-lattice-node" />
+          <Globe size={13} color={ACC} style={{ position: "relative", zIndex: 1 }} />
         </div>
-        <div className="rome-browser-tab-strip" style={{ display: "flex", flex: 1, minWidth: 0, gap: 3, overflowX: "auto", overflowY: "hidden" }}>
+        <div className="rome-browser-tab-strip" style={{ display: "flex", flex: 1, minWidth: 0, gap: 4, overflowX: "auto", overflowY: "hidden", position: "relative", zIndex: 1 }}>
           {tabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => run(bridge.activateTab(tab.id))}
+              data-active={tab.active ? "true" : "false"}
+              className="rome-browser-tab"
               style={{
-                height: 32, minWidth: 120, maxWidth: 210, flex: "0 1 190px",
-                border: `1px solid ${tab.active ? "hsl(43 50% 25%)" : border}`,
-                borderBottom: tab.active ? `1px solid ${surface}` : undefined,
-                background: tab.active ? surface : "hsl(222 15% 6.8%)",
+                height: 33, minWidth: 120, maxWidth: 210, flex: "0 1 190px",
+                border: `1px solid ${tab.active ? "hsl(43 45% 25%)" : "hsl(215 14% 13%)"}`,
+                borderTopColor: tab.active ? "hsl(43 62% 42%)" : "hsl(215 14% 15%)",
+                borderBottom: tab.active ? `1px solid ${surface}` : `1px solid ${border}`,
+                background: tab.active ? "linear-gradient(180deg, hsl(43 30% 10% / .72), hsl(222 15% 8%))" : "hsl(222 15% 6.5% / .92)",
                 color: tab.active ? "hsl(210 10% 76%)" : dim,
-                borderRadius: "5px 5px 0 0", padding: "0 7px", display: "flex",
+                borderRadius: "4px 4px 0 0", padding: "0 8px", display: "flex",
                 alignItems: "center", gap: 7, cursor: "pointer", minInlineSize: 0,
+                boxShadow: tab.active ? "inset 0 1px hsl(43 70% 55% / .08), 0 -5px 18px hsl(43 70% 45% / .035)" : "none",
               }}
               title={tab.title}
             >
@@ -606,9 +611,10 @@ function DesktopWorldBrowser() {
         <button
           title="New tab (⌘/Ctrl+T)"
           onClick={() => run(bridge.createTab())}
-          style={{ ...iconButton, width: 62, gap: 4, display: "flex", font: "8px DM Mono, monospace", letterSpacing: "0.08em" }}
-        ><Plus size={13} /> NEW</button>
-        <button title="New incognito tab" onClick={() => run(bridge.createTab(undefined, "incognito"))} style={iconButton}><Shield size={12} /></button>
+          className="rome-browser-new-tab"
+          style={{ ...iconButton, width: 62, height: 33, marginBottom: 0, gap: 5, display: "flex", borderColor: "hsl(43 35% 18%)", color: "hsl(43 48% 55%)", font: "8px DM Mono, monospace", letterSpacing: "0.11em", position: "relative", zIndex: 1 }}
+        ><Plus size={12} /> NEW</button>
+        <button title="New incognito tab" onClick={() => run(bridge.createTab(undefined, "incognito"))} style={{ ...iconButton, height: 33, marginBottom: 0, position: "relative", zIndex: 1 }}><Shield size={12} /></button>
       </div>
 
       {/* Navigation console */}
@@ -699,8 +705,21 @@ function DesktopWorldBrowser() {
       </div>
 
       <style>{`
+        .rome-browser-lattice {
+          background-image:
+            radial-gradient(circle at 18px 18px, hsl(43 70% 58% / .14) 0 1px, transparent 1.5px),
+            linear-gradient(112deg, transparent 0 13%, hsl(191 50% 45% / .025) 13.1% 13.2%, transparent 13.3% 100%);
+          background-size: 88px 42px, 100% 100%;
+        }
+        .rome-browser-lattice-node {
+          position: absolute; width: 4px; height: 4px; border-radius: 50%;
+          background: hsl(43 72% 57% / .75); box-shadow: 0 0 8px hsl(43 72% 55% / .3);
+        }
         .rome-browser-tab-strip { scrollbar-width: none; }
         .rome-browser-tab-strip::-webkit-scrollbar { display: none; }
+        .rome-browser-tab, .rome-browser-new-tab { transition: border-color 140ms ease, background 140ms ease, color 140ms ease, box-shadow 140ms ease; }
+        .rome-browser-tab:hover:not([data-active="true"]) { border-color: hsl(43 24% 22%) !important; color: hsl(210 8% 58%) !important; background: hsl(222 14% 8%) !important; }
+        .rome-browser-new-tab:hover { border-color: hsl(43 48% 30%) !important; background: hsl(43 35% 10%) !important; color: ${ACC} !important; }
         @keyframes romeBrowserSpin { to { transform: rotate(360deg); } }
         @keyframes romeBrowserProgress { from { transform: translateX(-110%); } to { transform: translateX(330%); } }
         button:disabled { cursor: default !important; }
