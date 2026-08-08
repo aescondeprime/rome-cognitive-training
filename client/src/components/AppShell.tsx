@@ -40,6 +40,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const { data: activeProfile } = useQuery<any>({ queryKey: ["/api/active-profile"] });
 
   const title = getTitle(location);
+  const desktopWorld = location === "/world" && Boolean(window.romeDesktop?.isDesktop);
 
   return (
     <div className="flex flex-col h-full">
@@ -107,8 +108,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </header>
 
       {/* ── Main content ───────────────────────────────────────────── */}
-      <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-        <div className="min-h-full p-8">
+      <main className={cn("flex-1 min-h-0 overflow-y-auto overflow-x-hidden", desktopWorld && "overflow-hidden")}>
+        <div className={cn("min-h-full p-8", desktopWorld && "h-full min-h-0 p-0")}>
           {children}
         </div>
       </main>
