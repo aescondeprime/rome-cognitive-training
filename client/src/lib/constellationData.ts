@@ -156,6 +156,24 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     connections: [],
   },
 
+  // ── Financial — funding dashboard, standalone bottom-left
+  {
+    id: "financial",
+    label: "Financial",
+    symbol: "◇",
+    lucideIcon: "Landmark",
+    accent: "hsl(155 58% 52%)",
+    x: 25, y: 87,
+    size: 15,
+    depth: 1.0,
+    href: "/funding",
+    tagline: "Cash projection, accountability, and decision simulation",
+    subnodes: [
+      { id: "fn-dashboard", label: "Funding Dashboard", icon: "◇", href: "/funding", description: "Financial health, daily spending, timeline, and projections" },
+    ],
+    connections: ["strategic"],
+  },
+
 ];
 
 // Build a de-duplicated list of connection pairs for SVG line rendering
