@@ -212,6 +212,18 @@ function FundingShape({ color, s }: { color: string; s: number }) {
   );
 }
 
+function AcademiaShape({ color, s }: { color: string; s: number }) {
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 42" fill="none" x={-s/2} y={-s/2}>
+      <path d="M3 15.5 24 5l21 10.5L24 26 3 15.5Z" stroke={color} strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M12 20v10c6.5 5.8 17.5 5.8 24 0V20" stroke={color} strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M44.5 16v13" stroke={color} strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="44.5" cy="31.5" r="2.2" stroke={color} strokeWidth="1.2" />
+      <path d="M17 24.5c4.5 2.2 9.5 2.2 14 0" stroke={color} strokeWidth="1" opacity=".65" />
+    </svg>
+  );
+}
+
 function SparklesShape({ color, s }: { color: string; s: number }) {
   return (
     <svg width={s} height={s} viewBox="0 0 24 24" fill="none" x={-s/2} y={-s/2}>
@@ -314,6 +326,7 @@ export default memo(function ConstellationNode({
         {node.id === "creative"      && <SparklesShape color={iconColor} s={s} />}
         {node.id === "world"          && <GlobeShape    color={iconColor} s={s} />}
         {node.id === "financial"      && <FundingShape  color={iconColor} s={s} />}
+        {node.id === "academia"       && <AcademiaShape color={iconColor} s={s} />}
       </g>
 
       {/* Label — fades in on hover/select */}

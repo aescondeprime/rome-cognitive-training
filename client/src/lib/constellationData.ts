@@ -41,6 +41,24 @@ export interface ConstellationNode {
 // Alchemy is standalone
 
 export const CONSTELLATION_NODES: ConstellationNode[] = [
+  // ── Academia — source-grounded study and knowledge creation
+  {
+    id: "academia",
+    label: "Academia",
+    symbol: "⌂",
+    lucideIcon: "GraduationCap",
+    accent: "hsl(190 72% 60%)",
+    x: 49, y: 12,
+    size: 17,
+    depth: 0.95,
+    href: "/academia",
+    tagline: "Source-grounded notes, study tools, and knowledge synthesis",
+    subnodes: [
+      { id: "ac-notebook", label: "Knowledge Forge", icon: "⌂", href: "/academia", description: "PDF sources, notes, grounded inquiry, and Studio artifacts" },
+    ],
+    connections: ["philosophy", "athena"],
+  },
+
   // ── Philosophy Chambers — left, mid-upper
   {
     id: "philosophy",
