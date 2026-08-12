@@ -1,13 +1,14 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Feather, Plus, Search, Trash2, Pin, PinOff, Tag, X,
+  Feather, Plus, Trash2, Pin, PinOff, X,
   Bold, Italic, List, ListOrdered, Quote, Code, Heading1, Heading2,
-  Hash, Clock, FileText, Loader2, Zap, ChevronLeft,
+  Hash, Clock, Loader2, Zap, ChevronLeft,
 } from "lucide-react";
+import { ConstellationSidebar, type ConstellationNavNode } from "@/components/ConstellationNavigator";
 
 interface Note {
   id: number;
@@ -72,13 +73,13 @@ Start writing below. Markdown is supported.
 
 export default function PhilosophyChambers() {
   const [selectedId, setSelectedId]     = useState<number | null>(null);
-  const [search, setSearch]             = useState("");
   const [tagFilter, setTagFilter]       = useState<string | null>(null);
   const [previewMode, setPreviewMode]   = useState(false);
   const [newTagInput, setNewTagInput]   = useState("");
   const [showTagInput, setShowTagInput] = useState(false);
   // Mobile: "list" | "editor"
   const [mobileView, setMobileView]     = useState<"list" | "editor">("list");
+  const [graphCollapsed, setGraphCollapsed] = useState(false);
 
   const [draftTitle,   setDraftTitle]   = useState("");
   const [draftContent, setDraftContent] = useState("");
@@ -142,17 +143,57 @@ export default function PhilosophyChambers() {
 
   useEffect(() => { scheduleSave(); }, [draftTitle, draftContent, draftTags]);
 
-  const filtered = notes.filter(n => {
-    const matchSearch = search === "" ||
-      n.title.toLowerCase().includes(search.toLowerCase()) ||
-      n.content.toLowerCase().includes(search.toLowerCase());
-    const matchTag = !tagFilter || parseTags(n.tags).includes(tagFilter);
-    return matchSearch && matchTag;
-  });
-
-  const pinned   = filtered.filter(n => n.pinned);
-  const unpinned = filtered.filter(n => !n.pinned);
   const allTags  = Array.from(new Set(notes.flatMap(n => parseTags(n.tags))));
+  const philosophyHubId = "philosophy:root";
+  const graphNotes = useMemo(
+    () => tagFilter ? notes.filter(note => parseTags(note.tags).includes(tagFilter)) : notes,
+    [notes, tagFilter],
+  );
+  const graphTagIds = useMemo(
+    () => new Set(graphNotes.flatMap(note => parseTags(note.tags))),
+    [graphNotes],
+  );
+  const graphNodes: ConstellationNavNode[] = useMemo(() => [
+      {
+        id: philosophyHubId,
+        label: "Philosophy Core",
+        group: "archive",
+        color: "hsl(43 78% 58%)",
+        kind: "hub",
+        weight: 9,
+        subtitle: "Reflection archive",
+      },
+      ...Array.from(graphTagIds).map(tag => ({
+        id: `tag:${tag}`,
+        label: `#${tag}`,
+        group: "tags",
+        color: "hsl(274 58% 66%)",
+        kind: "tag" as const,
+        weight: Math.max(2, graphNotes.filter(note => parseTags(note.tags).includes(tag)).length),
+        subtitle: "Concept cluster",
+      })),
+      ...graphNotes.map(note => ({
+        id: `note:${note.id}`,
+        label: note.title || "Untitled",
+        group: note.pinned ? "pinned" : "archive",
+        color: note.pinned ? "hsl(43 82% 62%)" : "hsl(194 72% 63%)",
+        kind: "item" as const,
+        weight: Math.min(8, 1 + Math.sqrt(Math.max(1, note.content.trim().split(/\s+/).length)) / 3 + (note.pinned ? 2 : 0)),
+        subtitle: `${note.pinned ? "Pinned · " : ""}${formatDate(note.updatedAt)}`,
+      })),
+    ], [graphNotes, graphTagIds]);
+  const graphLinks = useMemo(() => [
+      ...Array.from(graphTagIds).map(tag => ({ source: philosophyHubId, target: `tag:${tag}` })),
+      ...graphNotes.flatMap(note => {
+        const tags = parseTags(note.tags).filter(tag => graphTagIds.has(tag));
+        return tags.length > 0
+          ? tags.map(tag => ({ source: `tag:${tag}`, target: `note:${note.id}` }))
+          : [{ source: philosophyHubId, target: `note:${note.id}` }];
+      }),
+      ...graphNotes.flatMap(note => graphNotes
+        .filter(target => target.id !== note.id && target.title.trim() && note.content.toLowerCase().includes(`[[${target.title.toLowerCase()}]]`))
+        .map(target => ({ source: `note:${note.id}`, target: `note:${target.id}` }))),
+    ], [graphNotes, graphTagIds]);
 
   function insertMd(wrap: string, block = false) {
     const ta = textareaRef.current;
@@ -209,111 +250,84 @@ export default function PhilosophyChambers() {
   ];
 
   // ══════════════════════════════════════════════════════════════════════
-  // NOTE LIST PANEL
+  // CONSTELLATION NAVIGATION PANEL
   // ══════════════════════════════════════════════════════════════════════
   const NoteListPanel = (
     <div
       className={cn(
-        // Desktop: always visible fixed-width column
-        // Mobile: full-width, toggled by mobileView
-        "flex flex-col border-r",
-        "md:flex md:w-[260px] md:min-w-[260px]",
-        mobileView === "list" ? "flex w-full" : "hidden md:flex",
+        "h-full shrink-0",
+        mobileView === "list" ? "flex w-full md:w-auto" : "hidden md:flex",
       )}
-      style={{
-        borderColor: "hsl(var(--accent-h) 25% 14% / 0.8)",
-        background:  "hsl(222 18% 5%)",
-      }}
     >
-      {/* Header */}
-      <div className="px-4 pt-6 pb-3 border-b shrink-0" style={{ borderColor: "hsl(var(--accent-h) 25% 14% / 0.5)" }}>
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <Feather className="w-4 h-4 text-gold-400" />
-            <h1 className="text-sm font-roman font-bold text-gold-400 tracking-widest uppercase">Philosophy</h1>
-          </div>
+      <ConstellationSidebar
+        title="Philosophy"
+        accent="hsl(43 78% 58%)"
+        collapsed={graphCollapsed}
+        onCollapsedChange={setGraphCollapsed}
+        sidebarClassName={graphCollapsed
+          ? "!h-full !w-10 !min-w-10"
+          : "!h-full !w-full !min-w-0 md:!w-[300px] md:!min-w-[300px]"}
+        nodes={graphNodes}
+        links={graphLinks}
+        groups={[
+          { id: "archive", label: "Notes", color: "hsl(194 72% 63%)" },
+          { id: "pinned", label: "Pinned", color: "hsl(43 82% 62%)" },
+          { id: "tags", label: "Tags", color: "hsl(274 58% 66%)" },
+        ]}
+        activeId={selectedId ? `note:${selectedId}` : philosophyHubId}
+        onSelect={id => {
+          if (id.startsWith("note:")) openNote(Number(id.slice(5)));
+          if (id.startsWith("tag:")) setTagFilter(id.slice(4));
+          if (id === philosophyHubId) setTagFilter(null);
+        }}
+        emptyLabel="No philosophy notes yet"
+        headerActions={(
           <button
             onClick={() => createNote.mutate()}
             disabled={createNote.isPending}
-            className="w-8 h-8 rounded-md flex items-center justify-center text-muted-foreground hover:text-gold-400 hover:bg-gold-500/10 transition-all disabled:opacity-50"
+            className="rounded p-1 text-muted-foreground transition-colors hover:text-gold-400 disabled:opacity-50"
+            title="New note node"
+          >
+            {createNote.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+          </button>
+        )}
+        collapsedAction={(
+          <button
+            onClick={() => createNote.mutate()}
+            disabled={createNote.isPending}
+            className="flex w-full justify-center rounded p-2 text-gold-500 hover:bg-gold-500/10 hover:text-gold-300 disabled:opacity-50"
             title="New note"
           >
-            {createNote.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-4 h-4" />}
+            {createNote.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
           </button>
-        </div>
-
-        <div className="rome-meander opacity-40 mb-2" style={{ marginLeft: "-16px", marginRight: "-16px", width: "calc(100% + 32px)" }} />
-
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search…"
-            className="w-full pl-8 pr-3 py-2 text-sm rounded-lg bg-cave-800 border border-cave-700 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-gold-500/40 transition-colors"
-          />
-        </div>
-      </div>
-
-      {/* Tag filters */}
-      {allTags.length > 0 && (
-        <div className="px-3 py-2 border-b flex flex-wrap gap-1.5" style={{ borderColor: "hsl(var(--accent-h) 20% 12% / 0.6)" }}>
-          <button
-            onClick={() => setTagFilter(null)}
-            className={cn("rome-tag transition-all text-xs py-1 px-2", !tagFilter && "bg-gold-500/15 border-gold-400/40 text-gold-300")}
-          >
-            All
-          </button>
-          {allTags.map(t => (
-            <button
-              key={t}
-              onClick={() => setTagFilter(tagFilter === t ? null : t)}
-              className={cn("rome-tag transition-all text-xs py-1 px-2", tagFilter === t && "bg-gold-500/15 border-gold-400/40 text-gold-300")}
-            >
-              # {t}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Notes list */}
-      <div className="flex-1 overflow-y-auto">
-        {notes.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground px-6">
-            <FileText className="w-8 h-8 opacity-30" />
-            <p className="text-sm text-center leading-relaxed">No notes yet.<br/>Create your first scroll.</p>
+        )}
+        footer={(
+          <div className="space-y-1.5">
+            {allTags.length > 0 && (
+              <select
+                value={tagFilter ?? ""}
+                onChange={e => setTagFilter(e.target.value || null)}
+                className="h-7 w-full rounded-sm border border-[hsl(220_15%_15%)] bg-[hsl(220_15%_7%)] px-2 font-mono text-[8px] text-muted-foreground outline-none"
+                aria-label="Filter philosophy graph by tag"
+              >
+                <option value="">All concepts</option>
+                {allTags.map(tag => <option key={tag} value={tag}>#{tag}</option>)}
+              </select>
+            )}
             <button
               onClick={() => createNote.mutate()}
               disabled={createNote.isPending}
-              className="text-sm text-gold-400 hover:text-gold-300 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+              className="flex w-full items-center justify-center gap-1.5 rounded-sm border border-dashed border-gold-500/30 px-3 py-2 font-mono text-[9px] uppercase tracking-[0.12em] text-gold-500 transition-all hover:bg-gold-500/8 hover:text-gold-300 disabled:opacity-50"
             >
-              {createNote.isPending
-                ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Creating…</>
-                : <><Plus className="w-3.5 h-3.5" /> New note</>}
+              {createNote.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+              New Note
             </button>
+            <p className="px-1 text-center font-mono text-[7px] leading-relaxed text-muted-foreground/30">
+              Link notes with [[Exact Note Title]]
+            </p>
           </div>
         )}
-
-        {pinned.length > 0 && (
-          <div>
-            <p className="px-4 pt-3 pb-1 text-[10px] font-roman uppercase tracking-widest text-muted-foreground/60">Pinned</p>
-            {pinned.map(n => (
-              <NoteRow key={n.id} note={n} selected={selectedId === n.id} onSelect={() => openNote(n.id)} />
-            ))}
-          </div>
-        )}
-        {unpinned.length > 0 && (
-          <div>
-            {pinned.length > 0 && (
-              <p className="px-4 pt-3 pb-1 text-[10px] font-roman uppercase tracking-widest text-muted-foreground/60">Notes</p>
-            )}
-            {unpinned.map(n => (
-              <NoteRow key={n.id} note={n} selected={selectedId === n.id} onSelect={() => openNote(n.id)} />
-            ))}
-          </div>
-        )}
-      </div>
+      />
     </div>
   );
 
@@ -515,38 +529,5 @@ export default function PhilosophyChambers() {
       {NoteListPanel}
       {EditorPanel}
     </div>
-  );
-}
-
-// ── Note row ──────────────────────────────────────────────────────────────
-function NoteRow({ note, selected, onSelect }: { note: Note; selected: boolean; onSelect: () => void }) {
-  const preview = note.content.replace(/[#*>`_\[\]]/g, "").trim().slice(0, 80);
-  return (
-    <button
-      onClick={onSelect}
-      className={cn(
-        "w-full text-left px-4 py-3.5 transition-all duration-150 border-b active:bg-gold-500/12",
-        selected ? "bg-gold-500/8 border-gold-500/15" : "hover:bg-cave-800/60 border-transparent",
-      )}
-      style={{ borderBottomColor: "hsl(var(--accent-h) 20% 12% / 0.4)" }}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <p
-          className={cn("text-sm font-medium truncate", selected ? "text-gold-300 font-roman" : "text-foreground/80")}
-          style={selected ? { fontFamily: "'Cinzel', serif", letterSpacing: "0.04em" } : {}}
-        >
-          {note.pinned && <Pin className="inline w-2.5 h-2.5 text-gold-500/60 mr-1 -mt-0.5" />}
-          {note.title || "Untitled"}
-        </p>
-        <span className="text-[10px] text-muted-foreground/40 shrink-0 mt-0.5 whitespace-nowrap">
-          {formatDate(note.updatedAt)}
-        </span>
-      </div>
-      {preview && (
-        <p className="text-xs text-muted-foreground/50 mt-1 line-clamp-2 leading-relaxed">
-          {preview}
-        </p>
-      )}
-    </button>
   );
 }
