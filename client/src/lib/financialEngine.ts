@@ -123,6 +123,18 @@ export interface ProjectionResult {
   debtPressureScore: number;
 }
 
+export interface MonthProjection {
+  month: string;
+  monthLabel: string;
+  openingBalance: number;
+  projectedMonthEnd: number;
+  remainingIncome: number;
+  committedOutflow: number;
+  minimumBalance: number;
+  dailyPoints: ProjectionPoint[];
+  events: FinancialEvent[];
+}
+
 export interface ScenarioAdjustments {
   additionalShifts: number;
   additionalIncome: number;
@@ -394,6 +406,69 @@ function scenarioEvents(
     name: "Extra debt payment", amount: -adjustments.extraDebtPayment, type: "scenario",
   });
   return output;
+}
+
+export function projectFinancialMonth(
+  state: FinancialState,
+  monthOffset: number,
+  options?: { today?: Date },
+): MonthProjection {
+  const today = startOfDay(options?.today ?? new Date());
+  const offset = Math.max(0, Math.floor(monthOffset));
+  const currentMonth = new Date(today.getFullYear(), today.getMonth(), 1, 12);
+  const selectedMonth = addMonths(currentMonth, offset);
+  const periodStart = offset === 0
+    ? today
+    : new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), 1, 12);
+  const periodEnd = endOfMonth(selectedMonth);
+  const events = buildEvents(state, today, periodEnd);
+  const openingBalance = state.currentBalance + events
+    .filter(event => parseDate(event.date) < periodStart)
+    .reduce((sum, event) => sum + event.amount, 0);
+  const monthEvents = events.filter(event => {
+    const date = parseDate(event.date);
+    return date >= periodStart && date <= periodEnd;
+  });
+  const remainingIncome = monthEvents
+    .filter(event => event.amount > 0)
+    .reduce((sum, event) => sum + event.amount, 0);
+  const committedOutflow = Math.abs(monthEvents
+    .filter(event => event.amount < 0)
+    .reduce((sum, event) => sum + event.amount, 0));
+
+  const dailyPoints: ProjectionPoint[] = [];
+  let runningBalance = openingBalance;
+  let cumulativeSpend = 0;
+  let minimumBalance = openingBalance;
+  for (let cursor = new Date(periodStart); cursor <= periodEnd; cursor = new Date(cursor.getTime() + DAY_MS)) {
+    const iso = toDateInput(cursor);
+    const dayEvents = monthEvents.filter(event => event.date === iso);
+    const inflow = dayEvents.filter(event => event.amount > 0).reduce((sum, event) => sum + event.amount, 0);
+    const outflow = Math.abs(dayEvents.filter(event => event.amount < 0).reduce((sum, event) => sum + event.amount, 0));
+    runningBalance += inflow - outflow;
+    cumulativeSpend += outflow;
+    minimumBalance = Math.min(minimumBalance, runningBalance);
+    dailyPoints.push({
+      date: iso,
+      label: cursor.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      balance: runningBalance,
+      inflow,
+      outflow,
+      cumulativeSpend,
+    });
+  }
+
+  return {
+    month: `${selectedMonth.getFullYear()}-${String(selectedMonth.getMonth() + 1).padStart(2, "0")}`,
+    monthLabel: selectedMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" }),
+    openingBalance,
+    projectedMonthEnd: runningBalance,
+    remainingIncome,
+    committedOutflow,
+    minimumBalance,
+    dailyPoints,
+    events: monthEvents,
+  };
 }
 
 export function projectFinancials(

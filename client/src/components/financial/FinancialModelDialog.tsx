@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { CalendarDays, CircleDollarSign, CreditCard, Plus, Trash2, TrendingUp, WalletCards } from "lucide-react";
+import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { CalendarDays, CircleDollarSign, CreditCard, GripHorizontal, Plus, Trash2, TrendingUp, WalletCards } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -81,6 +81,50 @@ function NativeSelect({ value, onChange, children }: { value: string; onChange: 
 }
 
 export default function FinancialModelDialog({ state, onChange, trigger }: Props) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
+
+  const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: position.x,
+      originY: position.y,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const drag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const active = dragRef.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    const rect = dialogRef.current?.getBoundingClientRect();
+    const width = rect?.width ?? 0;
+    const height = rect?.height ?? 0;
+    const margin = 12;
+    const minX = -window.innerWidth / 2 + width / 2 + margin;
+    const maxX = window.innerWidth / 2 - width / 2 - margin;
+    const minY = -window.innerHeight / 2 + height / 2 + margin;
+    const maxY = window.innerHeight / 2 - height / 2 - margin;
+    const nextX = active.originX + event.clientX - active.startX;
+    const nextY = active.originY + event.clientY - active.startY;
+    setPosition({
+      x: Math.max(minX, Math.min(maxX, nextX)),
+      y: Math.max(minY, Math.min(maxY, nextY)),
+    });
+  };
+
+  const stopDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
   const updatePaycheck = (id: string, patch: Partial<FinancialState["paychecks"][number]>) => {
     onChange({ ...state, paychecks: state.paychecks.map(item => item.id === id ? { ...item, ...patch } : item) });
   };
@@ -103,19 +147,38 @@ export default function FinancialModelDialog({ state, onChange, trigger }: Props
   const today = toDateInput(new Date());
 
   return (
-    <Dialog>
+    <Dialog
+      open={open}
+      onOpenChange={nextOpen => {
+        setOpen(nextOpen);
+        if (!nextOpen) setPosition({ x: 0, y: 0 });
+      }}
+    >
       <DialogTrigger asChild>
         {trigger ?? <Button variant="outline">Manage inputs</Button>}
       </DialogTrigger>
-      <DialogContent className="max-h-[88vh] max-w-5xl overflow-hidden border-white/10 bg-[hsl(222_18%_7%)] p-0">
-        <DialogHeader className="border-b border-white/[0.07] px-6 pb-4 pt-6">
-          <DialogTitle className="font-roman text-lg tracking-[0.08em]">Financial model</DialogTitle>
+      <DialogContent
+        ref={dialogRef}
+        className="flex h-[88vh] w-[calc(100vw-2rem)] max-w-5xl flex-col gap-0 overflow-hidden border-white/10 bg-[hsl(222_18%_7%)] p-0"
+        style={{ left: `calc(50% + ${position.x}px)`, top: `calc(50% + ${position.y}px)` }}
+      >
+        <DialogHeader
+          className="shrink-0 cursor-move touch-none select-none border-b border-white/[0.07] px-6 pb-4 pt-6"
+          onPointerDown={startDrag}
+          onPointerMove={drag}
+          onPointerUp={stopDrag}
+          onPointerCancel={stopDrag}
+        >
+          <DialogTitle className="flex items-center gap-3 font-roman text-lg tracking-[0.08em]">
+            Financial model
+            <GripHorizontal className="h-4 w-4 text-muted-foreground/45" aria-hidden="true" />
+          </DialogTitle>
           <DialogDescription>
             Update the numbers ROME uses to calculate cash projection and daily spending.
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="income" className="flex min-h-0 flex-1 flex-col">
+        <Tabs defaultValue="income" className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="px-6 pt-4">
             <TabsList className="grid h-auto w-full grid-cols-4 bg-black/20 p-1">
               <TabsTrigger value="income" className="text-[10px] uppercase tracking-wider">Income</TabsTrigger>
@@ -125,7 +188,7 @@ export default function FinancialModelDialog({ state, onChange, trigger }: Props
             </TabsList>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+          <div className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-6 pb-6">
             <TabsContent value="income" className="space-y-4 pt-3">
               <Section
                 icon={<TrendingUp className="h-4 w-4" />}
