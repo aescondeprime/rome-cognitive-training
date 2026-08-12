@@ -6,11 +6,12 @@
  * and renders the active board's content as children.
  */
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Plus, Trash2, ChevronLeft, PenLine, Check, Loader2, BookOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ConstellationSidebar, type ConstellationNavNode } from "@/components/ConstellationNavigator";
 
 export interface Board {
   id: number;
@@ -86,11 +87,110 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
   }, [editingId, editTitle, renameBoard]);
 
   const activeBoard = boards.find(b => b.id === activeBoardId) ?? null;
+  const graphEnabled = type === "idea_workshop" || type === "component_board";
+  const graphAccent = type === "idea_workshop" ? "hsl(192 100% 62%)" : "hsl(38 78% 58%)";
+  const graphHubId = `hub:${type}`;
+  const graphNodes: ConstellationNavNode[] = useMemo(() => [
+      {
+        id: graphHubId,
+        label: type === "idea_workshop" ? "Creative Core" : "Investigative Core",
+        group: type,
+        color: graphAccent,
+        kind: "hub",
+        weight: 7,
+        subtitle: `${label} constellation`,
+      },
+      ...boards.map(board => ({
+        id: `board:${board.id}`,
+        label: board.title,
+        group: type,
+        color: graphAccent,
+        kind: "item" as const,
+        subtitle: `Updated ${new Date(board.updated_at).toLocaleDateString()}`,
+        weight: activeBoardId === board.id ? 5 : Math.max(1, 4 - Math.floor((Date.now() - board.updated_at) / 86_400_000)),
+      })),
+    ], [activeBoardId, boards, graphAccent, graphHubId, label, type]);
+  const graphLinks = useMemo(
+    () => boards.map(board => ({ source: graphHubId, target: `board:${board.id}` })),
+    [boards, graphHubId],
+  );
 
   return (
     <div className="flex h-full min-h-[calc(100vh-120px)]" style={{ gap: 0 }}>
 
-      {/* ── Sidebar ───────────────────────────────────────────────────── */}
+      {/* ── Sidebar / node constellation ──────────────────────────────── */}
+      {graphEnabled ? (
+        <ConstellationSidebar
+          title={type === "idea_workshop" ? "Workshops" : "Case Boards"}
+          accent={graphAccent}
+          collapsed={collapsed}
+          onCollapsedChange={setCollapsed}
+          loading={isLoading}
+          nodes={graphNodes}
+          links={graphLinks}
+          activeId={activeBoardId ? `board:${activeBoardId}` : graphHubId}
+          onSelect={id => {
+            if (id.startsWith("board:")) setActiveBoardId(Number(id.slice(6)));
+          }}
+          emptyLabel={`No ${label.toLowerCase()}s yet`}
+          collapsedAction={(
+            <button
+              onClick={() => createBoard.mutate()}
+              disabled={createBoard.isPending}
+              className="flex w-full justify-center rounded p-2 text-gold-500 transition-colors hover:bg-[hsl(43_30%_8%)] hover:text-gold-300"
+              title={`New ${label}`}
+            >
+              {createBoard.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+            </button>
+          )}
+          footer={(
+            <div className="space-y-1.5">
+              {activeBoard && (
+                <div className="flex items-center gap-1 rounded-sm border border-[hsl(220_15%_14%)] bg-[hsl(220_15%_6%)] p-1">
+                  {editingId === activeBoard.id ? (
+                    <input
+                      autoFocus
+                      value={editTitle}
+                      onChange={e => setEditTitle(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") commitRename();
+                        if (e.key === "Escape") setEditingId(null);
+                      }}
+                      className="min-w-0 flex-1 bg-transparent px-1 font-mono text-[9px] text-gold-300 outline-none"
+                    />
+                  ) : (
+                    <span className="min-w-0 flex-1 truncate px-1 font-mono text-[8px] text-muted-foreground/60">{activeBoard.title}</span>
+                  )}
+                  <button
+                    onClick={() => editingId === activeBoard.id ? commitRename() : startRename(activeBoard)}
+                    className="rounded p-1 text-muted-foreground hover:text-gold-400"
+                    title="Rename selected node"
+                  >
+                    {editingId === activeBoard.id ? <Check className="h-3 w-3" /> : <PenLine className="h-3 w-3" />}
+                  </button>
+                  <button
+                    onClick={() => deleteBoard.mutate(activeBoard.id)}
+                    className="rounded p-1 text-muted-foreground hover:text-rose-400"
+                    title="Delete selected node"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
+              <button
+                onClick={() => createBoard.mutate()}
+                disabled={createBoard.isPending}
+                className="flex w-full items-center justify-center gap-1.5 rounded-sm border border-dashed px-3 py-2 font-mono text-[9px] uppercase tracking-[0.12em] text-gold-500 transition-all hover:border-gold-600 hover:bg-[hsl(43_30%_8%)] hover:text-gold-300"
+                style={{ borderColor: graphAccent, color: graphAccent }}
+              >
+                {createBoard.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                New {label}
+              </button>
+            </div>
+          )}
+        />
+      ) : (
       <div
         className={cn(
           "flex flex-col border-r border-border bg-[hsl(220_15%_5%)] transition-all duration-300 shrink-0",
@@ -208,6 +308,7 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
           </div>
         )}
       </div>
+      )}
 
       {/* ── Main content ──────────────────────────────────────────────── */}
       <div className="flex-1 overflow-auto">

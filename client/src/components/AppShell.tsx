@@ -11,44 +11,17 @@ import { clearToken } from "@/lib/auth";
 import { queryClient } from "@/lib/queryClient";
 import { apiRequest } from "@/lib/queryClient";
 
-// Map paths to page titles (used in top bar)
-const PAGE_TITLES: Record<string, string> = {
-  "/athena":              "Athena Trials",
-  "/athena/dual-n-back":  "Dual N-Back",
-  "/athena/cwm":          "Complex Working Memory",
-  "/athena/mental-math":  "Mental Math",
-  "/athena/corsi":        "Corsi Blocks",
-  "/athena/memory-span":  "Memory Span",
-  "/athena/pasat":        "PASAT",
-  "/philosophy":          "Philosophy Chambers",
-  "/strategic":           "Strategic",
-  "/creative":            "Creative",
-  "/investigative":       "Investigative",
-  "/alchemy":             "Alchemy Lab",
-  "/taskboard":           "Taskboard",
-  "/kronos-keep":         "Kronos Keep",
-  "/funding":             "Funding Dashboard",
-  "/academia":            "Academia",
-  "/settings":            "Settings",
-};
-
-function getTitle(path: string): string {
-  if (path.startsWith("/athena/")) return PAGE_TITLES[path] ?? "Athena Trials";
-  return PAGE_TITLES[path] ?? "ROME";
-}
-
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useHashLocation();
   const { data: activeProfile } = useQuery<any>({ queryKey: ["/api/active-profile"] });
 
-  const title = getTitle(location);
   const desktopWorld = location === "/world" && Boolean(window.romeDesktop?.isDesktop);
 
   return (
     <div className="flex flex-col h-full">
-      {/* ── Top bar ────────────────────────────────────────────────── */}
+      {/* ── Compact utility rail ───────────────────────────────────── */}
       <header
-        className="shrink-0 flex items-center justify-between px-6 py-3"
+        className="shrink-0 flex items-center justify-end px-6 py-1.5"
         style={{
           background: "hsl(222 20% 5% / 0.7)",
           backdropFilter: "blur(16px)",
@@ -56,30 +29,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           zIndex: 10,
         }}
       >
-        {/* Left — current page label */}
-        <div className="flex items-center gap-3">
-          {/* ROME micro-logo */}
-          <svg width="20" height="20" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-            <circle cx="14" cy="14" r="12" stroke="hsl(var(--accent-h),88%,55%)" strokeWidth="1.2" fill="none"/>
-            <path d="M7 14 C5 11 6 8 9 8 C8 11 8 13 10 14"  stroke="hsl(var(--accent-h),78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
-            <path d="M7 14 C5 16 6 19 9 19 C8 16 8 15 10 14" stroke="hsl(var(--accent-h),78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
-            <path d="M21 14 C23 11 22 8 19 8 C20 11 20 13 18 14"  stroke="hsl(var(--accent-h),78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
-            <path d="M21 14 C23 16 22 19 19 19 C20 16 20 15 18 14" stroke="hsl(var(--accent-h),78%,55%)" strokeWidth="1" fill="none" strokeLinecap="round"/>
-            <rect x="13" y="9" width="2" height="10" rx="1" fill="hsl(var(--accent-h),88%,55%)" opacity="0.7"/>
-          </svg>
-          <h1
-            className="text-xs font-semibold tracking-widest uppercase"
-            style={{
-              fontFamily: "'Cinzel', serif",
-              color: "hsl(var(--accent-h) 70% 58%)",
-              letterSpacing: "0.12em",
-            }}
-          >
-            {title}
-          </h1>
-        </div>
-
-        {/* Right — profile chip + settings */}
+        {/* Profile and account controls remain globally accessible. */}
         <div className="flex items-center gap-3">
           {activeProfile && (
             <span

@@ -20,10 +20,11 @@ import { apiRequest } from "@/lib/queryClient";
 import {
   Plus, Trash2, PenLine, ChevronLeft, Check, Loader2,
   BookOpen, FlaskConical, ExternalLink, X, ChevronDown,
-  ChevronRight, Link2, FolderOpen, Folder, FolderPlus,
+  ChevronRight, Link2, FolderPlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
+import { ConstellationSidebar, type ConstellationNavNode } from "@/components/ConstellationNavigator";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type BoardType = "science_board" | "experiment_board";
@@ -172,14 +173,12 @@ interface SidebarProps {
 function Sidebar({ boards, isLoading, activeBoardId, onSelect, onNew, creating }: SidebarProps) {
   const [collapsed, setCollapsed]   = useState(false);
   const [folders,   setFolders]     = useState<LabFolder[]>(loadFolders);
+  const [selectedGraphId, setSelectedGraphId] = useState("lab:root");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameVal,  setRenameVal]  = useState("");
   // board rename
   const [boardRenameId, setBoardRenameId] = useState<number | null>(null);
   const [boardRenameVal, setBoardRenameVal] = useState("");
-  // which folder's "add" menu is open
-  const [addMenuFolderId, setAddMenuFolderId] = useState<string | null>(null);
-
   const qc = useQueryClient();
 
   const renameBoard = useMutation({
@@ -197,6 +196,7 @@ function Sidebar({ boards, isLoading, activeBoardId, onSelect, onNew, creating }
     const folder: LabFolder = { id: genId(), name: "New Folder", boardIds: [], open: true };
     const next = [...folders, folder];
     persist(next);
+    setSelectedGraphId(`folder:${folder.id}`);
     setRenamingId(folder.id);
     setRenameVal(folder.name);
   };
@@ -210,356 +210,291 @@ function Sidebar({ boards, isLoading, activeBoardId, onSelect, onNew, creating }
     setRenamingId(null);
   };
 
-  const toggleOpen = (id: string) => {
-    persist(folders.map(f => f.id === id ? { ...f, open: !f.open } : f));
-  };
-
   const removeBoardFromFolder = (folderId: string, boardId: number) => {
     persist(folders.map(f => f.id === folderId ? { ...f, boardIds: f.boardIds.filter(b => b !== boardId) } : f));
   };
 
-  // Boards not in any folder
-  const boardsInFolders = new Set(folders.flatMap(f => f.boardIds));
-  const unfoldered = boards.filter(b => !boardsInFolders.has(b.id));
-
   const handleNewBoard = (type: BoardType, folderId: string) => {
-    setAddMenuFolderId(null);
     onNew(type, folderId);
   };
 
-  const BoardRow = ({ board, folderId }: { board: Board; folderId: string }) => {
-    const isScience = board.type === "science_board";
-    const accent = isScience ? ACCENT_SCIENCE : ACCENT_EXPERIMENT;
-    const isActive = activeBoardId === board.id;
+  useEffect(() => {
+    if (activeBoardId !== null) setSelectedGraphId(`board:${activeBoardId}`);
+  }, [activeBoardId]);
 
-    const commitBoardRename = () => {
-      if (boardRenameId && boardRenameVal.trim()) renameBoard.mutate({ id: boardRenameId, title: boardRenameVal.trim() });
-      setBoardRenameId(null);
+  useEffect(() => {
+    const syncFolders = (event: StorageEvent) => {
+      if (event.key === FOLDERS_KEY) setFolders(loadFolders());
     };
+    window.addEventListener("storage", syncFolders);
+    return () => window.removeEventListener("storage", syncFolders);
+  }, []);
 
-    return (
-      <div
-        className={cn(
-          "group flex items-center gap-1.5 pl-5 pr-2 py-1.5 rounded-lg cursor-pointer transition-colors",
-          isActive ? "text-foreground" : "hover:bg-[hsl(220_15%_8%)] text-muted-foreground hover:text-foreground"
-        )}
-        style={{ background: isActive ? `${accent}18` : undefined }}
-        onClick={() => onSelect(board.id)}
-      >
-        {isScience
-          ? <BookOpen className="w-3 h-3 shrink-0" style={{ color: isActive ? accent : undefined }} />
-          : <FlaskConical className="w-3 h-3 shrink-0" style={{ color: isActive ? accent : undefined }} />
-        }
-        {boardRenameId === board.id ? (
-          <input
-            autoFocus
-            value={boardRenameVal}
-            onChange={e => setBoardRenameVal(e.target.value)}
-            onBlur={commitBoardRename}
-            onKeyDown={e => { if (e.key === "Enter") commitBoardRename(); if (e.key === "Escape") setBoardRenameId(null); }}
-            onClick={e => e.stopPropagation()}
-            className="flex-1 bg-transparent outline-none text-xs min-w-0"
-            style={{ color: accent }}
-          />
-        ) : (
-          <span className="flex-1 text-xs truncate">{board.title}</span>
-        )}
-        <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-          <button
-            onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); setBoardRenameId(board.id); setBoardRenameVal(board.title); }}
-            className="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <PenLine className="w-2.5 h-2.5" />
-          </button>
-          <button
-            onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); removeBoardFromFolder(folderId, board.id); }}
-            className="p-0.5 rounded text-muted-foreground hover:text-amber-400 transition-colors"
-            title="Remove from folder"
-          >
-            <FolderOpen className="w-2.5 h-2.5" />
-          </button>
-          <button
-            onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); deleteBoard.mutate(board.id); }}
-            className="p-0.5 rounded text-muted-foreground hover:text-rose-400 transition-colors"
-          >
-            <Trash2 className="w-2.5 h-2.5" />
-          </button>
-        </div>
-      </div>
-    );
+  const hubId = "lab:root";
+  const boardsInFoldersNow = useMemo(
+    () => new Set(folders.flatMap(folder => folder.boardIds)),
+    [folders],
+  );
+  const unfiledBoards = useMemo(
+    () => boards.filter(board => !boardsInFoldersNow.has(board.id)),
+    [boards, boardsInFoldersNow],
+  );
+  const graphNodes: ConstellationNavNode[] = useMemo(() => [
+      {
+        id: hubId,
+        label: "Research Core",
+        group: "folders",
+        color: "hsl(190 72% 58%)",
+        kind: "hub",
+        weight: 8,
+        subtitle: "Investigative knowledge map",
+      },
+      ...folders.map(folder => ({
+        id: `folder:${folder.id}`,
+        label: folder.name,
+        group: "folders",
+        color: "hsl(190 52% 56%)",
+        kind: "folder" as const,
+        weight: Math.max(2, folder.boardIds.length + 1),
+        subtitle: `${folder.boardIds.length} linked boards`,
+      })),
+      ...boards.map(board => ({
+        id: `board:${board.id}`,
+        label: board.title,
+        group: board.type === "science_board" ? "science" : "experiments",
+        color: board.type === "science_board" ? ACCENT_SCIENCE : ACCENT_EXPERIMENT,
+        kind: "item" as const,
+        weight: activeBoardId === board.id ? 5 : 2,
+        subtitle: board.type === "science_board" ? "Science board" : "Experiment board",
+      })),
+    ], [activeBoardId, boards, folders]);
+  const graphLinks = useMemo(() => [
+      ...folders.map(folder => ({ source: hubId, target: `folder:${folder.id}` })),
+      ...folders.flatMap(folder => folder.boardIds
+        .filter(boardId => boards.some(board => board.id === boardId))
+        .map(boardId => ({ source: `folder:${folder.id}`, target: `board:${boardId}` }))),
+      ...unfiledBoards.map(board => ({ source: hubId, target: `board:${board.id}` })),
+    ], [boards, folders, unfiledBoards]);
+
+  const selectedFolder = selectedGraphId.startsWith("folder:")
+    ? folders.find(folder => folder.id === selectedGraphId.slice(7))
+    : undefined;
+  const selectedBoard = selectedGraphId.startsWith("board:")
+    ? boards.find(board => board.id === Number(selectedGraphId.slice(6)))
+    : undefined;
+  const boardFolder = selectedBoard
+    ? folders.find(folder => folder.boardIds.includes(selectedBoard.id))
+    : undefined;
+
+  const moveBoard = (boardId: number, folderId: string) => {
+    persist(folders.map(folder => {
+      const without = folder.boardIds.filter(id => id !== boardId);
+      return folder.id === folderId ? { ...folder, boardIds: [...without, boardId] } : { ...folder, boardIds: without };
+    }));
   };
 
-  const UnfolderedBoardRow = ({ board }: { board: Board }) => {
-    const isScience = board.type === "science_board";
-    const accent = isScience ? ACCENT_SCIENCE : ACCENT_EXPERIMENT;
-    const isActive = activeBoardId === board.id;
-
-    const commitBoardRename = () => {
-      if (boardRenameId && boardRenameVal.trim()) renameBoard.mutate({ id: boardRenameId, title: boardRenameVal.trim() });
-      setBoardRenameId(null);
-    };
-
-    return (
-      <div
-        className={cn(
-          "group flex items-center gap-1.5 px-2 py-1.5 rounded-lg cursor-pointer transition-colors",
-          isActive ? "text-foreground" : "hover:bg-[hsl(220_15%_8%)] text-muted-foreground hover:text-foreground"
-        )}
-        style={{ background: isActive ? `${accent}18` : undefined }}
-        onClick={() => onSelect(board.id)}
-      >
-        {isScience
-          ? <BookOpen className="w-3 h-3 shrink-0" style={{ color: isActive ? accent : undefined }} />
-          : <FlaskConical className="w-3 h-3 shrink-0" style={{ color: isActive ? accent : undefined }} />
-        }
-        {boardRenameId === board.id ? (
-          <input
-            autoFocus
-            value={boardRenameVal}
-            onChange={e => setBoardRenameVal(e.target.value)}
-            onBlur={commitBoardRename}
-            onKeyDown={e => { if (e.key === "Enter") commitBoardRename(); if (e.key === "Escape") setBoardRenameId(null); }}
-            onClick={e => e.stopPropagation()}
-            className="flex-1 bg-transparent outline-none text-xs min-w-0"
-            style={{ color: accent }}
-          />
-        ) : (
-          <span className="flex-1 text-xs truncate">{board.title}</span>
-        )}
-        <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-          <button
-            onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); setBoardRenameId(board.id); setBoardRenameVal(board.title); }}
-            className="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <PenLine className="w-2.5 h-2.5" />
-          </button>
-          <button
-            onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); deleteBoard.mutate(board.id); }}
-            className="p-0.5 rounded text-muted-foreground hover:text-rose-400 transition-colors"
-          >
-            <Trash2 className="w-2.5 h-2.5" />
-          </button>
-        </div>
-      </div>
-    );
+  const commitSelectedBoardRename = () => {
+    if (boardRenameId && boardRenameVal.trim()) {
+      renameBoard.mutate({ id: boardRenameId, title: boardRenameVal.trim() });
+    }
+    setBoardRenameId(null);
   };
-
-  if (collapsed) {
-    return (
-      <div className="flex flex-col w-10 border-r border-border bg-[hsl(220_15%_5%)] shrink-0">
-        <div className="flex justify-center py-3 border-b border-border">
-          <button onClick={() => setCollapsed(false)} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors">
-            <ChevronLeft className="w-3.5 h-3.5 rotate-180" />
-          </button>
-        </div>
-        <div className="p-1 space-y-1 mt-1">
-          <button onClick={addFolder} className="w-full flex justify-center p-2 rounded hover:bg-[hsl(220_15%_8%)] text-muted-foreground hover:text-foreground transition-colors" title="New Folder">
-            <FolderPlus className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div className="flex flex-col w-64 border-r border-border bg-[hsl(220_15%_5%)] shrink-0 transition-all duration-300">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-3 border-b border-border">
-        <span className="text-[10px] font-mono tracking-widest uppercase text-muted-foreground">Research Lab</span>
-        <div className="flex items-center gap-1">
-          <button onClick={addFolder} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors" title="New folder">
-            <FolderPlus className="w-3.5 h-3.5" />
+    <ConstellationSidebar
+      title="Research Lab"
+      accent="hsl(190 72% 58%)"
+      collapsed={collapsed}
+      onCollapsedChange={setCollapsed}
+      loading={isLoading}
+      nodes={graphNodes}
+      links={graphLinks}
+      groups={[
+        { id: "folders", label: "Folders", color: "hsl(190 52% 56%)" },
+        { id: "science", label: "Science", color: ACCENT_SCIENCE },
+        { id: "experiments", label: "Experiments", color: ACCENT_EXPERIMENT },
+      ]}
+      activeId={selectedGraphId}
+      onSelect={id => {
+        setSelectedGraphId(id);
+        if (id.startsWith("board:")) onSelect(Number(id.slice(6)));
+      }}
+      emptyLabel="No research boards yet"
+      headerActions={(
+        <button
+          onClick={addFolder}
+          className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+          title="New folder node"
+        >
+          <FolderPlus className="h-3.5 w-3.5" />
+        </button>
+      )}
+      collapsedAction={(
+        <div className="space-y-1">
+          <button onClick={addFolder} className="flex w-full justify-center rounded p-2 text-muted-foreground hover:bg-[hsl(220_15%_8%)] hover:text-foreground" title="New folder">
+            <FolderPlus className="h-3.5 w-3.5" />
           </button>
-          <button onClick={() => setCollapsed(true)} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors">
-            <ChevronLeft className="w-3.5 h-3.5" />
+          <button onClick={() => onNew("science_board", "")} className="flex w-full justify-center rounded p-2 hover:bg-[hsl(220_15%_8%)]" style={{ color: ACCENT_SCIENCE }} title="New science board">
+            <BookOpen className="h-3.5 w-3.5" />
+          </button>
+          <button onClick={() => onNew("experiment_board", "")} className="flex w-full justify-center rounded p-2 hover:bg-[hsl(220_15%_8%)]" style={{ color: ACCENT_EXPERIMENT }} title="New experiment board">
+            <FlaskConical className="h-3.5 w-3.5" />
           </button>
         </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto py-2 px-2 space-y-1">
-        {isLoading ? (
-          <div className="flex justify-center py-6"><Loader2 className="w-4 h-4 animate-spin text-muted-foreground opacity-30" /></div>
-        ) : (
-          <>
-            {/* Folders */}
-            {folders.map(folder => {
-              const folderBoards = folder.boardIds.map(id => boards.find(b => b.id === id)).filter(Boolean) as Board[];
-              return (
-                <div key={folder.id}>
-                  {/* Folder header */}
-                  <div className="group flex items-center gap-1.5 px-2 py-1.5 rounded-lg">
-                    <button
-                      onClick={() => toggleOpen(folder.id)}
-                      className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
-                    >
-                      {folder.open
-                        ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" />
-                        : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
-                      }
-                      {folder.open
-                        ? <FolderOpen className="w-3 h-3 text-muted-foreground shrink-0" />
-                        : <Folder className="w-3 h-3 text-muted-foreground shrink-0" />
-                      }
-                      {renamingId === folder.id ? (
-                        <input
-                          autoFocus
-                          value={renameVal}
-                          onChange={e => setRenameVal(e.target.value)}
-                          onBlur={() => commitRename(folder.id)}
-                          onKeyDown={e => { if (e.key === "Enter") commitRename(folder.id); if (e.key === "Escape") setRenamingId(null); }}
-                          onClick={e => e.stopPropagation()}
-                          className="flex-1 bg-transparent outline-none text-xs text-foreground min-w-0"
-                        />
-                      ) : (
-                        <span className="flex-1 text-xs text-foreground/70 truncate">{folder.name}</span>
-                      )}
-                    </button>
-                    <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-                      <button
-                        onClick={() => { setRenamingId(folder.id); setRenameVal(folder.name); }}
-                        className="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        <PenLine className="w-2.5 h-2.5" />
-                      </button>
-                      {/* Add board to folder */}
-                      <div className="relative">
-                        <button
-                          onClick={() => setAddMenuFolderId(addMenuFolderId === folder.id ? null : folder.id)}
-                          className="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-                          title="Add board to folder"
-                        >
-                          <Plus className="w-2.5 h-2.5" />
-                        </button>
-                        {addMenuFolderId === folder.id && (
-                          <div
-                            className="absolute left-0 top-6 rounded-lg border border-[hsl(220_15%_16%)] py-1 z-50 w-44"
-                            style={{ background: "hsl(220 15% 9%)" }}
-                          >
-                            <button
-                              onClick={() => handleNewBoard("science_board", folder.id)}
-                              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[hsl(220_15%_13%)] transition-colors"
-                              style={{ color: ACCENT_SCIENCE }}
-                            >
-                              <BookOpen className="w-3 h-3" />
-                              New Science Board
-                            </button>
-                            <button
-                              onClick={() => handleNewBoard("experiment_board", folder.id)}
-                              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[hsl(220_15%_13%)] transition-colors"
-                              style={{ color: ACCENT_EXPERIMENT }}
-                            >
-                              <FlaskConical className="w-3 h-3" />
-                              New Experiment Board
-                            </button>
-                            {/* Move existing boards into folder */}
-                            {unfoldered.length > 0 && (
-                              <>
-                                <div className="border-t border-[hsl(220_15%_14%)] my-1" />
-                                <p className="px-3 py-1 text-[9px] font-mono tracking-widest uppercase text-muted-foreground opacity-50">Add existing</p>
-                                {unfoldered.map(b => (
-                                  <button
-                                    key={b.id}
-                                    onClick={() => {
-                                      persist(folders.map(f => f.id === folder.id ? { ...f, boardIds: [...f.boardIds, b.id] } : f));
-                                      setAddMenuFolderId(null);
-                                    }}
-                                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[hsl(220_15%_13%)] transition-colors text-muted-foreground hover:text-foreground"
-                                  >
-                                    {b.type === "science_board"
-                                      ? <BookOpen className="w-3 h-3 shrink-0" style={{ color: ACCENT_SCIENCE }} />
-                                      : <FlaskConical className="w-3 h-3 shrink-0" style={{ color: ACCENT_EXPERIMENT }} />
-                                    }
-                                    <span className="truncate">{b.title}</span>
-                                  </button>
-                                ))}
-                              </>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => deleteFolder(folder.id)}
-                        className="p-0.5 rounded text-muted-foreground hover:text-rose-400 transition-colors"
-                      >
-                        <Trash2 className="w-2.5 h-2.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Folder boards */}
-                  {folder.open && (
-                    <div className="mb-1">
-                      {folderBoards.length === 0 ? (
-                        <p className="pl-8 text-[10px] text-muted-foreground opacity-30 py-1">Empty folder</p>
-                      ) : (
-                        folderBoards.map(b => <BoardRow key={b.id} board={b} folderId={folder.id} />)
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {/* Unfoldered boards */}
-            {unfoldered.length > 0 && (
-              <div>
-                {folders.length > 0 && (
-                  <p className="text-[9px] font-mono tracking-widest uppercase px-2 py-1 text-muted-foreground opacity-40">Unfiled</p>
+      )}
+      footer={(
+        <div className="space-y-1.5">
+          {selectedFolder && (
+            <div className="rounded-sm border border-[hsl(190_30%_18%)] bg-[hsl(220_15%_6%)] p-1.5">
+              <div className="flex items-center gap-1">
+                {renamingId === selectedFolder.id ? (
+                  <input
+                    autoFocus
+                    value={renameVal}
+                    onChange={e => setRenameVal(e.target.value)}
+                    onBlur={() => commitRename(selectedFolder.id)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") commitRename(selectedFolder.id);
+                      if (e.key === "Escape") setRenamingId(null);
+                    }}
+                    className="min-w-0 flex-1 bg-transparent px-1 font-mono text-[9px] text-foreground outline-none"
+                  />
+                ) : (
+                  <span className="min-w-0 flex-1 truncate px-1 font-mono text-[8px] text-muted-foreground/60">{selectedFolder.name}</span>
                 )}
-                {unfoldered.map(b => <UnfolderedBoardRow key={b.id} board={b} />)}
+                <button
+                  onClick={() => {
+                    if (renamingId === selectedFolder.id) commitRename(selectedFolder.id);
+                    else {
+                      setRenamingId(selectedFolder.id);
+                      setRenameVal(selectedFolder.name);
+                    }
+                  }}
+                  className="rounded p-1 text-muted-foreground hover:text-foreground"
+                  title="Rename folder node"
+                >
+                  {renamingId === selectedFolder.id ? <Check className="h-3 w-3" /> : <PenLine className="h-3 w-3" />}
+                </button>
+                <button
+                  onClick={() => {
+                    deleteFolder(selectedFolder.id);
+                    setSelectedGraphId(hubId);
+                  }}
+                  className="rounded p-1 text-muted-foreground hover:text-rose-400"
+                  title="Delete folder node"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
               </div>
-            )}
-
-            {folders.length === 0 && unfoldered.length === 0 && !isLoading && (
-              <p className="text-[10px] text-muted-foreground opacity-30 text-center py-6">No boards yet</p>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* Bottom: create unfoldered boards */}
-      <div className="p-2 border-t border-border space-y-1.5">
-        <div className="relative">
-          <button
-            onClick={() => setAddMenuFolderId(addMenuFolderId === "__root__" ? null : "__root__")}
-            disabled={creating}
-            className="w-full flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-dashed transition-all text-muted-foreground hover:text-foreground"
-            style={{ borderColor: "hsl(220 15% 22%)" }}
-          >
-            {creating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
-            New Board
-          </button>
-          {addMenuFolderId === "__root__" && (
-            <div
-              className="absolute bottom-10 left-0 right-0 rounded-lg border border-[hsl(220_15%_16%)] py-1 z-50"
-              style={{ background: "hsl(220 15% 9%)" }}
-            >
-              <button
-                onClick={() => { onNew("science_board", ""); setAddMenuFolderId(null); }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-[hsl(220_15%_13%)] transition-colors"
-                style={{ color: ACCENT_SCIENCE }}
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                Science Board
-              </button>
-              <button
-                onClick={() => { onNew("experiment_board", ""); setAddMenuFolderId(null); }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-[hsl(220_15%_13%)] transition-colors"
-                style={{ color: ACCENT_EXPERIMENT }}
-              >
-                <FlaskConical className="w-3.5 h-3.5" />
-                Experiment Board
-              </button>
+              {unfiledBoards.length > 0 && (
+                <select
+                  defaultValue=""
+                  onChange={e => {
+                    if (e.target.value) moveBoard(Number(e.target.value), selectedFolder.id);
+                    e.currentTarget.value = "";
+                  }}
+                  className="mt-1.5 h-7 w-full rounded-sm border border-[hsl(220_15%_15%)] bg-[hsl(220_15%_7%)] px-2 font-mono text-[8px] text-muted-foreground outline-none"
+                  aria-label="Link an unfiled board to selected folder"
+                >
+                  <option value="">Link existing board…</option>
+                  {unfiledBoards.map(board => <option key={board.id} value={board.id}>{board.title}</option>)}
+                </select>
+              )}
             </div>
           )}
+
+          {selectedBoard && (
+            <div className="rounded-sm border border-[hsl(220_15%_14%)] bg-[hsl(220_15%_6%)] p-1.5">
+              <div className="flex items-center gap-1">
+                {boardRenameId === selectedBoard.id ? (
+                  <input
+                    autoFocus
+                    value={boardRenameVal}
+                    onChange={e => setBoardRenameVal(e.target.value)}
+                    onBlur={commitSelectedBoardRename}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") commitSelectedBoardRename();
+                      if (e.key === "Escape") setBoardRenameId(null);
+                    }}
+                    className="min-w-0 flex-1 bg-transparent px-1 font-mono text-[9px] outline-none"
+                    style={{ color: selectedBoard.type === "science_board" ? ACCENT_SCIENCE : ACCENT_EXPERIMENT }}
+                  />
+                ) : (
+                  <span className="min-w-0 flex-1 truncate px-1 font-mono text-[8px] text-muted-foreground/60">{selectedBoard.title}</span>
+                )}
+                <button
+                  onClick={() => {
+                    if (boardRenameId === selectedBoard.id) commitSelectedBoardRename();
+                    else {
+                      setBoardRenameId(selectedBoard.id);
+                      setBoardRenameVal(selectedBoard.title);
+                    }
+                  }}
+                  className="rounded p-1 text-muted-foreground hover:text-foreground"
+                  title="Rename board node"
+                >
+                  {boardRenameId === selectedBoard.id ? <Check className="h-3 w-3" /> : <PenLine className="h-3 w-3" />}
+                </button>
+                {boardFolder && (
+                  <button
+                    onClick={() => removeBoardFromFolder(boardFolder.id, selectedBoard.id)}
+                    className="rounded p-1 text-muted-foreground hover:text-amber-400"
+                    title="Unlink from folder"
+                  >
+                    <Link2 className="h-3 w-3" />
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    deleteBoard.mutate(selectedBoard.id);
+                    setSelectedGraphId(hubId);
+                  }}
+                  className="rounded p-1 text-muted-foreground hover:text-rose-400"
+                  title="Delete board node"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+              {!boardFolder && folders.length > 0 && (
+                <select
+                  defaultValue=""
+                  onChange={e => {
+                    if (e.target.value) moveBoard(selectedBoard.id, e.target.value);
+                    e.currentTarget.value = "";
+                  }}
+                  className="mt-1.5 h-7 w-full rounded-sm border border-[hsl(220_15%_15%)] bg-[hsl(220_15%_7%)] px-2 font-mono text-[8px] text-muted-foreground outline-none"
+                  aria-label="Link selected board to folder"
+                >
+                  <option value="">Link to folder…</option>
+                  {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                </select>
+              )}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-1.5">
+            <button
+              onClick={() => handleNewBoard("science_board", selectedFolder?.id ?? "")}
+              disabled={creating}
+              className="flex items-center justify-center gap-1 rounded-sm border border-dashed px-2 py-2 font-mono text-[8px] uppercase tracking-wide hover:bg-[hsl(210_30%_9%)] disabled:opacity-50"
+              style={{ borderColor: ACCENT_SCIENCE, color: ACCENT_SCIENCE }}
+            >
+              {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <BookOpen className="h-3 w-3" />}
+              Science
+            </button>
+            <button
+              onClick={() => handleNewBoard("experiment_board", selectedFolder?.id ?? "")}
+              disabled={creating}
+              className="flex items-center justify-center gap-1 rounded-sm border border-dashed px-2 py-2 font-mono text-[8px] uppercase tracking-wide hover:bg-[hsl(145_30%_9%)] disabled:opacity-50"
+              style={{ borderColor: ACCENT_EXPERIMENT, color: ACCENT_EXPERIMENT }}
+            >
+              {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <FlaskConical className="h-3 w-3" />}
+              Experiment
+            </button>
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+    />
   );
 }
 
