@@ -5,6 +5,8 @@ import {
   ArrowUpRight,
   CalendarClock,
   Check,
+  ChevronLeft,
+  ChevronRight,
   CircleGauge,
   Clock3,
   CreditCard,
@@ -24,7 +26,7 @@ import { Input } from "@/components/ui/input";
 import FinancialModelDialog from "@/components/financial/FinancialModelDialog";
 import ProjectionChart from "@/components/financial/ProjectionChart";
 import WhatIfDialog from "@/components/financial/WhatIfDialog";
-import { projectFinancials, type FinancialEvent, type FinancialState } from "@/lib/financialEngine";
+import { projectFinancialMonth, projectFinancials, type FinancialEvent, type FinancialState } from "@/lib/financialEngine";
 import { loadFinancialState, saveFinancialState } from "@/lib/financialStore";
 
 const dollars = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
@@ -116,6 +118,7 @@ export default function FundingDashboard() {
   const { data: activeProfile } = useQuery<any>({ queryKey: ["/api/active-profile"] });
   const profileId = activeProfile?.id as number | undefined;
   const [state, setState] = useState<FinancialState>(() => loadFinancialState());
+  const [projectionMonthOffset, setProjectionMonthOffset] = useState(0);
 
   useEffect(() => {
     setState(loadFinancialState(profileId));
@@ -127,6 +130,14 @@ export default function FundingDashboard() {
   }, [profileId]);
 
   const projection = useMemo(() => projectFinancials(state), [state]);
+  const chartProjection = useMemo(
+    () => projectFinancialMonth(state, projectionMonthOffset),
+    [projectionMonthOffset, state],
+  );
+
+  useEffect(() => {
+    setProjectionMonthOffset(current => Math.min(current, Math.max(0, state.forecastMonths - 1)));
+  }, [state.forecastMonths]);
   const dataFreshness = freshness(state.balanceUpdatedAt);
   const monthDelta = projection.projectedMonthEnd - state.currentBalance;
   const upcomingEvents = projection.events.slice(0, 8);
@@ -237,15 +248,46 @@ export default function FundingDashboard() {
         <Card className="p-5 xl:col-span-9">
           <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <MetricLabel icon={<TrendingUp className="h-3.5 w-3.5" />}>Current-month projection</MetricLabel>
+              <MetricLabel icon={<TrendingUp className="h-3.5 w-3.5" />}>
+                {projectionMonthOffset === 0 ? "Current-month projection" : "Future projection"}
+              </MetricLabel>
               <h3 className="mt-1 font-roman text-sm tracking-wider">Balance trajectory</h3>
             </div>
-            <div className="flex items-center gap-4 font-mono text-[9px] text-muted-foreground">
-              <span className="flex items-center gap-1.5"><i className="h-0.5 w-4 bg-[hsl(var(--accent-h)_82%_66%)]" /> Account balance</span>
-              <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm bg-rose-400/60" /> Dated outflow</span>
+            <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+              <div className="flex items-center rounded-lg border border-white/[0.07] bg-black/15 p-0.5">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  disabled={projectionMonthOffset === 0}
+                  aria-label="View previous projection month"
+                  onClick={() => setProjectionMonthOffset(current => Math.max(0, current - 1))}
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </Button>
+                <span className="min-w-32 px-2 text-center font-mono text-[10px] uppercase tracking-wider text-foreground">
+                  {chartProjection.monthLabel}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  disabled={projectionMonthOffset >= Math.max(0, state.forecastMonths - 1)}
+                  aria-label="View next projection month"
+                  onClick={() => setProjectionMonthOffset(current => Math.min(Math.max(0, state.forecastMonths - 1), current + 1))}
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <div className="flex items-center gap-4 font-mono text-[9px] text-muted-foreground">
+                <span className="flex items-center gap-1.5"><i className="h-0.5 w-4 bg-[hsl(var(--accent-h)_82%_66%)]" /> Account balance</span>
+                <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm bg-rose-400/60" /> Dated outflow</span>
+              </div>
             </div>
           </div>
-          <ProjectionChart data={projection.dailyPoints} />
+          <ProjectionChart data={chartProjection.dailyPoints} />
         </Card>
 
         <div className="grid gap-4 sm:grid-cols-2 xl:col-span-3 xl:grid-cols-1">
