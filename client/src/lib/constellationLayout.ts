@@ -26,13 +26,15 @@ export interface ConstellationLayout {
   projectsWidgetCollapsed: boolean;
   threatsWidgetPos: { x: number; y: number } | null;
   threatsWidgetCollapsed: boolean;
+  taskStabilizerWidgetPos: { x: number; y: number } | null;
+  taskStabilizerWidgetCollapsed: boolean;
 }
 
 export const DEFAULT_RAY_COLOR    = "43 88% 60%";
 export const DEFAULT_ACCENT_COLOR = "43 88% 60%";
 
 function defaultLayout(): ConstellationLayout {
-  return { nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null, widgetPos: null, widgetCollapsed: false, projectsWidgetPos: null, projectsWidgetCollapsed: false, threatsWidgetPos: null, threatsWidgetCollapsed: false };
+  return { nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null, widgetPos: null, widgetCollapsed: false, projectsWidgetPos: null, projectsWidgetCollapsed: false, threatsWidgetPos: null, threatsWidgetCollapsed: false, taskStabilizerWidgetPos: null, taskStabilizerWidgetCollapsed: false };
 }
 
 export function loadLayout(): ConstellationLayout {
@@ -65,6 +67,8 @@ export function loadLayout(): ConstellationLayout {
     if (!("projectsWidgetCollapsed" in parsed)) (parsed as any).projectsWidgetCollapsed = false;
     if (!("threatsWidgetPos"        in parsed)) (parsed as any).threatsWidgetPos        = null;
     if (!("threatsWidgetCollapsed"  in parsed)) (parsed as any).threatsWidgetCollapsed  = false;
+    if (!("taskStabilizerWidgetPos" in parsed)) (parsed as any).taskStabilizerWidgetPos = null;
+    if (!("taskStabilizerWidgetCollapsed" in parsed)) (parsed as any).taskStabilizerWidgetCollapsed = false;
     return parsed;
   } catch {
     return defaultLayout();

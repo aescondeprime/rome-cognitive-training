@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { lazy, Suspense, useState, useEffect } from "react";
 import { Switch, Route, Router, Redirect } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -36,6 +36,8 @@ import PASAT from "@/pages/games/PASAT";
 import PlaceholderNode from "@/pages/PlaceholderNode";
 import WorldBrowser from "@/pages/WorldBrowser";
 import FundingDashboard from "@/pages/FundingDashboard";
+
+const Academia = lazy(() => import("@/pages/Academia"));
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -159,6 +161,13 @@ export default function App() {
 
                     {/* Financial */}
                     <Route path="/funding" component={FundingDashboard} />
+
+                    {/* Academia */}
+                    <Route path="/academia">
+                      <Suspense fallback={<div className="flex h-64 items-center justify-center font-mono text-[9px] tracking-[.18em] text-muted-foreground/40">INITIALIZING ACADEMIA…</div>}>
+                        <Academia />
+                      </Suspense>
+                    </Route>
 
                     {/* Profiles + Settings */}
                     <Route path="/settings"  component={Settings} />

@@ -10,6 +10,7 @@ import NodeBranchMenu from "./NodeBranchMenu";
 import ConstellationWidget from "./ConstellationWidget";
 import ProjectsWidget from "./ProjectsWidget";
 import ThreatsWidget from "./ThreatsWidget";
+import TaskStabilizerWidget from "./TaskStabilizerWidget";
 
 // ── Moving particle canvas ─────────────────────────────────────────────────
 function ParticleCanvas({
@@ -546,7 +547,7 @@ export default function ConstellationMenu({ onClose }: Props) {
 
   const handleReset = useCallback(() => {
     resetLayout();
-    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null, widgetPos: null, widgetCollapsed: false, projectsWidgetPos: null, projectsWidgetCollapsed: false });
+    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null, widgetPos: null, widgetCollapsed: false, projectsWidgetPos: null, projectsWidgetCollapsed: false, threatsWidgetPos: null, threatsWidgetCollapsed: false, taskStabilizerWidgetPos: null, taskStabilizerWidgetCollapsed: false });
     pinRaySource(null, null);
     setRayDirection(null);
     setRayColor(DEFAULT_RAY_COLOR);
@@ -1068,6 +1069,16 @@ export default function ConstellationMenu({ onClose }: Props) {
           collapsed={layout.widgetCollapsed ?? false}
           onPosChange={p => setLayout(prev => ({ ...prev, widgetPos: p }))}
           onCollapsedChange={c => setLayout(prev => ({ ...prev, widgetCollapsed: c }))}
+        />
+      )}
+
+      {/* Task Stabilizer — persistent focus queue + Kronos timer sync */}
+      {!editMode && (
+        <TaskStabilizerWidget
+          pos={layout.taskStabilizerWidgetPos ?? null}
+          collapsed={layout.taskStabilizerWidgetCollapsed ?? false}
+          onPosChange={p => setLayout(prev => ({ ...prev, taskStabilizerWidgetPos: p }))}
+          onCollapsedChange={c => setLayout(prev => ({ ...prev, taskStabilizerWidgetCollapsed: c }))}
         />
       )}
 
