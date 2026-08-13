@@ -14,7 +14,7 @@ const http = require('node:http');
 if (process.argv.includes('--version')) { console.log('fake-hermes 1.0'); process.exit(0); }
 const index = process.argv.indexOf('--port');
 const port = Number(process.argv[index + 1]);
-const server = http.createServer((req, res) => { res.statusCode = req.url === '/health' ? 200 : 404; res.end('{}'); });
+const server = http.createServer((req, res) => { res.statusCode = req.url === '/api/health' ? 200 : 404; res.end('{}'); });
 server.listen(port, '127.0.0.1');
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.close(() => process.exit(0)));
 `, { mode: 0o700 });
