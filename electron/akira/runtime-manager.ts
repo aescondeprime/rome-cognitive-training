@@ -336,7 +336,6 @@ export class HermesRuntimeManager extends EventEmitter {
       `    model_id: ${quote(settings.voice.modelId)}`,
       "wake_word:",
       `  enabled: ${settings.input.wakeWordEnabled ? "true" : "false"}`,
-      "  capture: client",
       "  provider: sherpa",
       "  phrase: Akira",
       `  sensitivity: ${settings.input.wakeSensitivity.toFixed(2)}`,

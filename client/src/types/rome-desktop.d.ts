@@ -68,7 +68,6 @@ interface RomeAkiraBridge {
   standby: () => Promise<RomeAkiraStatus>;
   interrupt: () => Promise<RomeAkiraStatus>;
   submitText: (text: string) => Promise<RomeAkiraStatus>;
-  feedWake: (pcmBase64: string, sampleRate?: number) => Promise<void>;
   transcribe: (dataUrl: string, mimeType: string) => Promise<{ text: string }>;
   respondToApproval: (id: string, approved: boolean) => Promise<void>;
   updateSettings: (patch: Partial<RomeAkiraSettings>) => Promise<RomeAkiraStatus>;

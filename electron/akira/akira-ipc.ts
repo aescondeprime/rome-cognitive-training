@@ -14,7 +14,6 @@ export function registerAkiraIpc(getController: () => AkiraController | null): v
   ipcMain.handle("rome:akira:standby", event => withController(event, controller => controller.standby()));
   ipcMain.handle("rome:akira:interrupt", event => withController(event, controller => controller.interrupt()));
   ipcMain.handle("rome:akira:submit-text", (event, text: unknown) => withController(event, controller => controller.submitText(String(text ?? ""))));
-  ipcMain.handle("rome:akira:wake-feed", (event, pcm: unknown, sampleRate: unknown) => withController(event, controller => controller.feedWake(String(pcm ?? ""), Number(sampleRate))));
   ipcMain.handle("rome:akira:transcribe", (event, dataUrl: unknown, mimeType: unknown) => withController(event, controller => controller.transcribe(String(dataUrl ?? ""), String(mimeType ?? ""))));
   ipcMain.handle("rome:akira:approval-response", (event, id: unknown, approved: unknown) => withController(event, controller => controller.resolveApproval(String(id ?? ""), Boolean(approved))));
   ipcMain.handle("rome:akira:update-settings", (event, patch: Partial<AkiraSettings>) => withController(event, controller => controller.updateSettings(patch && typeof patch === "object" ? patch : {})));

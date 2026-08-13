@@ -19,7 +19,6 @@ contextBridge.exposeInMainWorld("romeDesktop", {
     standby: () => ipcRenderer.invoke("rome:akira:standby"),
     interrupt: () => ipcRenderer.invoke("rome:akira:interrupt"),
     submitText: (text: string) => ipcRenderer.invoke("rome:akira:submit-text", text),
-    feedWake: (pcm: string, sampleRate = 16_000) => ipcRenderer.invoke("rome:akira:wake-feed", pcm, sampleRate),
     transcribe: (dataUrl: string, mimeType: string) => ipcRenderer.invoke("rome:akira:transcribe", dataUrl, mimeType),
     respondToApproval: (id: string, approved: boolean) => ipcRenderer.invoke("rome:akira:approval-response", id, approved),
     updateSettings: (patch: unknown) => ipcRenderer.invoke("rome:akira:update-settings", patch),
