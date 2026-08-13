@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -15,6 +16,7 @@ interface RuntimeOptions {
   bridgeToken: string;
   settings: AkiraSettingsStore;
   electronExecutable: string;
+  gatewayToken?: string;
 }
 
 const EMPTY_STATUS: AkiraRuntimeStatus = {
@@ -43,14 +45,20 @@ export class HermesRuntimeManager extends EventEmitter {
   private statusValue: AkiraRuntimeStatus = { ...EMPTY_STATUS, updatedAt: Date.now() };
   private logLines: string[] = [];
   private installPromise: Promise<AkiraRuntimeStatus> | null = null;
+  private readonly gatewayToken: string;
 
   constructor(private readonly options: RuntimeOptions) {
     super();
+    this.gatewayToken = options.gatewayToken ?? crypto.randomBytes(32).toString("base64url");
     ensurePrivateDirectory(options.root);
   }
 
   get status(): AkiraRuntimeStatus { return { ...this.statusValue }; }
-  get gatewayUrl(): string | null { return this.statusValue.port ? `ws://127.0.0.1:${this.statusValue.port}/api/ws` : null; }
+  get gatewayUrl(): string | null {
+    return this.statusValue.port
+      ? `ws://127.0.0.1:${this.statusValue.port}/api/ws?token=${encodeURIComponent(this.gatewayToken)}`
+      : null;
+  }
   get httpBase(): string | null { return this.statusValue.port ? `http://127.0.0.1:${this.statusValue.port}` : null; }
   get logs(): string[] { return [...this.logLines]; }
 
@@ -244,6 +252,8 @@ export class HermesRuntimeManager extends EventEmitter {
     return {
       ...this.baseEnvironment(),
       HERMES_HOME: path.join(this.options.root, "hermes"),
+      HERMES_DASHBOARD_SESSION_TOKEN: this.gatewayToken,
+      HERMES_DESKTOP: "1",
       XDG_CACHE_HOME: path.join(this.options.root, "cache"),
       HF_HOME: path.join(this.options.root, "models", "huggingface"),
       ROME_AKIRA_BRIDGE_PORT: String(this.options.bridgePort),
