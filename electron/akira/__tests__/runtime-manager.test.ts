@@ -75,19 +75,24 @@ test("uv discovery accepts an absolute executable outside the GUI application PA
 });
 
 test("Hermes source extras use a supported package requirement", () => {
-  const args = hermesInstallArguments();
-  assert.deepEqual(args.slice(0, 5), ["tool", "install", "--force", "--python", "3.12"]);
+  const args = hermesInstallArguments("/managed/hermes-agent");
+  assert.deepEqual(args.slice(0, 5), ["tool", "install", "--force", "--python", "3.11"]);
   assert.doesNotMatch(args.join(" "), /(?:^|\s)--extra(?:\s|$)/);
-  assert.match(args.at(-1) ?? "", /^hermes-agent\[voice,wake\] @ https:\/\/github\.com\/NousResearch\/hermes-agent\/archive\/[a-f0-9]{40}\.tar\.gz$/);
+  assert.equal(args.at(-2), "--editable");
+  assert.equal(args.at(-1), "/managed/hermes-agent[voice,wake]");
+  assert.doesNotMatch(args.join(" "), /https:\/\//);
 });
 
 test("a failed Hermes install leaves the runtime degraded instead of installing", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "akira-install-failure-"));
   const executable = path.join(root, "uv");
+  writeFileSync(path.join(root, "pyproject.toml"), "[project]\nname='fake-hermes'\nversion='1.0.0'\n");
   writeFileSync(executable, "#!/bin/sh\necho installer-failed >&2\nexit 2\n", { mode: 0o700 });
   chmodSync(executable, 0o700);
   const previous = process.env.UV_EXECUTABLE;
+  const previousSource = process.env.HERMES_SOURCE_DIR;
   process.env.UV_EXECUTABLE = executable;
+  process.env.HERMES_SOURCE_DIR = root;
   const manager = new HermesRuntimeManager({
     root,
     mcpEntry: "/tmp/akira-mcp.cjs",
@@ -108,5 +113,7 @@ test("a failed Hermes install leaves the runtime degraded instead of installing"
     manager.stop();
     if (previous === undefined) delete process.env.UV_EXECUTABLE;
     else process.env.UV_EXECUTABLE = previous;
+    if (previousSource === undefined) delete process.env.HERMES_SOURCE_DIR;
+    else process.env.HERMES_SOURCE_DIR = previousSource;
   }
 });

@@ -26,11 +26,12 @@ const HERMES_VERSION = "0.20.0";
 const HERMES_RELEASE_COMMIT = "3c27eb6234bf91b8ceee9e9071591b31e9b148cb";
 const HERMES_SOURCE_ARCHIVE = `https://github.com/NousResearch/hermes-agent/archive/${HERMES_RELEASE_COMMIT}.tar.gz`;
 
-export function hermesInstallArguments(): string[] {
+export function hermesInstallArguments(sourceRoot: string): string[] {
   return [
     "tool", "install", "--force",
-    "--python", "3.12",
-    `hermes-agent[voice,wake] @ ${HERMES_SOURCE_ARCHIVE}`,
+    "--python", "3.11",
+    "--editable",
+    `${sourceRoot}[voice,wake]`,
   ];
 }
 
@@ -124,8 +125,9 @@ export class HermesRuntimeManager extends EventEmitter {
     this.emit("log", this.logs);
     const runtimeRoot = path.join(this.options.root, "runtime");
     ensurePrivateDirectory(runtimeRoot);
+    const sourceRoot = await this.prepareHermesSource(runtimeRoot);
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(uv, hermesInstallArguments(), {
+      const child = spawn(uv, hermesInstallArguments(sourceRoot), {
         cwd: runtimeRoot,
         env: {
           ...this.baseEnvironment(),
@@ -133,6 +135,7 @@ export class HermesRuntimeManager extends EventEmitter {
           UV_TOOL_DIR: path.join(runtimeRoot, "tools"),
           UV_TOOL_BIN_DIR: path.join(runtimeRoot, "bin"),
           UV_CACHE_DIR: path.join(this.options.root, "cache", "uv"),
+          UV_PYTHON_INSTALL_DIR: path.join(runtimeRoot, "python"),
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -144,6 +147,69 @@ export class HermesRuntimeManager extends EventEmitter {
     const executable = this.resolveExecutable();
     if (!executable) throw new Error("Hermes installation completed but its executable could not be located.");
     return this.start(executable);
+  }
+
+  private async prepareHermesSource(runtimeRoot: string): Promise<string> {
+    const override = process.env.HERMES_SOURCE_DIR;
+    if (override) {
+      if (!fs.existsSync(path.join(override, "pyproject.toml"))) {
+        throw new Error("HERMES_SOURCE_DIR does not contain a Hermes source checkout.");
+      }
+      return override;
+    }
+
+    const sourceRoot = path.join(runtimeRoot, "source", "hermes-agent");
+    const marker = path.join(sourceRoot, ".rome-hermes-commit");
+    try {
+      if (fs.readFileSync(marker, "utf8").trim() === HERMES_RELEASE_COMMIT
+          && fs.existsSync(path.join(sourceRoot, "pyproject.toml"))) {
+        return sourceRoot;
+      }
+    } catch {
+      // A missing or interrupted source checkout is repaired below.
+    }
+
+    const downloadsRoot = path.join(runtimeRoot, "downloads");
+    ensurePrivateDirectory(downloadsRoot);
+    const archive = path.join(downloadsRoot, `hermes-agent-${HERMES_RELEASE_COMMIT}.tar.gz`);
+    if (!fs.existsSync(archive)) {
+      this.appendLog("install", "Downloading the pinned Hermes source release…");
+      const response = await fetch(HERMES_SOURCE_ARCHIVE, { redirect: "follow" });
+      if (!response.ok) throw new Error(`Hermes source download failed (HTTP ${response.status}).`);
+      if (!response.body) throw new Error("Hermes source download returned no data.");
+      const temporaryArchive = `${archive}.download`;
+      const handle = fs.openSync(temporaryArchive, "w", 0o600);
+      try {
+        for await (const chunk of response.body as any) fs.writeSync(handle, Buffer.from(chunk));
+      } catch (error) {
+        fs.rmSync(temporaryArchive, { force: true });
+        throw error;
+      } finally {
+        fs.closeSync(handle);
+      }
+      fs.renameSync(temporaryArchive, archive);
+    }
+
+    const staging = `${sourceRoot}.staging`;
+    fs.rmSync(staging, { recursive: true, force: true });
+    ensurePrivateDirectory(staging);
+    this.appendLog("install", "Preparing the supported editable Hermes source layout…");
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("/usr/bin/tar", ["-xzf", archive, "--strip-components=1", "-C", staging], {
+        cwd: runtimeRoot,
+        env: this.baseEnvironment(),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      child.stdout.on("data", data => this.appendLog("install", data));
+      child.stderr.on("data", data => this.appendLog("install", data));
+      child.once("error", reject);
+      child.once("exit", code => code === 0 ? resolve() : reject(new Error(`Hermes source extraction exited with code ${code ?? "unknown"}.`)));
+    });
+    fs.writeFileSync(path.join(staging, ".rome-hermes-commit"), `${HERMES_RELEASE_COMMIT}\n`, { mode: 0o600 });
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+    ensurePrivateDirectory(path.dirname(sourceRoot));
+    fs.renameSync(staging, sourceRoot);
+    return sourceRoot;
   }
 
   stop(): void {
