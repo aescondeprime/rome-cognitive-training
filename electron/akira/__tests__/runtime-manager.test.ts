@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { HermesRuntimeManager } from "../runtime-manager";
+import { HermesRuntimeManager, resolveUvExecutable } from "../runtime-manager";
 import { DEFAULT_AKIRA_SETTINGS } from "../settings-store";
 
 test("managed runtime can be replaced without a stale exit degrading the replacement", async () => {
@@ -56,5 +56,20 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.clos
     manager.stop();
     if (previous === undefined) delete process.env.HERMES_EXECUTABLE;
     else process.env.HERMES_EXECUTABLE = previous;
+  }
+});
+
+test("uv discovery accepts an absolute executable outside the GUI application PATH", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "akira-uv-"));
+  const executable = path.join(root, "uv");
+  writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  chmodSync(executable, 0o700);
+  const previous = process.env.UV_EXECUTABLE;
+  process.env.UV_EXECUTABLE = executable;
+  try {
+    assert.equal(resolveUvExecutable(), executable);
+  } finally {
+    if (previous === undefined) delete process.env.UV_EXECUTABLE;
+    else process.env.UV_EXECUTABLE = previous;
   }
 });
