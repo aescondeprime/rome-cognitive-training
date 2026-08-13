@@ -87,6 +87,7 @@ test("uv discovery accepts an absolute executable outside the GUI application PA
 test("Hermes source extras use a supported package requirement", () => {
   const args = hermesInstallArguments("/managed/hermes-agent");
   assert.deepEqual(args.slice(0, 5), ["tool", "install", "--force", "--python", "3.11"]);
+  assert.deepEqual(args.slice(5, 7), ["--with", "pypinyin==0.55.0"]);
   assert.doesNotMatch(args.join(" "), /(?:^|\s)--extra(?:\s|$)/);
   assert.equal(args.at(-2), "--editable");
   assert.equal(args.at(-1), "/managed/hermes-agent[voice,wake]");
