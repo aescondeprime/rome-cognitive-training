@@ -14,6 +14,7 @@ asar: true
 
 asarUnpack:
   - dist/**/*
+  - dist-electron/akira-mcp.cjs
   - node_modules/better-sqlite3/**/*
   - "**/*.node"
 
@@ -27,6 +28,9 @@ directories:
 mac:
   category: public.app-category.education
   icon: build-resources/icon.icns
+
+  extendInfo:
+    NSMicrophoneUsageDescription: "ROME uses the microphone for Akira wake-word detection and voice conversations when you arm it."
 
   # Allow running without an Apple Developer certificate.
   identity: null

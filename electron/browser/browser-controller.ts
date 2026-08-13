@@ -32,7 +32,11 @@ export class BrowserController {
     callback(false);
   };
 
-  constructor(private readonly host: BrowserWindow, dataDir: string) {
+  constructor(
+    private readonly host: BrowserWindow,
+    dataDir: string,
+    getAkiraShortcut: () => "Control+Escape" | "Control+Shift+Escape" = () => "Control+Escape",
+  ) {
     const emit = (channel: string, payload: unknown) => {
       if (!host.isDestroyed()) host.webContents.send(channel, payload);
     };
@@ -54,6 +58,7 @@ export class BrowserController {
       this.downloads,
       this.storage,
       emit,
+      getAkiraShortcut,
     );
     this.tabs = tabManager;
 
@@ -79,6 +84,10 @@ export class BrowserController {
 
   createTab(url?: string, kind: BrowserSessionKind = "default") {
     return this.tabs.createTab(url, kind, true);
+  }
+
+  readActivePage(maxCharacters?: number) {
+    return this.tabs.readActivePage(maxCharacters);
   }
 
   setViewport(viewport: BrowserViewport): void {

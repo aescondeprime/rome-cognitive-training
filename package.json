@@ -14,6 +14,7 @@
     "db:push": "drizzle-kit push",
     "desktop:build": "tsx script/build-electron.ts",
     "desktop:dev": "tsx script/build-electron.ts && electron dist-electron/main.cjs",
+    "test:akira": "node --import tsx --test electron/akira/__tests__/*.test.ts",
     "dist:win": "tsx script/build-electron.ts && electron-builder --win",
     "dist:mac": "tsx script/build-electron.ts && electron-builder --mac",
     "dist:all": "tsx script/build-electron.ts && electron-builder --win --mac"

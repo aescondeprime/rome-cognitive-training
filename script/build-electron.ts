@@ -36,7 +36,7 @@ function run(command: string, label: string): void {
 }
 
 // 1. Build Vite frontend and Express server.
-run("npx tsx script/build.ts", "Building web and server");
+run("node --import tsx script/build.ts", "Building web and server");
 
 // 2. Compile Electron main process.
 run(
@@ -67,9 +67,23 @@ run(
   "Compiling Electron preload"
 );
 
-// 4. Rebuild native module against Electron.
+// 4. Compile Akira's sandboxed MCP stdio server. Hermes launches this file
+// through the Electron executable with ELECTRON_RUN_AS_NODE=1.
 run(
-  "npx electron-rebuild -f -w better-sqlite3",
+  [
+    "npx esbuild electron/akira/mcp-server.ts",
+    "--bundle",
+    "--platform=node",
+    "--target=node20",
+    "--format=cjs",
+    "--outfile=dist-electron/akira-mcp.cjs",
+  ].join(" "),
+  "Compiling Akira capability bridge"
+);
+
+// 5. Rebuild native module against Electron.
+run(
+  "node --import tsx script/rebuild-electron.ts",
   "Rebuilding better-sqlite3"
 );
 

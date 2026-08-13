@@ -5,10 +5,33 @@ on:
     branches: [main]
     tags:
       - "v*"
+  pull_request:
+    branches: [main]
 
 jobs:
-  build-mac:
-    name: macOS (.dmg)
+  akira-tests:
+    name: Akira contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run deterministic Akira tests
+        run: npm run test:akira
+
+      - name: Compile Electron sources
+        run: npx tsc -p electron/tsconfig.json --noEmit
+
+  build-mac-arm64:
+    name: macOS Apple Silicon (.dmg)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,20 +50,54 @@ jobs:
         env:
           npm_config_build_from_source: true
 
-      - name: Package macOS DMG
-        run: npx electron-builder --mac --publish never
+      - name: Package Apple Silicon DMG
+        run: npx electron-builder --mac dmg --arm64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ROME-macOS
+          name: ROME-macOS-arm64
+          path: release/*.dmg
+          retention-days: 30
+
+  build-mac-x64:
+    name: macOS Intel (.dmg)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Electron app
+        run: npm run desktop:build
+        env:
+          npm_config_build_from_source: true
+
+      - name: Package Intel DMG
+        run: npx electron-builder --mac dmg --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload Intel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ROME-macOS-x64
           path: release/*.dmg
           retention-days: 30
 
   build-win:
     name: Windows (.exe)
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

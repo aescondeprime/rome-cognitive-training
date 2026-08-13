@@ -2,6 +2,7 @@
 // Navigation is done entirely through the Constellation overlay (Tab / ⊕ button).
 
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { useHashLocation } from "wouter/use-hash-location";
 import { Settings, LogOut } from "lucide-react";
 import { Link } from "wouter";
@@ -16,6 +17,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const { data: activeProfile } = useQuery<any>({ queryKey: ["/api/active-profile"] });
 
   const desktopWorld = location === "/world" && Boolean(window.romeDesktop?.isDesktop);
+
+  useEffect(() => {
+    document.documentElement.dataset.romeDesktopWorld = desktopWorld ? "true" : "false";
+    return () => { delete document.documentElement.dataset.romeDesktopWorld; };
+  }, [desktopWorld]);
 
   return (
     <div className="flex flex-col h-full">

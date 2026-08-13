@@ -12,6 +12,8 @@ import LightRay from "@/components/LightRay";
 import { setAccentColor } from "@/lib/lightRayState";
 import { loadLayout } from "@/lib/constellationLayout";
 import Login from "@/pages/Login";
+import { AkiraProvider } from "@/akira/AkiraProvider";
+import AkiraAura from "@/akira/AkiraAura";
 
 // Core pages kept
 import PhilosophyChambers from "@/pages/PhilosophyChambers";
@@ -97,9 +99,10 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthGate>
-          <ConstellationPortal />
-          <Router hook={useHashLocation}>
-            <Switch>
+          <AkiraProvider>
+            <ConstellationPortal />
+            <Router hook={useHashLocation}>
+              <Switch>
               <Route path="/">
                 <Redirect to="/athena" />
               </Route>
@@ -176,10 +179,12 @@ export default function App() {
                   </Switch>
                 </AppShell>
               </Route>
-            </Switch>
-          </Router>
-          <LightRay zIndex={201} />
-          <Toaster />
+              </Switch>
+            </Router>
+            <AkiraAura />
+            <LightRay zIndex={201} />
+            <Toaster />
+          </AkiraProvider>
         </AuthGate>
       </ThemeProvider>
     </QueryClientProvider>

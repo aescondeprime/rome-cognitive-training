@@ -120,6 +120,14 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
     setTasks(readTasks(profileId));
   }, [profileId]);
   useEffect(() => {
+    const refresh = () => {
+      skipNextPersist.current = true;
+      setTasks(readTasks(profileId));
+    };
+    window.addEventListener("rome:task-stabilizer:refresh", refresh);
+    return () => window.removeEventListener("rome:task-stabilizer:refresh", refresh);
+  }, [profileId]);
+  useEffect(() => {
     if (profileId === undefined) return;
     if (skipNextPersist.current) {
       skipNextPersist.current = false;

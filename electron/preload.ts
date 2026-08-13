@@ -1,4 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { AKIRA_CHANNELS } from "../shared/akira";
+
+function on<T>(channel: string, listener: (value: T) => void): () => void {
+  const handler = (_event: Electron.IpcRendererEvent, value: T) => listener(value);
+  ipcRenderer.on(channel, handler);
+  return () => ipcRenderer.removeListener(channel, handler);
+}
 
 // Expose safe APIs to the renderer (browser side)
 contextBridge.exposeInMainWorld("romeDesktop", {
@@ -6,6 +13,33 @@ contextBridge.exposeInMainWorld("romeDesktop", {
   getDbPath: () => ipcRenderer.invoke("get-db-path"),
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
   isDesktop: true,
+  akira: {
+    getStatus: () => ipcRenderer.invoke("rome:akira:status"),
+    activate: () => ipcRenderer.invoke("rome:akira:activate"),
+    standby: () => ipcRenderer.invoke("rome:akira:standby"),
+    interrupt: () => ipcRenderer.invoke("rome:akira:interrupt"),
+    submitText: (text: string) => ipcRenderer.invoke("rome:akira:submit-text", text),
+    feedWake: (pcm: string, sampleRate = 16_000) => ipcRenderer.invoke("rome:akira:wake-feed", pcm, sampleRate),
+    transcribe: (dataUrl: string, mimeType: string) => ipcRenderer.invoke("rome:akira:transcribe", dataUrl, mimeType),
+    respondToApproval: (id: string, approved: boolean) => ipcRenderer.invoke("rome:akira:approval-response", id, approved),
+    updateSettings: (patch: unknown) => ipcRenderer.invoke("rome:akira:update-settings", patch),
+    setSecret: (name: string, value: string) => ipcRenderer.invoke("rome:akira:set-secret", name, value),
+    installRuntime: () => ipcRenderer.invoke("rome:akira:install-runtime"),
+    getActivity: () => ipcRenderer.invoke("rome:akira:activity"),
+    getDiagnostics: () => ipcRenderer.invoke("rome:akira:diagnostics"),
+    getCapabilities: () => ipcRenderer.invoke("rome:akira:capabilities"),
+    callCapability: (name: string, args: Record<string, unknown>) => ipcRenderer.invoke("rome:akira:call-capability", name, args),
+    resolveRendererCommand: (result: unknown) => ipcRenderer.invoke("rome:akira:renderer-command-result", result),
+    shortcut: (action: string) => ipcRenderer.invoke("rome:akira:shortcut", action),
+    onStatus: (listener: (value: unknown) => void) => on(AKIRA_CHANNELS.status, listener),
+    onTranscript: (listener: (value: unknown) => void) => on(AKIRA_CHANNELS.transcript, listener),
+    onAudio: (listener: (value: unknown) => void) => on(AKIRA_CHANNELS.audio, listener),
+    onApproval: (listener: (value: unknown) => void) => on(AKIRA_CHANNELS.approval, listener),
+    onDataChanged: (listener: (value: unknown) => void) => on(AKIRA_CHANNELS.dataChanged, listener),
+    onRendererCommand: (listener: (value: unknown) => void) => on(AKIRA_CHANNELS.rendererCommand, listener),
+    onWakeDetected: (listener: (value: unknown) => void) => on(AKIRA_CHANNELS.wakeDetected, listener),
+    onShortcut: (listener: (value: unknown) => void) => on("rome:akira:shortcut", listener),
+  },
   browser: {
     initialize: () => ipcRenderer.invoke("rome:browser:initialize"),
     createTab: (url?: string, kind?: string) => ipcRenderer.invoke("rome:browser:create-tab", url, kind),
