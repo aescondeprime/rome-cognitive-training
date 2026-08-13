@@ -62,6 +62,9 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.clos
     assert.doesNotMatch(config, /capture: client/);
     assert.match(config, /sensitivity: 0\.65/);
     assert.match(config, /start_new_session: false/);
+    const soul = readFileSync(path.join(root, "hermes", "SOUL.md"), "utf8");
+    assert.match(soul, /grammatically complete paragraphs/);
+    assert.match(soul, /Idea Workshop route \/idea-workshop/);
     const manifest = JSON.parse(readFileSync(path.join(root, "runtime-manifest.json"), "utf8"));
     assert.equal(manifest.requiredHermesVersion, "0.20.0");
   } finally {

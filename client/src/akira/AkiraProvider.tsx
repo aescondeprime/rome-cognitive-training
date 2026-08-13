@@ -22,6 +22,7 @@ import type {
 import { queryClient } from "@/lib/queryClient";
 import { loadFinancialState, saveFinancialState } from "@/lib/financialStore";
 import { makeId, projectFinancials, toDateInput, type ExpenseKind, type Recurrence } from "@/lib/financialEngine";
+import { publishInputDiagnostics } from "./input-diagnostics";
 
 interface AkiraContextValue {
   status: AkiraStatus | null;
@@ -69,6 +70,9 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const lastSpeechRef = useRef(0);
   const recordingStartedRef = useRef(0);
   const discardRecordingRef = useRef(false);
+  const speechFramesRef = useRef(0);
+  const noiseFloorRef = useRef(0.004);
+  const lastMeterUpdateRef = useRef(0);
   const bargeFramesRef = useRef(0);
   const playbackContextRef = useRef<AudioContext | null>(null);
   const playbackTimeRef = useRef(0);
@@ -124,20 +128,39 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
 
   const finishUtterance = useCallback(async (recorder: MediaRecorder) => {
     if (!bridge) return;
-    const shouldDiscard = discardRecordingRef.current || !speechSeenRef.current;
+    const explicitlyDiscarded = discardRecordingRef.current;
+    const shouldDiscard = explicitlyDiscarded || !speechSeenRef.current;
     const chunks = recordChunksRef.current;
     recordChunksRef.current = [];
     if (shouldDiscard || !chunks.length) {
+      if (!explicitlyDiscarded && !speechSeenRef.current) {
+        publishInputDiagnostics({
+          phase: "error",
+          speechDetected: false,
+          lastError: "No speech was detected. Check the input meter and microphone permission, then try again.",
+        });
+      }
       if (statusRef.current?.state === "LISTENING") window.setTimeout(() => startRecorder(), 80);
       return;
     }
     const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
     try {
+      publishInputDiagnostics({ phase: "transcribing", lastError: "" });
       const dataUrl = await blobToDataUrl(blob);
       const result = await bridge.transcribe(dataUrl, blob.type || "audio/webm");
-      if (result.text.trim()) await bridge.submitText(result.text.trim());
-      else if (statusRef.current?.state === "LISTENING") window.setTimeout(() => startRecorder(), 80);
-    } catch {
+      const text = result.text.trim();
+      if (text) {
+        publishInputDiagnostics({ phase: "recognized", lastTranscript: text, lastError: "" });
+        await bridge.submitText(text);
+      } else {
+        publishInputDiagnostics({ phase: "error", lastError: "Audio was received, but no words were recognized." });
+        if (statusRef.current?.state === "LISTENING") window.setTimeout(() => startRecorder(), 80);
+      }
+    } catch (error) {
+      publishInputDiagnostics({
+        phase: "error",
+        lastError: error instanceof Error ? error.message : String(error),
+      });
       if (statusRef.current?.state === "LISTENING") window.setTimeout(() => startRecorder(), 200);
     }
   }, [bridge]);
@@ -151,9 +174,11 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     recorderRef.current = recorder;
     recordChunksRef.current = [];
     speechSeenRef.current = false;
+    speechFramesRef.current = 0;
     discardRecordingRef.current = false;
     recordingStartedRef.current = performance.now();
     lastSpeechRef.current = performance.now();
+    publishInputDiagnostics({ phase: "recording", speechDetected: false });
     recorder.ondataavailable = event => { if (event.data.size) recordChunksRef.current.push(event.data); };
     recorder.onstop = () => {
       if (recorderRef.current === recorder) recorderRef.current = null;
@@ -176,6 +201,17 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     for (let index = 0; index < input.length; index += 1) sum += input[index] * input[index];
     const rms = Math.sqrt(sum / Math.max(1, input.length));
     const now = performance.now();
+    const speechThreshold = Math.max(0.011, Math.min(0.03, noiseFloorRef.current * 3));
+    if (now - lastMeterUpdateRef.current >= 100) {
+      lastMeterUpdateRef.current = now;
+      publishInputDiagnostics({
+        rms,
+        level: Math.min(1, rms / 0.08),
+        threshold: speechThreshold,
+        phase: speechSeenRef.current ? "speech" : recorderRef.current?.state === "recording" ? "recording" : "armed",
+        speechDetected: speechSeenRef.current,
+      });
+    }
 
     const playbackContext = playbackContextRef.current;
     const playbackActive = Boolean(
@@ -184,9 +220,11 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
       playbackTimeRef.current > playbackContext.currentTime + 0.015,
     );
     if ((current.state === "SPEAKING" || playbackActive) && current.settings.input.bargeInEnabled) {
-      bargeFramesRef.current = rms > 0.065 ? bargeFramesRef.current + 1 : 0;
+      const bargeThreshold = Math.max(0.035, noiseFloorRef.current * 5);
+      bargeFramesRef.current = rms > bargeThreshold ? bargeFramesRef.current + 1 : 0;
       if (bargeFramesRef.current >= 4) {
         bargeFramesRef.current = 0;
+        publishInputDiagnostics({ phase: "speech", speechDetected: true, lastError: "" });
         cancelPlayback();
         void bridge.interrupt().then(() => window.setTimeout(startRecorder, 50));
       }
@@ -194,35 +232,52 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     }
     bargeFramesRef.current = 0;
     if (current.state !== "LISTENING" || recorderRef.current?.state !== "recording") return;
-    if (rms > 0.025) {
+    if (!speechSeenRef.current) {
+      noiseFloorRef.current = (noiseFloorRef.current * 0.98) + (Math.min(rms, 0.02) * 0.02);
+      speechFramesRef.current = rms > speechThreshold ? speechFramesRef.current + 1 : 0;
+    }
+    if (speechFramesRef.current >= 3 || (speechSeenRef.current && rms > Math.max(0.008, speechThreshold * 0.7))) {
       speechSeenRef.current = true;
       lastSpeechRef.current = now;
+      publishInputDiagnostics({ phase: "speech", speechDetected: true, lastError: "" });
     }
     const silenceMs = current.settings.input.silenceMs;
     if (speechSeenRef.current && now - lastSpeechRef.current >= silenceMs) {
       stopRecorder(false);
     } else if (!speechSeenRef.current && now - recordingStartedRef.current >= 15_000) {
-      stopRecorder(true);
+      stopRecorder(false);
     }
   }, [bridge, cancelPlayback, startRecorder, stopRecorder]);
 
   const armMicrophone = useCallback(async () => {
     if (streamRef.current) {
+      if (captureContextRef.current?.state === "suspended") await captureContextRef.current.resume();
       setMicrophoneArmed(true);
+      publishInputDiagnostics({ phase: "armed" });
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone capture is unavailable.");
+    publishInputDiagnostics({ phase: "requesting", lastError: "" });
     const deviceId = statusRef.current?.settings.input.microphoneId;
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        deviceId: deviceId ? { exact: deviceId } : undefined,
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video: false,
-    });
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: deviceId ? { exact: deviceId } : undefined,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
+    } catch (error) {
+      publishInputDiagnostics({
+        phase: "error",
+        lastError: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     streamRef.current = stream;
     const context = new AudioContext({ latencyHint: "interactive" });
     captureContextRef.current = context;
@@ -238,6 +293,11 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     captureNodeRef.current = node;
     node.port.onmessage = event => handleCaptureSamples(new Float32Array(event.data));
     setMicrophoneArmed(true);
+    publishInputDiagnostics({
+      phase: "armed",
+      deviceLabel: stream.getAudioTracks()[0]?.label || "Default microphone",
+      lastError: "",
+    });
   }, [handleCaptureSamples]);
 
   const disarmMicrophone = useCallback(async () => {
@@ -255,6 +315,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     stream?.getTracks().forEach(track => track.stop());
     if (context && context.state !== "closed") await context.close().catch(() => undefined);
     setMicrophoneArmed(false);
+    publishInputDiagnostics({ phase: "standby", rms: 0, level: 0, speechDetected: false });
   }, [stopRecorder]);
 
   const activate = useCallback(async () => {
@@ -282,8 +343,10 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const interrupt = useCallback(async () => {
     if (!bridge) return;
     cancelPlayback();
-    setStatus(await bridge.interrupt());
-  }, [bridge, cancelPlayback]);
+    const next = await bridge.interrupt();
+    setStatus(next);
+    await armMicrophone();
+  }, [armMicrophone, bridge, cancelPlayback]);
 
   const submitText = useCallback(async (text: string) => {
     if (!bridge || !text.trim()) return;
@@ -358,10 +421,15 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
       const wait = context ? Math.max(120, (playbackTimeRef.current - context.currentTime) * 1_000 + 80) : 120;
       continueTimerRef.current = window.setTimeout(() => {
         continueTimerRef.current = null;
-        if (statusRef.current?.state === "AWAKE_IDLE") void bridge.activate();
+        if (statusRef.current?.state === "AWAKE_IDLE") {
+          void activate().catch(error => publishInputDiagnostics({
+            phase: "error",
+            lastError: error instanceof Error ? error.message : String(error),
+          }));
+        }
       }, wait);
     }
-  }, [bridge, microphoneArmed, startRecorder, status, stopRecorder]);
+  }, [activate, bridge, microphoneArmed, startRecorder, status, stopRecorder]);
 
   useEffect(() => {
     const onVisibility = () => {

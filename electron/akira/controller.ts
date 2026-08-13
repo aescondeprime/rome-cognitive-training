@@ -16,6 +16,7 @@ import {
 import { AkiraActivityStore } from "./activity-store";
 import { createAkiraAppManifest } from "./app-manifest";
 import { AkiraCapabilityRegistry } from "./capability-registry";
+import { resolveDirectNavigation } from "./direct-navigation";
 import { ElevenLabsVoice } from "./elevenlabs-voice";
 import { HermesGatewayClient, type GatewayEvent } from "./hermes-gateway";
 import { AkiraHostBridge } from "./host-bridge";
@@ -69,6 +70,7 @@ export class AkiraController {
   private turnInFlight = false;
   private turnTimer: NodeJS.Timeout | null = null;
   private wakeHealthTimer: NodeJS.Timeout | null = null;
+  private wakeStatus: Record<string, unknown> | null = null;
 
   constructor(private readonly options: ControllerOptions) {
     this.settings = new AkiraSettingsStore(path.join(options.root, "config"), {
@@ -126,7 +128,10 @@ export class AkiraController {
 
   async activate(): Promise<AkiraStatus> {
     await this.ensureReady();
-    if (this.wakeStarted) await this.gateway.request("wake.pause", {}).catch(() => undefined);
+    if (this.wakeStarted) {
+      await this.gateway.request("wake.pause", {}).catch(() => undefined);
+      this.wakeStatus = { ...this.wakeStatus, listening: false, paused: true, checkedAt: Date.now() };
+    }
     this.transition("LISTENING", "Akira is listening.");
     return this.status();
   }
@@ -149,7 +154,10 @@ export class AkiraController {
             if (result.resumed !== true) {
               this.wakeStarted = false;
               void this.startWakeCapture();
-            } else this.scheduleWakeHealthCheck();
+            } else {
+              this.wakeStatus = { ...this.wakeStatus, ...result, listening: true, paused: false, checkedAt: Date.now() };
+              this.scheduleWakeHealthCheck();
+            }
           })
           .catch(() => { this.wakeStarted = false; void this.startWakeCapture(); });
       }
@@ -178,6 +186,28 @@ export class AkiraController {
     }
     if (this.turnInFlight) throw new Error("Akira is still finishing the current response.");
     if (this.state.state === "SPEAKING") await this.interrupt();
+    if (this.state.state === "DORMANT" && this.wakeStarted) {
+      await this.gateway.request("wake.pause", {}).catch(() => undefined);
+      this.wakeStatus = { ...this.wakeStatus, listening: false, paused: true, checkedAt: Date.now() };
+    }
+    const navigation = resolveDirectNavigation(text);
+    if (navigation) {
+      this.lastUserText = text;
+      this.transcript({ role: "user", text, final: true, at: Date.now() });
+      this.transition("ACTING", `Opening ${navigation.label}.`);
+      try {
+        await this.registry!.call("rome.navigate", { route: navigation.route });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.transcript({ role: "system", text: message, final: true, at: Date.now() });
+        this.state.force("ERROR", message);
+        throw error;
+      }
+      this.lastAssistantText = `Opening ${navigation.label}.`;
+      this.transcript({ role: "assistant", text: this.lastAssistantText, final: true, at: Date.now() });
+      void this.speak(this.lastAssistantText);
+      return this.status();
+    }
     if (!this.sessionId) {
       const session = await this.gateway.request<Record<string, any>>("session.create", {
         cols: 120,
@@ -297,6 +327,7 @@ export class AkiraController {
       logs: this.runtime?.logs.slice(-120) ?? [],
       capabilityCount: this.registry?.list().length ?? 0,
       wakeStarted: this.wakeStarted,
+      wakeStatus: this.wakeStatus,
       turnInFlight: this.turnInFlight,
       pendingApprovals: this.pendingApprovals.size,
       paths: { root: this.options.root },
@@ -362,6 +393,7 @@ export class AkiraController {
     this.runtime.on("degraded", status => {
       this.gateway.disconnect();
       this.wakeStarted = false;
+      this.wakeStatus = null;
       this.state.force("UNAVAILABLE", status.message);
     });
     this.publishStatus();
@@ -385,6 +417,7 @@ export class AkiraController {
         if (!this.runtime) return;
         this.gateway.disconnect();
         this.wakeStarted = false;
+        this.wakeStatus = null;
         this.sessionId = null;
         this.settleTurn();
         this.runtime.stop();
@@ -439,9 +472,11 @@ export class AkiraController {
         throw new Error(String(result.hint || result.reason || "Hermes did not arm wake detection."));
       }
       this.wakeStarted = true;
+      this.wakeStatus = { ...result, listening: true, paused: false, checkedAt: Date.now() };
       this.scheduleWakeHealthCheck();
     } catch (error) {
       this.wakeStarted = false;
+      this.wakeStatus = { error: error instanceof Error ? error.message : String(error), checkedAt: Date.now() };
       this.reason = `Wake word unavailable: ${error instanceof Error ? error.message : String(error)}`;
       this.publishStatus();
     }
@@ -451,6 +486,7 @@ export class AkiraController {
     this.gateway.on("event", (event: GatewayEvent) => this.handleGatewayEvent(event));
     this.gateway.on("disconnect", () => {
       this.wakeStarted = false;
+      this.wakeStatus = null;
       this.sessionId = null;
       this.settleTurn();
       this.clearWakeHealthTimer();
@@ -467,6 +503,7 @@ export class AkiraController {
       case "wake.detected":
         if (this.state.state === "DORMANT") {
           void this.gateway.request("wake.pause", {}).catch(() => undefined);
+          this.wakeStatus = { ...this.wakeStatus, listening: false, paused: true, detectedAt: Date.now() };
           this.transition("WAKE_DETECTED", "Wake word detected locally.");
           this.send(AKIRA_CHANNELS.wakeDetected, { phrase: event.phrase ?? "Akira", at: Date.now() });
           this.transition("LISTENING", "Akira is listening.");
@@ -642,6 +679,7 @@ export class AkiraController {
       if (!this.wakeStarted || this.state.state !== "DORMANT" || !this.gateway.connected) return;
       void this.gateway.request<Record<string, unknown>>("wake.status", {})
         .then(status => {
+          this.wakeStatus = { ...status, checkedAt: Date.now() };
           if (status.listening !== true) {
             this.wakeStarted = false;
             this.reason = `Wake word unavailable: ${String(status.hint || "Hermes lost access to the microphone.")}`;
@@ -652,7 +690,15 @@ export class AkiraController {
           }
           this.publishStatus();
         })
-        .catch(() => undefined);
+        .catch(error => {
+          this.wakeStatus = { error: error instanceof Error ? error.message : String(error), checkedAt: Date.now() };
+          this.publishStatus();
+        })
+        .finally(() => {
+          if (this.wakeStarted && this.state.state === "DORMANT" && this.gateway.connected) {
+            this.scheduleWakeHealthCheck();
+          }
+        });
     }, 12_000);
     this.wakeHealthTimer.unref?.();
   }
