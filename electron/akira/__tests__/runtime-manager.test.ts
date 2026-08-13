@@ -12,6 +12,10 @@ test("managed runtime can be replaced without a stale exit degrading the replace
   writeFileSync(executable, `#!/usr/bin/env node
 const http = require('node:http');
 if (process.argv.includes('--version')) { console.log('fake-hermes 1.0'); process.exit(0); }
+require('node:fs').writeFileSync(${JSON.stringify(path.join(root, "runtime-env.json"))}, JSON.stringify({
+  token: process.env.HERMES_DASHBOARD_SESSION_TOKEN,
+  desktop: process.env.HERMES_DESKTOP,
+}));
 const index = process.argv.indexOf('--port');
 const port = Number(process.argv[index + 1]);
 const server = http.createServer((req, res) => { res.statusCode = req.url === '/api/health' ? 200 : 404; res.end('{}'); });
@@ -32,10 +36,16 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.clos
     bridgeToken: "bridge-token",
     settings,
     electronExecutable: process.execPath,
+    gatewayToken: "gateway/token + private",
   });
   try {
     await manager.initialize();
     assert.equal(manager.status.phase, "ready");
+    assert.match(manager.gatewayUrl ?? "", /\/api\/ws\?token=gateway%2Ftoken%20%2B%20private$/);
+    assert.deepEqual(JSON.parse(readFileSync(path.join(root, "runtime-env.json"), "utf8")), {
+      token: "gateway/token + private",
+      desktop: "1",
+    });
     const firstUpdatedAt = manager.status.updatedAt;
     await manager.start(executable);
     assert.equal(manager.status.phase, "ready");
