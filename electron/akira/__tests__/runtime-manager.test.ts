@@ -58,6 +58,8 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.clos
     assert.doesNotMatch(config, /provider-super-secret/);
     assert.match(config, /mcp-rome/);
     assert.match(config, /disabled_toolsets:/);
+    assert.match(config, /provider: sherpa/);
+    assert.doesNotMatch(config, /capture: client/);
     assert.match(config, /sensitivity: 0\.65/);
     assert.match(config, /start_new_session: false/);
     const manifest = JSON.parse(readFileSync(path.join(root, "runtime-manifest.json"), "utf8"));

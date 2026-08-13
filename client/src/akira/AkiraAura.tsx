@@ -94,6 +94,7 @@ export default function AkiraAura() {
   if (!window.romeDesktop?.isDesktop) return null;
   const state = status?.state ?? "UNAVAILABLE";
   const label = stateLabel[state];
+  const turnBusy = state === "PROCESSING" || state === "ACTING" || state === "AWAITING_APPROVAL";
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -104,6 +105,7 @@ export default function AkiraAura() {
   };
 
   const submit = () => run(async () => {
+    if (turnBusy) return;
     const text = message.trim();
     if (!text) return;
     setMessage("");
@@ -184,7 +186,7 @@ export default function AkiraAura() {
                   {akira.transcripts.length === 0 ? (
                     <div className="akira-empty">
                       <ShieldCheck size={24} />
-                      <p>Say “Akira” after arming the microphone, or type below.</p>
+                      <p>While Akira is in Standby, say “Akira” or type below.</p>
                       <small>Dormant audio stays on-device. Control+Escape returns to standby.</small>
                     </div>
                   ) : akira.transcripts.map((entry, index) => (
@@ -204,10 +206,10 @@ export default function AkiraAura() {
                     placeholder="Ask Akira to work in ROME…"
                     rows={2}
                   />
-                  <button disabled={busy || !message.trim() || !status?.available} onClick={() => void submit()} aria-label="Send"><Send size={14} /></button>
+                  <button disabled={busy || turnBusy || !message.trim() || !status?.available} onClick={() => void submit()} aria-label="Send"><Send size={14} /></button>
                 </div>
                 <div className="akira-actions">
-                  <button disabled={busy || !status?.available} onClick={() => void run(akira.activate)}><Mic size={12} /> Listen</button>
+                  <button disabled={busy || turnBusy || !status?.available} onClick={() => void run(akira.activate)}><Mic size={12} /> Listen</button>
                   <button disabled={busy || state === "DORMANT"} onClick={() => void run(akira.standby)}><MicOff size={12} /> Standby</button>
                 </div>
               </section>

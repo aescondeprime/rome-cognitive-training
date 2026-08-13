@@ -15,7 +15,7 @@ No LLM weights, Whisper model, wake asset, Python environment, or Hermes runtime
 
 ## Latency path
 
-Wake capture uses an `AudioWorklet` to avoid main-thread polling. Dormant frames are downsampled and sent in 1,280-sample chunks. Active VAD runs on the same frames, while `MediaRecorder` produces a compressed utterance for local transcription. ElevenLabs PCM is scheduled ahead by roughly 25 ms rather than waiting for a complete audio file.
+Hermes's native Sherpa listener owns standby wake capture. After a wake event, an `AudioWorklet` performs active VAD while `MediaRecorder` produces a compressed utterance for local transcription. The renderer releases that stream before Hermes resumes standby capture. ElevenLabs PCM is scheduled ahead by roughly 25 ms rather than waiting for a complete audio file.
 
 The live ROME context is capped and parallelized. Recent notes/memory are limited, native browser content is absent by default, and readable page text is capped at 50,000 characters when explicitly enabled. Capability payloads and wake/audio IPC frames have hard size limits.
 
@@ -47,4 +47,3 @@ Before release, verify on real M2 hardware:
 - signed/notarized DMG microphone entitlement behavior.
 
 Those real-device checks cannot be established by container builds alone and should be recorded as release QA rather than inferred from unit tests.
-

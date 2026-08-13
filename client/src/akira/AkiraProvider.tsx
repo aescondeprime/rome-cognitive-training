@@ -69,7 +69,6 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const lastSpeechRef = useRef(0);
   const recordingStartedRef = useRef(0);
   const discardRecordingRef = useRef(false);
-  const wakeSamplesRef = useRef<number[]>([]);
   const bargeFramesRef = useRef(0);
   const playbackContextRef = useRef<AudioContext | null>(null);
   const playbackTimeRef = useRef(0);
@@ -170,24 +169,13 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     recorder.stop();
   }, []);
 
-  const handleCaptureSamples = useCallback((input: Float32Array, inputRate: number) => {
+  const handleCaptureSamples = useCallback((input: Float32Array) => {
     const current = statusRef.current;
     if (!current || !bridge) return;
     let sum = 0;
     for (let index = 0; index < input.length; index += 1) sum += input[index] * input[index];
     const rms = Math.sqrt(sum / Math.max(1, input.length));
     const now = performance.now();
-
-    if (current.state === "DORMANT" && current.settings.input.wakeWordEnabled) {
-      const downsampled = downsample(input, inputRate, 16_000);
-      wakeSamplesRef.current.push(...downsampled);
-      while (wakeSamplesRef.current.length >= 1_280) {
-        const frame = wakeSamplesRef.current.splice(0, 1_280);
-        void bridge.feedWake(pcm16Base64(frame), 16_000).catch(() => undefined);
-      }
-    } else {
-      wakeSamplesRef.current = [];
-    }
 
     const playbackContext = playbackContextRef.current;
     const playbackActive = Boolean(
@@ -248,14 +236,37 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     silent.gain.value = 0;
     source.connect(node).connect(silent).connect(context.destination);
     captureNodeRef.current = node;
-    node.port.onmessage = event => handleCaptureSamples(new Float32Array(event.data), context.sampleRate);
+    node.port.onmessage = event => handleCaptureSamples(new Float32Array(event.data));
     setMicrophoneArmed(true);
   }, [handleCaptureSamples]);
 
+  const disarmMicrophone = useCallback(async () => {
+    stopRecorder(true);
+    const node = captureNodeRef.current;
+    const context = captureContextRef.current;
+    const stream = streamRef.current;
+    captureNodeRef.current = null;
+    captureContextRef.current = null;
+    streamRef.current = null;
+    if (node) {
+      node.port.onmessage = null;
+      try { node.disconnect(); } catch { /* already disconnected */ }
+    }
+    stream?.getTracks().forEach(track => track.stop());
+    if (context && context.state !== "closed") await context.close().catch(() => undefined);
+    setMicrophoneArmed(false);
+  }, [stopRecorder]);
+
   const activate = useCallback(async () => {
     if (!bridge) return;
-    await armMicrophone();
-    setStatus(await bridge.activate());
+    const next = await bridge.activate();
+    setStatus(next);
+    try {
+      await armMicrophone();
+    } catch (error) {
+      setStatus(await bridge.standby());
+      throw error;
+    }
   }, [armMicrophone, bridge]);
 
   const standby = useCallback(async () => {
@@ -264,8 +275,9 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     continueTimerRef.current = null;
     stopRecorder(true);
     cancelPlayback();
+    await disarmMicrophone();
     setStatus(await bridge.standby());
-  }, [bridge, cancelPlayback, stopRecorder]);
+  }, [bridge, cancelPlayback, disarmMicrophone, stopRecorder]);
 
   const interrupt = useCallback(async () => {
     if (!bridge) return;
@@ -311,7 +323,11 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
       }),
       bridge.onDataChanged(handleDataChanged),
       bridge.onRendererCommand(value => void handleRendererCommand(value)),
-      bridge.onWakeDetected(() => window.setTimeout(startRecorder, 30)),
+      bridge.onWakeDetected(() => {
+        void armMicrophone()
+          .then(() => window.setTimeout(startRecorder, 30))
+          .catch(() => void bridge.standby().then(value => setStatus(value)));
+      }),
       bridge.onShortcut(value => { if (value?.action === "standby") void standby(); }),
     ];
     const keydown = (event: KeyboardEvent) => {
@@ -328,7 +344,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
       remove.forEach(dispose => dispose());
       window.removeEventListener("keydown", keydown, true);
     };
-  }, [bridge, handleDataChanged, handleRendererCommand, playAudio, standby, startRecorder]);
+  }, [armMicrophone, bridge, handleDataChanged, handleRendererCommand, playAudio, standby, startRecorder]);
 
   useEffect(() => {
     if (status?.state === "LISTENING" && microphoneArmed) {
@@ -351,8 +367,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     const onVisibility = () => {
       const current = statusRef.current;
       if (!current || document.visibilityState === "visible" || current.settings.input.wakeWhenUnfocused) return;
-      if (current.state === "DORMANT") wakeSamplesRef.current = [];
-      else void standby();
+      if (current.state !== "DORMANT") void standby();
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
@@ -362,11 +377,9 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     if (continueTimerRef.current) window.clearTimeout(continueTimerRef.current);
     stopRecorder(true);
     cancelPlayback();
-    captureNodeRef.current?.disconnect();
-    void captureContextRef.current?.close();
+    void disarmMicrophone();
     void playbackContextRef.current?.close();
-    streamRef.current?.getTracks().forEach(track => track.stop());
-  }, [cancelPlayback, stopRecorder]);
+  }, [cancelPlayback, disarmMicrophone, stopRecorder]);
 
   const value = useMemo<AkiraContextValue>(() => ({
     status, transcripts, approval, microphoneArmed, panelOpen, setPanelOpen,
@@ -504,33 +517,6 @@ async function runRendererCommand(action: string, args: Record<string, unknown>)
     };
   }
   throw new Error(`Unsupported renderer command: ${action}`);
-}
-
-function downsample(input: Float32Array, inputRate: number, outputRate: number): number[] {
-  if (inputRate === outputRate) return Array.from(input);
-  const ratio = inputRate / outputRate;
-  const count = Math.floor(input.length / ratio);
-  const output = new Array<number>(count);
-  for (let index = 0; index < count; index += 1) {
-    const start = Math.floor(index * ratio);
-    const end = Math.max(start + 1, Math.floor((index + 1) * ratio));
-    let sum = 0;
-    for (let source = start; source < Math.min(input.length, end); source += 1) sum += input[source];
-    output[index] = sum / Math.max(1, end - start);
-  }
-  return output;
-}
-
-function pcm16Base64(samples: number[]): string {
-  const bytes = new Uint8Array(samples.length * 2);
-  const view = new DataView(bytes.buffer);
-  for (let index = 0; index < samples.length; index += 1) {
-    const clamped = Math.max(-1, Math.min(1, samples[index]));
-    view.setInt16(index * 2, clamped < 0 ? clamped * 32768 : clamped * 32767, true);
-  }
-  let binary = "";
-  for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]);
-  return btoa(binary);
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {

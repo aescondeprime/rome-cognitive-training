@@ -37,7 +37,7 @@ The generated Hermes profile uses:
 
 The state machine is explicit: `DORMANT`, `WAKE_DETECTED`, `LISTENING`, `PROCESSING`, `SPEAKING`, `ACTING`, `AWAITING_APPROVAL`, `AWAKE_IDLE`, `DEACTIVATING`, `ERROR`, and `UNAVAILABLE`.
 
-The renderer arms the microphone only after a user gesture. In standby, an `AudioWorklet` downsamples frames to 16 kHz and feeds local wake detection; dormant audio is never sent to a cloud service. Once active, VAD ends an utterance after configured silence, Hermes transcribes it locally, and only text plus a bounded live ROME snapshot goes to the chosen cloud model.
+Hermes owns the local microphone while Akira is in standby and runs Sherpa wake detection entirely on-device. On detection, Hermes releases the device before the renderer opens its microphone stream for the spoken request. ROME reverses that handoff on standby so two capture systems never contend for the Mac's input device. Once active, VAD ends an utterance after configured silence, Hermes transcribes it locally, and only text plus a bounded live ROME snapshot goes to the chosen cloud model.
 
 ElevenLabs WebSocket output uses `eleven_flash_v2_5` and `pcm_24000` by default. PCM chunks are scheduled into a low-latency Web Audio queue. Voice activity during `SPEAKING` cancels queued audio and interrupts the Hermes session (barge-in). After a response, Akira returns to `LISTENING`; silence does not end the conversation. Control+Escape explicitly returns to wake-word standby, including while a native `WebContentsView` has focus.
 
@@ -62,4 +62,3 @@ Activity records are profile-aware and bounded. Reversible mutations record comp
 - `electron/akira/host-bridge.ts` and `mcp-server.ts` — authenticated MCP boundary.
 - `client/src/akira/AkiraProvider.tsx` — audio, renderer commands, invalidation.
 - `client/src/akira/AkiraAura.tsx` — Aura, console, approvals, settings, memory, and diagnostics.
-
