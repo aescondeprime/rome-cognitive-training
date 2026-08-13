@@ -53,6 +53,43 @@ interface RomeBrowserBootstrap {
   fullscreen: boolean;
 }
 
+type RomeAkiraStatus = import("@shared/akira").AkiraStatus;
+type RomeAkiraSettings = import("@shared/akira").AkiraSettings;
+type RomeAkiraApproval = import("@shared/akira").AkiraApprovalRequest;
+type RomeAkiraAudioEvent = import("@shared/akira").AkiraAudioEvent;
+type RomeAkiraTranscript = import("@shared/akira").AkiraTranscriptEvent;
+type RomeAkiraDataChanged = import("@shared/akira").AkiraDataChanged;
+type RomeAkiraRendererCommand = import("@shared/akira").AkiraRendererCommand;
+type RomeAkiraRendererCommandResult = import("@shared/akira").AkiraRendererCommandResult;
+
+interface RomeAkiraBridge {
+  getStatus: () => Promise<RomeAkiraStatus>;
+  activate: () => Promise<RomeAkiraStatus>;
+  standby: () => Promise<RomeAkiraStatus>;
+  interrupt: () => Promise<RomeAkiraStatus>;
+  submitText: (text: string) => Promise<RomeAkiraStatus>;
+  feedWake: (pcmBase64: string, sampleRate?: number) => Promise<void>;
+  transcribe: (dataUrl: string, mimeType: string) => Promise<{ text: string }>;
+  respondToApproval: (id: string, approved: boolean) => Promise<void>;
+  updateSettings: (patch: Partial<RomeAkiraSettings>) => Promise<RomeAkiraStatus>;
+  setSecret: (name: string, value: string) => Promise<RomeAkiraStatus>;
+  installRuntime: () => Promise<RomeAkiraStatus>;
+  getActivity: () => Promise<import("@shared/akira").AkiraActivityEntry[]>;
+  getDiagnostics: () => Promise<Record<string, unknown>>;
+  getCapabilities: () => Promise<import("@shared/akira").AkiraCapabilityDescriptor[]>;
+  callCapability: (name: string, args: Record<string, unknown>) => Promise<unknown>;
+  resolveRendererCommand: (result: RomeAkiraRendererCommandResult) => Promise<void>;
+  shortcut: (action: string) => Promise<void>;
+  onStatus: (listener: (value: RomeAkiraStatus) => void) => () => void;
+  onTranscript: (listener: (value: RomeAkiraTranscript) => void) => () => void;
+  onAudio: (listener: (value: RomeAkiraAudioEvent) => void) => () => void;
+  onApproval: (listener: (value: RomeAkiraApproval) => void) => () => void;
+  onDataChanged: (listener: (value: RomeAkiraDataChanged) => void) => () => void;
+  onRendererCommand: (listener: (value: RomeAkiraRendererCommand) => void) => () => void;
+  onWakeDetected: (listener: (value: unknown) => void) => () => void;
+  onShortcut: (listener: (value: { action?: string }) => void) => () => void;
+}
+
 interface RomeBrowserBridge {
   initialize: () => Promise<RomeBrowserBootstrap>;
   createTab: (url?: string, kind?: "default" | "incognito" | `profile:${string}`) => Promise<RomeBrowserTab>;
@@ -90,6 +127,7 @@ interface Window {
     getDbPath: () => Promise<string>;
     getAppVersion: () => Promise<string>;
     isDesktop: true;
+    akira: RomeAkiraBridge;
     browser: RomeBrowserBridge;
   };
 }

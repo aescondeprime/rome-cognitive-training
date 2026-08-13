@@ -124,6 +124,12 @@ export default function FundingDashboard() {
     setState(loadFinancialState(profileId));
   }, [profileId]);
 
+  useEffect(() => {
+    const refresh = () => setState(loadFinancialState(profileId));
+    window.addEventListener("rome:finance:refresh", refresh);
+    return () => window.removeEventListener("rome:finance:refresh", refresh);
+  }, [profileId]);
+
   const updateState = useCallback((next: FinancialState) => {
     setState(next);
     saveFinancialState(next, profileId);

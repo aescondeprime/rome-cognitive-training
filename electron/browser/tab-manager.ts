@@ -72,6 +72,7 @@ export class TabManager {
     private readonly downloads: DownloadManager,
     private readonly storage: BrowserStorage,
     private readonly emit: (channel: string, payload: unknown) => void,
+    private readonly getAkiraShortcut: () => "Control+Escape" | "Control+Shift+Escape" = () => "Control+Escape",
   ) {}
 
   initialize(): BrowserTabState[] {
@@ -195,6 +196,19 @@ export class TabManager {
       }
     });
     contents.on("before-input-event", (event, input) => {
+      if (
+        input.type === "keyDown" &&
+        input.key === "Escape" &&
+        input.control &&
+        input.shift === (this.getAkiraShortcut() === "Control+Shift+Escape") &&
+        !input.alt &&
+        !input.meta &&
+        !input.isAutoRepeat
+      ) {
+        event.preventDefault();
+        this.emit("rome:akira:shortcut", { action: "standby" });
+        return;
+      }
       const commandOrControl = process.platform === "darwin" ? input.meta : input.control;
       if (input.type === "keyDown" && commandOrControl && !input.alt && !input.isAutoRepeat) {
         if (input.key.toLowerCase() === "t" && !input.shift) {
@@ -392,6 +406,42 @@ export class TabManager {
 
   getStates(): BrowserTabState[] {
     return Array.from(this.tabs.values(), ({ state }) => ({ ...state }));
+  }
+
+  getActiveState(): BrowserTabState | null {
+    const tab = this.activeId ? this.tabs.get(this.activeId) : null;
+    return tab ? { ...tab.state } : null;
+  }
+
+  async readActivePage(maxCharacters = 24_000): Promise<{
+    title: string;
+    url: string;
+    text: string;
+    truncated: boolean;
+    trust: "untrusted-web-content";
+  }> {
+    const tab = this.activeId ? this.tabs.get(this.activeId) : null;
+    if (!tab || tab.view.webContents.isDestroyed()) throw new Error("There is no readable active browser tab.");
+    const safeLimit = Math.max(1_000, Math.min(50_000, Math.floor(maxCharacters)));
+    const result = await tab.view.webContents.executeJavaScript(`(() => {
+      const root = document.querySelector('main, article, [role="main"]') || document.body;
+      if (!root) return { title: document.title || '', url: location.href, text: '' };
+      const clone = root.cloneNode(true);
+      clone.querySelectorAll('script,style,noscript,svg,canvas,form,input,textarea,select,button,[aria-hidden="true"],[hidden]').forEach(node => node.remove());
+      return {
+        title: (document.title || '').slice(0, 500),
+        url: location.href,
+        text: (clone.innerText || clone.textContent || '').replace(/\\s+/g, ' ').trim()
+      };
+    })()`, true) as { title?: unknown; url?: unknown; text?: unknown };
+    const complete = typeof result.text === "string" ? result.text : "";
+    return {
+      title: typeof result.title === "string" ? result.title : tab.state.title,
+      url: typeof result.url === "string" ? result.url : tab.state.url,
+      text: complete.slice(0, safeLimit),
+      truncated: complete.length > safeLimit,
+      trust: "untrusted-web-content",
+    };
   }
 
   getTabIdForContents(contents: WebContents): string | null {

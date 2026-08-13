@@ -11,6 +11,8 @@ import fs from "fs";
 import net from "net";
 import { BrowserController } from "./browser/browser-controller";
 import { registerBrowserIpc } from "./browser/browser-ipc";
+import { AkiraController } from "./akira/controller";
+import { registerAkiraIpc } from "./akira/akira-ipc";
 
 declare const __dirname: string;
 
@@ -18,10 +20,12 @@ declare const __dirname: string;
 
 let mainWindow: BrowserWindow | null = null;
 let browserController: BrowserController | null = null;
+let akiraController: AkiraController | null = null;
 let serverProcess: ChildProcess | null = null;
 let isQuitting = false;
 
 registerBrowserIpc(() => browserController);
+registerAkiraIpc(() => akiraController);
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -410,9 +414,6 @@ async function createWindow(): Promise<void> {
     show: false,
   });
 
-  mainWindow = window;
-  browserController = new BrowserController(window, getDataDir());
-
   const isTrustedShellUrl = (value: string) => {
     try {
       const url = new URL(value);
@@ -421,6 +422,37 @@ async function createWindow(): Promise<void> {
       return false;
     }
   };
+
+  mainWindow = window;
+  window.webContents.session.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
+    if (permission !== "media" || !contents || contents.id !== window.webContents.id) return false;
+    if (!isTrustedShellUrl(details.requestingUrl || details.securityOrigin || requestingOrigin || contents.getURL())) return false;
+    const mediaType = "mediaType" in details ? details.mediaType : undefined;
+    return !mediaType || mediaType === "audio" || mediaType === "unknown";
+  });
+  window.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    const mediaTypes = "mediaTypes" in details ? details.mediaTypes ?? [] : [];
+    const trusted = contents.id === window.webContents.id && isTrustedShellUrl(details.requestingUrl || contents.getURL());
+    const microphoneOnly = permission === "media" && mediaTypes.length > 0 && mediaTypes.every(type => type === "audio");
+    callback(trusted && microphoneOnly);
+  });
+  akiraController = new AkiraController({
+    root: path.join(getDataDir(), "Akira"),
+    mcpEntry: app.isPackaged
+      ? path.join(process.resourcesPath, "app.asar.unpacked", "dist-electron", "akira-mcp.cjs")
+      : path.join(__dirname, "akira-mcp.cjs"),
+    getWindow: () => mainWindow,
+    getBrowser: () => browserController,
+    electronExecutable: process.execPath,
+  });
+  browserController = new BrowserController(
+    window,
+    getDataDir(),
+    () => akiraController?.status().settings.input.deactivationShortcut ?? "Control+Escape",
+  );
+  void akiraController.initialize().catch((error) => {
+    console.error("[Akira] Background initialization failed:", error);
+  });
 
   const keepShellOnTrustedOrigin = (event: Electron.Event, url: string) => {
     if (isTrustedShellUrl(url)) return;
@@ -517,6 +549,10 @@ window.webContents.on("did-finish-load", () => {
   });
 
   window.on("closed", () => {
+    if (akiraController) {
+      akiraController.shutdown();
+      akiraController = null;
+    }
     if (browserController) {
       browserController.dispose();
       browserController = null;
@@ -676,6 +712,11 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+
+  if (akiraController) {
+    akiraController.shutdown();
+    akiraController = null;
+  }
 
   if (serverProcess) {
     console.log("[ROME] Stopping local server...");

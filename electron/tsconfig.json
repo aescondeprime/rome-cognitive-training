@@ -4,12 +4,12 @@
     "module": "CommonJS",
     "moduleResolution": "node",
     "outDir": "../dist-electron",
-    "rootDir": ".",
+    "rootDir": "..",
     "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true
   },
-  "include": ["./**/*.ts"],
+  "include": ["./**/*.ts", "../shared/akira.ts"],
   "exclude": ["node_modules"]
 }
