@@ -22,6 +22,10 @@ const EMPTY_STATUS: AkiraRuntimeStatus = {
   restartCount: 0, message: null, updatedAt: 0,
 };
 
+const HERMES_VERSION = "0.20.0";
+const HERMES_RELEASE_COMMIT = "3c27eb6234bf91b8ceee9e9071591b31e9b148cb";
+const HERMES_SOURCE_ARCHIVE = `https://github.com/NousResearch/hermes-agent/archive/${HERMES_RELEASE_COMMIT}.tar.gz`;
+
 export class HermesRuntimeManager extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null;
   private stopping = false;
@@ -105,7 +109,13 @@ export class HermesRuntimeManager extends EventEmitter {
     const runtimeRoot = path.join(this.options.root, "runtime");
     ensurePrivateDirectory(runtimeRoot);
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(uv, ["tool", "install", "--force", "hermes-agent[voice,wake]==0.20.0"], {
+      const child = spawn(uv, [
+        "tool", "install", "--force",
+        "--python", "3.12",
+        "--extra", "voice",
+        "--extra", "wake",
+        HERMES_SOURCE_ARCHIVE,
+      ], {
         cwd: runtimeRoot,
         env: {
           ...this.baseEnvironment(),
@@ -268,7 +278,8 @@ export class HermesRuntimeManager extends EventEmitter {
     writeJsonAtomic(path.join(this.options.root, "runtime-manifest.json"), {
       schemaVersion: 1,
       owner: "ROME Akira",
-      requiredHermesVersion: "0.20.0",
+      requiredHermesVersion: HERMES_VERSION,
+      requiredHermesCommit: HERMES_RELEASE_COMMIT,
       managedAt: Date.now(),
       runtimeOutsideApplicationBundle: true,
       wakeProvider: "sherpa",
