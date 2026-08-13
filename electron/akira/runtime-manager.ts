@@ -26,6 +26,14 @@ const HERMES_VERSION = "0.20.0";
 const HERMES_RELEASE_COMMIT = "3c27eb6234bf91b8ceee9e9071591b31e9b148cb";
 const HERMES_SOURCE_ARCHIVE = `https://github.com/NousResearch/hermes-agent/archive/${HERMES_RELEASE_COMMIT}.tar.gz`;
 
+export function hermesInstallArguments(): string[] {
+  return [
+    "tool", "install", "--force",
+    "--python", "3.12",
+    `hermes-agent[voice,wake] @ ${HERMES_SOURCE_ARCHIVE}`,
+  ];
+}
+
 export class HermesRuntimeManager extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null;
   private stopping = false;
@@ -97,6 +105,12 @@ export class HermesRuntimeManager extends EventEmitter {
   async installOrRepair(): Promise<AkiraRuntimeStatus> {
     if (this.installPromise) return this.installPromise;
     this.installPromise = this.installOrRepairInternal()
+      .catch(error => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.setStatus({ phase: "degraded", executable: null, port: null, message });
+        this.emit("degraded", this.status);
+        throw error;
+      })
       .finally(() => { this.installPromise = null; });
     return this.installPromise;
   }
@@ -106,19 +120,16 @@ export class HermesRuntimeManager extends EventEmitter {
     if (!uv) throw new Error("The uv package manager is required to install Hermes. Install uv, then retry.");
     this.stopChild();
     this.setStatus({ phase: "installing", message: "Installing Hermes into ROME/Akira/runtime…" });
+    this.logLines = [];
+    this.emit("log", this.logs);
     const runtimeRoot = path.join(this.options.root, "runtime");
     ensurePrivateDirectory(runtimeRoot);
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(uv, [
-        "tool", "install", "--force",
-        "--python", "3.12",
-        "--extra", "voice",
-        "--extra", "wake",
-        HERMES_SOURCE_ARCHIVE,
-      ], {
+      const child = spawn(uv, hermesInstallArguments(), {
         cwd: runtimeRoot,
         env: {
           ...this.baseEnvironment(),
+          UV_NO_CONFIG: "1",
           UV_TOOL_DIR: path.join(runtimeRoot, "tools"),
           UV_TOOL_BIN_DIR: path.join(runtimeRoot, "bin"),
           UV_CACHE_DIR: path.join(this.options.root, "cache", "uv"),
