@@ -89,7 +89,7 @@ export class HermesRuntimeManager extends EventEmitter {
     child.once("exit", (code, signal) => this.handleExit(child, `Runtime exited (${code ?? signal ?? "unknown"}).`));
 
     try {
-      await waitForHealth(`http://127.0.0.1:${port}/health`, 45_000);
+      await waitForHealth(`http://127.0.0.1:${port}/api/health`, 45_000);
       if (this.child !== child) throw new Error("Hermes was replaced while starting.");
       const version = this.readVersion(executable);
       this.setStatus({ phase: "ready", executable, port, version, message: null });
