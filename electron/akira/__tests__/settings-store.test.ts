@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AkiraSettingsStore } from "../settings-store";
@@ -50,4 +50,16 @@ test("credential storage refuses plaintext persistence when secure storage is un
     if (previous === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previous;
   }
+});
+
+test("legacy wake strictness default migrates to Hermes's recommended value", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "akira-settings-wake-"));
+  writeFileSync(path.join(root, "settings.json"), JSON.stringify({ input: { wakeSensitivity: 0.65 } }));
+  const store = new AkiraSettingsStore(root, {
+    isAvailable: () => false,
+    encrypt: () => { throw new Error("unexpected"); },
+    decrypt: () => { throw new Error("unexpected"); },
+  });
+  assert.equal(store.get().input.wakeSensitivity, 0.5);
+  assert.equal(JSON.parse(readFileSync(path.join(root, "settings.json"), "utf8")).input.wakeSensitivity, 0.5);
 });

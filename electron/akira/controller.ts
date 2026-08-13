@@ -784,7 +784,7 @@ function sanitizeSettingsPatch(patch: Partial<AkiraSettings>): Partial<AkiraSett
   }
   if (safe.input) {
     safe.input.silenceMs = clampNumber(safe.input.silenceMs, 450, 4_000, 950);
-    safe.input.wakeSensitivity = clampNumber(safe.input.wakeSensitivity, 0, 1, 0.65);
+    safe.input.wakeSensitivity = clampNumber(safe.input.wakeSensitivity, 0, 1, 0.5);
   }
   if (safe.privacy) {
     safe.privacy.retainActivityDays = clampNumber(safe.privacy.retainActivityDays, 1, 365, 30);

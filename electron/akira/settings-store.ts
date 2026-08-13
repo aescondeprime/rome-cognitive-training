@@ -32,7 +32,7 @@ export const DEFAULT_AKIRA_SETTINGS: AkiraSettings = {
     microphoneId: "",
     sttModel: "base",
     silenceMs: 950,
-    wakeSensitivity: 0.65,
+    wakeSensitivity: 0.5,
     wakeWhenUnfocused: false,
     bargeInEnabled: true,
     deactivationShortcut: "Control+Escape",
@@ -66,7 +66,15 @@ export class AkiraSettingsStore {
     ensurePrivateDirectory(root);
     this.settingsFile = path.join(root, "settings.json");
     this.secretsFile = path.join(root, "secrets.enc.json");
-    this.settings = mergeSettings(readJson<Partial<AkiraSettings>>(this.settingsFile, {}));
+    const persisted = readJson<Partial<AkiraSettings>>(this.settingsFile, {});
+    this.settings = mergeSettings(persisted);
+    // 0.65 was ROME's original default, but Hermes's Sherpa wake detector
+    // recommends 0.50. Migrate only that exact legacy default so intentional
+    // user-selected strictness values remain untouched.
+    if (persisted.input?.wakeSensitivity === 0.65) {
+      this.settings.input.wakeSensitivity = 0.5;
+      writeJsonAtomic(this.settingsFile, this.settings);
+    }
   }
 
   get(): AkiraSettings {

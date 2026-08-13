@@ -60,7 +60,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.clos
     assert.match(config, /disabled_toolsets:/);
     assert.match(config, /provider: sherpa/);
     assert.doesNotMatch(config, /capture: client/);
-    assert.match(config, /sensitivity: 0\.65/);
+    assert.match(config, /sensitivity: 0\.50/);
     assert.match(config, /start_new_session: false/);
     const soul = readFileSync(path.join(root, "hermes", "SOUL.md"), "utf8");
     assert.match(soul, /grammatically complete paragraphs/);
