@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { HermesRuntimeManager, resolveUvExecutable } from "../runtime-manager";
+import { HermesRuntimeManager, hermesInstallArguments, resolveUvExecutable } from "../runtime-manager";
 import { DEFAULT_AKIRA_SETTINGS } from "../settings-store";
 
 test("managed runtime can be replaced without a stale exit degrading the replacement", async () => {
@@ -69,6 +69,43 @@ test("uv discovery accepts an absolute executable outside the GUI application PA
   try {
     assert.equal(resolveUvExecutable(), executable);
   } finally {
+    if (previous === undefined) delete process.env.UV_EXECUTABLE;
+    else process.env.UV_EXECUTABLE = previous;
+  }
+});
+
+test("Hermes source extras use a supported package requirement", () => {
+  const args = hermesInstallArguments();
+  assert.deepEqual(args.slice(0, 5), ["tool", "install", "--force", "--python", "3.12"]);
+  assert.doesNotMatch(args.join(" "), /(?:^|\s)--extra(?:\s|$)/);
+  assert.match(args.at(-1) ?? "", /^hermes-agent\[voice,wake\] @ https:\/\/github\.com\/NousResearch\/hermes-agent\/archive\/[a-f0-9]{40}\.tar\.gz$/);
+});
+
+test("a failed Hermes install leaves the runtime degraded instead of installing", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "akira-install-failure-"));
+  const executable = path.join(root, "uv");
+  writeFileSync(executable, "#!/bin/sh\necho installer-failed >&2\nexit 2\n", { mode: 0o700 });
+  chmodSync(executable, 0o700);
+  const previous = process.env.UV_EXECUTABLE;
+  process.env.UV_EXECUTABLE = executable;
+  const manager = new HermesRuntimeManager({
+    root,
+    mcpEntry: "/tmp/akira-mcp.cjs",
+    bridgePort: 12345,
+    bridgeToken: "bridge-token",
+    settings: {
+      get: () => structuredClone(DEFAULT_AKIRA_SETTINGS),
+      getSecret: () => null,
+    } as any,
+    electronExecutable: process.execPath,
+  });
+  try {
+    await assert.rejects(manager.installOrRepair(), /Hermes installer exited with code 2/);
+    assert.equal(manager.status.phase, "degraded");
+    assert.match(manager.status.message ?? "", /code 2/);
+    assert.ok(manager.logs.some(line => line.includes("installer-failed")));
+  } finally {
+    manager.stop();
     if (previous === undefined) delete process.env.UV_EXECUTABLE;
     else process.env.UV_EXECUTABLE = previous;
   }
