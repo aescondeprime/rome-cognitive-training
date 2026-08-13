@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import type { AkiraRuntimeStatus } from "../../shared/akira";
 import type { AkiraSettingsStore } from "./settings-store";
@@ -97,7 +98,7 @@ export class HermesRuntimeManager extends EventEmitter {
   }
 
   private async installOrRepairInternal(): Promise<AkiraRuntimeStatus> {
-    const uv = findOnPath(process.platform === "win32" ? "uv.exe" : "uv");
+    const uv = resolveUvExecutable();
     if (!uv) throw new Error("The uv package manager is required to install Hermes. Install uv, then retry.");
     this.stopChild();
     this.setStatus({ phase: "installing", message: "Installing Hermes into ROME/Akira/runtime…" });
@@ -328,6 +329,23 @@ function findOnPath(name: string): string | null {
   const result = spawnSync(command, [name], { encoding: "utf8", timeout: 2_000 });
   if (result.status !== 0) return null;
   return String(result.stdout).split(/\r?\n/).map(value => value.trim()).find(Boolean) ?? null;
+}
+
+export function resolveUvExecutable(): string | null {
+  const executableName = process.platform === "win32" ? "uv.exe" : "uv";
+  const home = os.homedir();
+  const candidates = [
+    process.env.UV_EXECUTABLE,
+    findOnPath(executableName),
+    path.join(home, ".local", "bin", executableName),
+    path.join(home, ".cargo", "bin", executableName),
+    ...(process.platform === "darwin"
+      ? [path.join("/opt/homebrew/bin", executableName), path.join("/usr/local/bin", executableName)]
+      : []),
+  ].filter((value): value is string => Boolean(value));
+  return candidates.find(candidate => {
+    try { return fs.statSync(candidate).isFile(); } catch { return false; }
+  }) ?? null;
 }
 
 function getOpenPort(): Promise<number> {
