@@ -33,7 +33,7 @@ Akira searches in this order:
 3. the managed `uv` tool directory;
 4. the application `PATH`.
 
-The repair action requires the [`uv` package manager](https://docs.astral.sh/uv/), downloads the pinned Hermes source release, and installs its `voice` and `wake` extras in Hermes's supported editable mode with a managed Python 3.11 runtime. Runtime download and model initialization happen after the ROME window is usable.
+The repair action requires the [`uv` package manager](https://docs.astral.sh/uv/), downloads the pinned Hermes source release, and installs its `voice` and `wake` extras in Hermes's supported editable mode with a managed Python 3.11 runtime. Akira also installs the pinned `pypinyin` dependency required by Hermes's Sherpa wake-word engine. Runtime download and model initialization happen after the ROME window is usable.
 
 For a manual installation, install Hermes and ensure `hermes --version` succeeds in the environment used to launch ROME. Akira then starts `hermes serve` automatically.
 

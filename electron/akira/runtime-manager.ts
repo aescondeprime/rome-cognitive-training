@@ -32,6 +32,7 @@ export function hermesInstallArguments(sourceRoot: string): string[] {
   return [
     "tool", "install", "--force",
     "--python", "3.11",
+    "--with", "pypinyin==0.55.0",
     "--editable",
     `${sourceRoot}[voice,wake]`,
   ];
