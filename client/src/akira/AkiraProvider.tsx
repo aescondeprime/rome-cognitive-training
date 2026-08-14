@@ -45,6 +45,9 @@ interface AkiraContextValue {
   callCapability: (name: string, args: Record<string, unknown>) => Promise<unknown>;
 }
 
+const MAX_UTTERANCE_MS = 18_000;
+const MAX_WAITING_FOR_SPEECH_MS = 15_000;
+
 const AkiraContext = createContext<AkiraContextValue | null>(null);
 
 export function useAkira(): AkiraContextValue {
@@ -72,6 +75,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const discardRecordingRef = useRef(false);
   const speechFramesRef = useRef(0);
   const noiseFloorRef = useRef(0.004);
+  const speechEndThresholdRef = useRef(0.01);
   const lastMeterUpdateRef = useRef(0);
   const bargeFramesRef = useRef(0);
   const playbackContextRef = useRef<AudioContext | null>(null);
@@ -178,6 +182,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     discardRecordingRef.current = false;
     recordingStartedRef.current = performance.now();
     lastSpeechRef.current = performance.now();
+    speechEndThresholdRef.current = Math.max(0.009, Math.min(0.025, noiseFloorRef.current * 2.25));
     publishInputDiagnostics({ phase: "recording", speechDetected: false });
     recorder.ondataavailable = event => { if (event.data.size) recordChunksRef.current.push(event.data); };
     recorder.onstop = () => {
@@ -235,16 +240,20 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     if (!speechSeenRef.current) {
       noiseFloorRef.current = (noiseFloorRef.current * 0.98) + (Math.min(rms, 0.02) * 0.02);
       speechFramesRef.current = rms > speechThreshold ? speechFramesRef.current + 1 : 0;
-    }
-    if (speechFramesRef.current >= 3 || (speechSeenRef.current && rms > Math.max(0.008, speechThreshold * 0.7))) {
-      speechSeenRef.current = true;
+      if (speechFramesRef.current >= 3) {
+        speechSeenRef.current = true;
+        speechEndThresholdRef.current = Math.max(0.009, Math.min(0.025, noiseFloorRef.current * 2.25));
+        lastSpeechRef.current = now;
+        publishInputDiagnostics({ phase: "speech", speechDetected: true, lastError: "" });
+      }
+    } else if (rms > speechEndThresholdRef.current) {
       lastSpeechRef.current = now;
-      publishInputDiagnostics({ phase: "speech", speechDetected: true, lastError: "" });
     }
     const silenceMs = current.settings.input.silenceMs;
-    if (speechSeenRef.current && now - lastSpeechRef.current >= silenceMs) {
+    const recordingDuration = now - recordingStartedRef.current;
+    if (speechSeenRef.current && (now - lastSpeechRef.current >= silenceMs || recordingDuration >= MAX_UTTERANCE_MS)) {
       stopRecorder(false);
-    } else if (!speechSeenRef.current && now - recordingStartedRef.current >= 15_000) {
+    } else if (!speechSeenRef.current && recordingDuration >= MAX_WAITING_FOR_SPEECH_MS) {
       stopRecorder(false);
     }
   }, [bridge, cancelPlayback, startRecorder, stopRecorder]);

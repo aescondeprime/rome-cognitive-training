@@ -42,6 +42,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.clos
     await manager.initialize();
     assert.equal(manager.status.phase, "ready");
     assert.match(manager.gatewayUrl ?? "", /\/api\/ws\?token=gateway%2Ftoken%20%2B%20private$/);
+    assert.deepEqual(manager.httpHeaders, { "X-Hermes-Session-Token": "gateway/token + private" });
     assert.deepEqual(JSON.parse(readFileSync(path.join(root, "runtime-env.json"), "utf8")), {
       token: "gateway/token + private",
       desktop: "1",

@@ -61,6 +61,7 @@ export class HermesRuntimeManager extends EventEmitter {
       : null;
   }
   get httpBase(): string | null { return this.statusValue.port ? `http://127.0.0.1:${this.statusValue.port}` : null; }
+  get httpHeaders(): Record<string, string> { return { "X-Hermes-Session-Token": this.gatewayToken }; }
   get logs(): string[] { return [...this.logLines]; }
 
   async initialize(): Promise<AkiraRuntimeStatus> {

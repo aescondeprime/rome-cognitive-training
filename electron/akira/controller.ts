@@ -41,6 +41,8 @@ interface PendingApproval {
 }
 
 const TURN_TIMEOUT_MS = 180_000;
+const TRANSCRIPTION_TIMEOUT_MS = 300_000;
+const WAKE_REARM_ATTEMPTS = 3;
 
 export class AkiraController {
   private readonly state = new AkiraStateMachine("DORMANT");
@@ -71,6 +73,9 @@ export class AkiraController {
   private turnTimer: NodeJS.Timeout | null = null;
   private wakeHealthTimer: NodeJS.Timeout | null = null;
   private wakeStatus: Record<string, unknown> | null = null;
+  private transcriptionPhase: "idle" | "transcribing" | "ready" | "error" = "idle";
+  private transcriptionMessage: string | null = null;
+  private transcriptionUpdatedAt = Date.now();
 
   constructor(private readonly options: ControllerOptions) {
     this.settings = new AkiraSettingsStore(path.join(options.root, "config"), {
@@ -148,20 +153,7 @@ export class AkiraController {
     }
     this.transition("DORMANT", null);
     if (this.gateway.connected && this.settings.get().input.wakeWordEnabled) {
-      if (this.wakeStarted) {
-        void this.gateway.request<Record<string, unknown>>("wake.resume", {})
-          .then(result => {
-            if (result.resumed !== true) {
-              this.wakeStarted = false;
-              void this.startWakeCapture();
-            } else {
-              this.wakeStatus = { ...this.wakeStatus, ...result, listening: true, paused: false, checkedAt: Date.now() };
-              this.scheduleWakeHealthCheck();
-            }
-          })
-          .catch(() => { this.wakeStarted = false; void this.startWakeCapture(); });
-      }
-      else void this.startWakeCapture();
+      await this.resumeWakeCapture();
     }
     return this.status();
   }
@@ -252,18 +244,35 @@ export class AkiraController {
   async transcribe(dataUrl: string, mimeType: string): Promise<{ text: string }> {
     await this.ensureReady();
     if (!/^data:audio\//.test(dataUrl) || dataUrl.length > 24_000_000) throw new Error("Invalid or oversized audio recording.");
-    const base = this.runtime?.httpBase;
+    const runtime = this.runtime;
+    const base = runtime?.httpBase;
     if (!base) throw new Error("Hermes speech recognition is unavailable.");
-    const response = await fetch(`${base}/api/audio/transcribe`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data_url: dataUrl, mime_type: String(mimeType).slice(0, 120) }),
-      signal: AbortSignal.timeout(90_000),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error ?? `Speech recognition returned HTTP ${response.status}.`);
-    const text = String(payload.text ?? payload.transcript ?? "").trim();
-    return { text };
+    this.transcriptionPhase = "transcribing";
+    this.transcriptionMessage = "Loading local speech recognition and transcribing audio.";
+    this.transcriptionUpdatedAt = Date.now();
+    this.publishStatus();
+    try {
+      const response = await fetch(`${base}/api/audio/transcribe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...runtime.httpHeaders },
+        body: JSON.stringify({ data_url: dataUrl, mime_type: String(mimeType).slice(0, 120) }),
+        signal: AbortSignal.timeout(TRANSCRIPTION_TIMEOUT_MS),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error ?? `Speech recognition returned HTTP ${response.status}.`);
+      const text = String(payload.text ?? payload.transcript ?? "").trim();
+      this.transcriptionPhase = "ready";
+      this.transcriptionMessage = text ? "Local speech recognition completed." : "No words were recognized in the captured audio.";
+      this.transcriptionUpdatedAt = Date.now();
+      return { text };
+    } catch (error) {
+      this.transcriptionPhase = "error";
+      this.transcriptionMessage = error instanceof Error ? error.message : String(error);
+      this.transcriptionUpdatedAt = Date.now();
+      throw error;
+    } finally {
+      this.publishStatus();
+    }
   }
 
   updateSettings(patch: Partial<AkiraSettings>): AkiraStatus {
@@ -328,6 +337,13 @@ export class AkiraController {
       capabilityCount: this.registry?.list().length ?? 0,
       wakeStarted: this.wakeStarted,
       wakeStatus: this.wakeStatus,
+      transcription: {
+        provider: "local faster-whisper",
+        model: this.settings.get().input.sttModel,
+        phase: this.transcriptionPhase,
+        message: this.transcriptionMessage,
+        updatedAt: this.transcriptionUpdatedAt,
+      },
       turnInFlight: this.turnInFlight,
       pendingApprovals: this.pendingApprovals.size,
       paths: { root: this.options.root },
@@ -480,6 +496,56 @@ export class AkiraController {
       this.reason = `Wake word unavailable: ${error instanceof Error ? error.message : String(error)}`;
       this.publishStatus();
     }
+  }
+
+  private async resumeWakeCapture(): Promise<void> {
+    if (!this.gateway.connected || !this.settings.get().input.wakeWordEnabled) return;
+    this.clearWakeHealthTimer();
+    let lastMessage = "Hermes did not re-arm wake detection.";
+    if (this.wakeStarted) {
+      await this.gateway.request<Record<string, unknown>>("wake.resume", {}).catch(error => {
+        lastMessage = error instanceof Error ? error.message : String(error);
+      });
+    }
+    for (let attempt = 0; attempt < WAKE_REARM_ATTEMPTS; attempt += 1) {
+      try {
+        const status = await this.gateway.request<Record<string, unknown>>("wake.status", {});
+        this.wakeStatus = { ...status, checkedAt: Date.now() };
+        if (status.enabled === false || status.available === false) {
+          throw new Error(String(status.hint || status.reason || "Hermes wake detection is unavailable."));
+        }
+        if (status.listening === true) {
+          this.wakeStarted = true;
+          this.wakeStatus = { ...this.wakeStatus, paused: false };
+          if (this.reason?.startsWith("Wake word unavailable:")) this.reason = null;
+          this.scheduleWakeHealthCheck();
+          this.publishStatus();
+          return;
+        }
+        const result = await this.gateway.request<Record<string, unknown>>(
+          "wake.start",
+          { surface: "gui", persist: true },
+          45_000,
+        );
+        this.wakeStatus = { ...this.wakeStatus, ...result, checkedAt: Date.now() };
+        if (result.started === true) {
+          this.wakeStarted = true;
+          this.wakeStatus = { ...this.wakeStatus, listening: true, paused: false };
+          if (this.reason?.startsWith("Wake word unavailable:")) this.reason = null;
+          this.scheduleWakeHealthCheck();
+          this.publishStatus();
+          return;
+        }
+        lastMessage = String(result.hint || result.reason || lastMessage);
+      } catch (error) {
+        lastMessage = error instanceof Error ? error.message : String(error);
+      }
+      if (attempt + 1 < WAKE_REARM_ATTEMPTS) await delay(1_500);
+    }
+    this.wakeStarted = false;
+    this.wakeStatus = { ...this.wakeStatus, listening: false, error: lastMessage, checkedAt: Date.now() };
+    this.reason = `Wake word unavailable: ${lastMessage}`;
+    this.publishStatus();
   }
 
   private bindGateway(): void {
@@ -683,6 +749,9 @@ export class AkiraController {
           if (status.listening !== true) {
             this.wakeStarted = false;
             this.reason = `Wake word unavailable: ${String(status.hint || "Hermes lost access to the microphone.")}`;
+            this.publishStatus();
+            void this.resumeWakeCapture();
+            return;
           } else if (status.audio_silent === true) {
             this.reason = `Wake word unavailable: ${String(status.hint || "The selected microphone is delivering silence.")}`;
           } else if (this.reason?.startsWith("Wake word unavailable:")) {
@@ -795,6 +864,10 @@ function sanitizeSettingsPatch(patch: Partial<AkiraSettings>): Partial<AkiraSett
 function clampNumber(value: unknown, minimum: number, maximum: number, fallback: number): number {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? Math.max(minimum, Math.min(maximum, numeric)) : fallback;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
 function safeColor(value: unknown, fallback: string): string {

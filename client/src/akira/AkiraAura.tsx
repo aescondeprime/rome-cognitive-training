@@ -44,7 +44,7 @@ const inputPhaseLabel: Record<AkiraInputPhase, string> = {
   armed: "Microphone armed",
   recording: "Waiting for speech",
   speech: "Hearing speech",
-  transcribing: "Transcribing",
+  transcribing: "Transcribing locally",
   recognized: "Input recognized",
   error: "Input needs attention",
 };
@@ -124,8 +124,21 @@ export default function AkiraAura() {
   const wakeStatus = diagnostics?.wakeStatus && typeof diagnostics.wakeStatus === "object"
     ? diagnostics.wakeStatus as Record<string, unknown>
     : null;
-  const wakeDevice = String(wakeStatus?.input_device ?? wakeStatus?.device_name ?? wakeStatus?.device ?? "Default microphone");
-  const wakeListening = diagnostics?.wakeStarted === true && wakeStatus?.listening !== false;
+  const wakeInputDevice = wakeStatus?.input_device && typeof wakeStatus.input_device === "object"
+    ? wakeStatus.input_device as Record<string, unknown>
+    : null;
+  const wakeDevice = String(wakeInputDevice?.name ?? wakeInputDevice?.selector ?? wakeStatus?.device_name ?? wakeStatus?.device ?? "Default microphone");
+  const wakePaused = diagnostics?.wakeStarted === true && state !== "DORMANT";
+  const wakeListening = diagnostics?.wakeStarted === true && state === "DORMANT" && wakeStatus?.listening !== false;
+  const wakeListenerLabel = wakePaused ? "paused during conversation" : wakeListening ? "armed" : "not armed";
+  const wakeAudioLabel = wakePaused ? "paused" : !wakeListening ? "not monitoring" : wakeStatus?.audio_silent === true ? "silent" : "signal detected";
+  const transcription = diagnostics?.transcription && typeof diagnostics.transcription === "object"
+    ? diagnostics.transcription as Record<string, unknown>
+    : null;
+  const transcriptionLabel = transcription
+    ? `${String(transcription.provider ?? "local faster-whisper")} · ${String(transcription.model ?? status?.settings.input.sttModel ?? "base")}`
+    : `local faster-whisper · ${status?.settings.input.sttModel ?? "base"}`;
+  const transcriptionPhase = String(transcription?.phase ?? "idle");
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -269,9 +282,11 @@ export default function AkiraAura() {
                   <dt>Conversation mic</dt><dd>{akira.microphoneArmed ? "armed" : "not armed"}</dd>
                   <dt>Input device</dt><dd>{inputDiagnostics.deviceLabel || "not selected"}</dd>
                   <dt>Speech capture</dt><dd>{inputPhaseLabel[inputDiagnostics.phase]}</dd>
-                  <dt>Wake listener</dt><dd>{wakeListening ? "armed" : "not armed"}</dd>
+                  <dt>Transcriber</dt><dd>{transcriptionLabel}</dd>
+                  <dt>Transcriber state</dt><dd>{transcriptionPhase}</dd>
+                  <dt>Wake listener</dt><dd>{wakeListenerLabel}</dd>
                   <dt>Wake device</dt><dd>{wakeDevice}</dd>
-                  <dt>Wake audio</dt><dd>{wakeStatus?.audio_silent === true ? "silent" : wakeStatus ? "signal detected" : "checking"}</dd>
+                  <dt>Wake audio</dt><dd>{wakeAudioLabel}</dd>
                 </dl>
                 <article>
                   <span>LAST RECOGNIZED INPUT</span>
@@ -279,7 +294,7 @@ export default function AkiraAura() {
                 </article>
                 {inputDiagnostics.lastError && <div className="akira-input-warning">{inputDiagnostics.lastError}</div>}
                 {Boolean(wakeStatus?.hint) && <div className="akira-input-warning">{String(wakeStatus?.hint)}</div>}
-                <p className="akira-section-note">This temporary monitor shows whether ROME receives audio before it reaches Akira. If the wake listener is healthy but misses her name, lower Wake strictness in Settings.</p>
+                <p className="akira-section-note">Conversation audio is transcribed on-device by Hermes using faster-whisper; it does not require a separate transcription API key. The first transcription can take longer while the local model loads. If the armed wake listener misses her name, lower Wake strictness in Settings.</p>
                 <div className="akira-actions">
                   <button disabled={busy || turnBusy || !status?.available} onClick={() => void run(akira.activate)}><Mic size={12} /> Test microphone</button>
                   <button disabled={busy || state === "DORMANT"} onClick={() => void run(akira.standby)}><MicOff size={12} /> Standby</button>
