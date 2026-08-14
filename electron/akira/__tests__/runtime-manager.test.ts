@@ -42,6 +42,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.clos
     await manager.initialize();
     assert.equal(manager.status.phase, "ready");
     assert.match(manager.gatewayUrl ?? "", /\/api\/ws\?token=gateway%2Ftoken%20%2B%20private$/);
+    assert.deepEqual(manager.httpHeaders, { "X-Hermes-Session-Token": "gateway/token + private" });
     assert.deepEqual(JSON.parse(readFileSync(path.join(root, "runtime-env.json"), "utf8")), {
       token: "gateway/token + private",
       desktop: "1",
@@ -60,8 +61,11 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.clos
     assert.match(config, /disabled_toolsets:/);
     assert.match(config, /provider: sherpa/);
     assert.doesNotMatch(config, /capture: client/);
-    assert.match(config, /sensitivity: 0\.65/);
+    assert.match(config, /sensitivity: 0\.50/);
     assert.match(config, /start_new_session: false/);
+    const soul = readFileSync(path.join(root, "hermes", "SOUL.md"), "utf8");
+    assert.match(soul, /grammatically complete paragraphs/);
+    assert.match(soul, /Idea Workshop route \/idea-workshop/);
     const manifest = JSON.parse(readFileSync(path.join(root, "runtime-manifest.json"), "utf8"));
     assert.equal(manifest.requiredHermesVersion, "0.20.0");
   } finally {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  AudioLines,
   Bot,
   Check,
   ChevronDown,
@@ -19,8 +20,9 @@ import {
 } from "lucide-react";
 import type { AkiraActivityEntry, AkiraCapabilityDescriptor, AkiraSettings, AkiraState } from "@shared/akira";
 import { useAkira } from "./AkiraProvider";
+import { useInputDiagnostics, type AkiraInputPhase } from "./input-diagnostics";
 
-type PanelTab = "conversation" | "settings" | "memory" | "activity" | "diagnostics";
+type PanelTab = "conversation" | "input" | "settings" | "memory" | "activity" | "diagnostics";
 
 const stateLabel: Record<AkiraState, string> = {
   DORMANT: "Standby",
@@ -36,8 +38,20 @@ const stateLabel: Record<AkiraState, string> = {
   UNAVAILABLE: "Unavailable",
 };
 
+const inputPhaseLabel: Record<AkiraInputPhase, string> = {
+  standby: "Standby",
+  requesting: "Requesting permission",
+  armed: "Microphone armed",
+  recording: "Waiting for speech",
+  speech: "Hearing speech",
+  transcribing: "Transcribing locally",
+  recognized: "Input recognized",
+  error: "Input needs attention",
+};
+
 export default function AkiraAura() {
   const akira = useAkira();
+  const inputDiagnostics = useInputDiagnostics();
   const { status, panelOpen, setPanelOpen } = akira;
   const [tab, setTab] = useState<PanelTab>("conversation");
   const [message, setMessage] = useState("");
@@ -63,6 +77,18 @@ export default function AkiraAura() {
     if (tab === "memory") {
       void akira.callCapability("rome.memory.list", {}).then((value: any) => setMemory(value?.result ?? [])).catch(error => setError(String(error?.message ?? error)));
     }
+  }, [akira, panelOpen, tab]);
+
+  useEffect(() => {
+    if (!panelOpen || tab !== "input") return;
+    let active = true;
+    const refresh = () => void akira.loadDiagnostics().then(value => { if (active) setDiagnostics(value); });
+    refresh();
+    const timer = window.setInterval(refresh, 2_500);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
   }, [akira, panelOpen, tab]);
 
   useEffect(() => {
@@ -95,6 +121,24 @@ export default function AkiraAura() {
   const state = status?.state ?? "UNAVAILABLE";
   const label = stateLabel[state];
   const turnBusy = state === "PROCESSING" || state === "ACTING" || state === "AWAITING_APPROVAL";
+  const wakeStatus = diagnostics?.wakeStatus && typeof diagnostics.wakeStatus === "object"
+    ? diagnostics.wakeStatus as Record<string, unknown>
+    : null;
+  const wakeInputDevice = wakeStatus?.input_device && typeof wakeStatus.input_device === "object"
+    ? wakeStatus.input_device as Record<string, unknown>
+    : null;
+  const wakeDevice = String(wakeInputDevice?.name ?? wakeInputDevice?.selector ?? wakeStatus?.device_name ?? wakeStatus?.device ?? "Default microphone");
+  const wakePaused = diagnostics?.wakeStarted === true && state !== "DORMANT";
+  const wakeListening = diagnostics?.wakeStarted === true && state === "DORMANT" && wakeStatus?.listening !== false;
+  const wakeListenerLabel = wakePaused ? "paused during conversation" : wakeListening ? "armed" : "not armed";
+  const wakeAudioLabel = wakePaused ? "paused" : !wakeListening ? "not monitoring" : wakeStatus?.audio_silent === true ? "silent" : "signal detected";
+  const transcription = diagnostics?.transcription && typeof diagnostics.transcription === "object"
+    ? diagnostics.transcription as Record<string, unknown>
+    : null;
+  const transcriptionLabel = transcription
+    ? `${String(transcription.provider ?? "local faster-whisper")} · ${String(transcription.model ?? status?.settings.input.sttModel ?? "base")}`
+    : `local faster-whisper · ${status?.settings.input.sttModel ?? "base"}`;
+  const transcriptionPhase = String(transcription?.phase ?? "idle");
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -170,6 +214,7 @@ export default function AkiraAura() {
 
           <nav className="akira-tabs" aria-label="Akira sections">
             <TabButton active={tab === "conversation"} onClick={() => setTab("conversation")} icon={<Bot size={12} />} label="Talk" />
+            <TabButton active={tab === "input"} onClick={() => setTab("input")} icon={<AudioLines size={12} />} label="Input" />
             <TabButton active={tab === "settings"} onClick={() => setTab("settings")} icon={<Settings2 size={12} />} label="Settings" />
             <TabButton active={tab === "memory"} onClick={() => setTab("memory")} icon={<Database size={12} />} label="Memory" />
             <TabButton active={tab === "activity"} onClick={() => setTab("activity")} icon={<Activity size={12} />} label="Activity" />
@@ -210,6 +255,48 @@ export default function AkiraAura() {
                 </div>
                 <div className="akira-actions">
                   <button disabled={busy || turnBusy || !status?.available} onClick={() => void run(akira.activate)}><Mic size={12} /> Listen</button>
+                  <button disabled={busy || state === "DORMANT"} onClick={() => void run(akira.standby)}><MicOff size={12} /> Standby</button>
+                </div>
+              </section>
+            )}
+
+            {tab === "input" && (
+              <section className="akira-input-diagnostics">
+                <header>
+                  <span><AudioLines size={16} /></span>
+                  <div><strong>User input</strong><small>{inputPhaseLabel[inputDiagnostics.phase]}</small></div>
+                </header>
+                <div
+                  className={`akira-input-meter${inputDiagnostics.speechDetected ? " speech" : ""}`}
+                  role="meter"
+                  aria-label="Microphone input level"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(inputDiagnostics.level * 100)}
+                >
+                  <i style={{ width: `${Math.max(1, inputDiagnostics.level * 100)}%` }} />
+                  <b style={{ left: `${Math.min(100, inputDiagnostics.threshold / 0.08 * 100)}%` }} />
+                </div>
+                <small className="akira-meter-label">Signal {Math.round(inputDiagnostics.level * 100)}% · speech threshold marker</small>
+                <dl>
+                  <dt>Conversation mic</dt><dd>{akira.microphoneArmed ? "armed" : "not armed"}</dd>
+                  <dt>Input device</dt><dd>{inputDiagnostics.deviceLabel || "not selected"}</dd>
+                  <dt>Speech capture</dt><dd>{inputPhaseLabel[inputDiagnostics.phase]}</dd>
+                  <dt>Transcriber</dt><dd>{transcriptionLabel}</dd>
+                  <dt>Transcriber state</dt><dd>{transcriptionPhase}</dd>
+                  <dt>Wake listener</dt><dd>{wakeListenerLabel}</dd>
+                  <dt>Wake device</dt><dd>{wakeDevice}</dd>
+                  <dt>Wake audio</dt><dd>{wakeAudioLabel}</dd>
+                </dl>
+                <article>
+                  <span>LAST RECOGNIZED INPUT</span>
+                  <p>{inputDiagnostics.lastTranscript || "Speak while Akira is listening. Recognized words will appear here."}</p>
+                </article>
+                {inputDiagnostics.lastError && <div className="akira-input-warning">{inputDiagnostics.lastError}</div>}
+                {Boolean(wakeStatus?.hint) && <div className="akira-input-warning">{String(wakeStatus?.hint)}</div>}
+                <p className="akira-section-note">Conversation audio is transcribed on-device by Hermes using faster-whisper; it does not require a separate transcription API key. The first transcription can take longer while the local model loads. If the armed wake listener misses her name, lower Wake strictness in Settings.</p>
+                <div className="akira-actions">
+                  <button disabled={busy || turnBusy || !status?.available} onClick={() => void run(akira.activate)}><Mic size={12} /> Test microphone</button>
                   <button disabled={busy || state === "DORMANT"} onClick={() => void run(akira.standby)}><MicOff size={12} /> Standby</button>
                 </div>
               </section>

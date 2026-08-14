@@ -105,8 +105,8 @@ export class AkiraCapabilityRegistry {
       objectSchema({ includeRecent: boolean("Include recent workspace records.") })),
       async () => ({ value: await this.contextSnapshot() }));
 
-    this.add(this.descriptor("rome.navigate", "Open a ROME surface", "Navigates ROME to a named internal route.", "read", "navigate", [], [], false,
-      objectSchema({ route: string("Internal ROME route, such as /taskboard or /kronos-keep.") }, ["route"])),
+    this.add(this.descriptor("rome.navigate", "Open a ROME surface", "Navigates ROME to a named internal route. Projects and Idea Workshop use /idea-workshop.", "read", "navigate", [], [], false,
+      objectSchema({ route: string("Internal ROME route, such as /idea-workshop, /taskboard, or /kronos-keep.") }, ["route"])),
       async args => {
         const route = cleanRoute(args.route);
         await this.dependencies.renderer.command("navigate", { route });
