@@ -15,6 +15,19 @@ export function registerAkiraIpc(getController: () => AkiraController | null): v
   ipcMain.handle("rome:akira:interrupt", event => withController(event, controller => controller.interrupt()));
   ipcMain.handle("rome:akira:submit-text", (event, text: unknown) => withController(event, controller => controller.submitText(String(text ?? ""))));
   ipcMain.handle("rome:akira:transcribe", (event, dataUrl: unknown, mimeType: unknown) => withController(event, controller => controller.transcribe(String(dataUrl ?? ""), String(mimeType ?? ""))));
+  // Microphone frames arrive continuously while a conversation is live, so
+  // these are `on`, not `handle` — a round-trip acknowledgement per 250ms chunk
+  // would be pure overhead on the hottest path in the system.
+  ipcMain.on("rome:akira:audio-chunk", (event, base64: unknown) => {
+    const controller = getController();
+    if (!controller || !controller.owns(event.sender.id)) return;
+    controller.pushAudio(String(base64 ?? ""));
+  });
+  ipcMain.on("rome:akira:context", (event, text: unknown) => {
+    const controller = getController();
+    if (!controller || !controller.owns(event.sender.id)) return;
+    controller.notifyContext(String(text ?? ""));
+  });
   ipcMain.handle("rome:akira:approval-response", (event, id: unknown, approved: unknown) => withController(event, controller => controller.resolveApproval(String(id ?? ""), Boolean(approved))));
   ipcMain.handle("rome:akira:update-settings", (event, patch: Partial<AkiraSettings>) => withController(event, controller => controller.updateSettings(patch && typeof patch === "object" ? patch : {})));
   ipcMain.handle("rome:akira:set-secret", (event, name: AkiraSecretName, value: unknown) => withController(event, controller => controller.setSecret(name, String(value ?? ""))));

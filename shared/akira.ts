@@ -167,6 +167,22 @@ export interface AkiraSettings {
     /** Summons the Akira console. Default `Command+Shift+'`. */
     consoleShortcut: AkiraShortcut;
   };
+  /**
+   * ElevenLabs Agents realtime conversation. This is the live loop as of V3;
+   * `agent` below now only configures Hermes, which handles background
+   * deep-work delegation and is entirely optional.
+   */
+  realtime: {
+    /** `agent_…` from the ElevenLabs dashboard. Empty disables voice. */
+    agentId: string;
+    /** Speak a short acknowledgement when woken with no follow-up speech. */
+    greetingEnabled: boolean;
+    greetingText: string;
+    /** How long to wait for continued speech before greeting. */
+    greetingDelayMs: number;
+    /** Send route changes and data updates as non-interrupting context. */
+    shareLiveContext: boolean;
+  };
   agent: {
     provider: "openai" | "anthropic" | "openrouter";
     model: string;
@@ -307,4 +323,6 @@ export const AKIRA_CHANNELS = {
   dataChanged: "rome:akira:data-changed",
   rendererCommand: "rome:akira:renderer-command",
   wakeDetected: "rome:akira:wake-detected",
+  /** Server-side voice activity, used to make the ambience breathe. */
+  vad: "rome:akira:vad",
 } as const;

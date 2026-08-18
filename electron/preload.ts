@@ -30,7 +30,12 @@ contextBridge.exposeInMainWorld("romeDesktop", {
     callCapability: (name: string, args: Record<string, unknown>) => ipcRenderer.invoke("rome:akira:call-capability", name, args),
     resolveRendererCommand: (result: unknown) => ipcRenderer.invoke("rome:akira:renderer-command-result", result),
     shortcut: (action: string) => ipcRenderer.invoke("rome:akira:shortcut", action),
+    // Fire-and-forget: these run several times a second while a conversation is
+    // live, so they deliberately skip the invoke round-trip.
+    sendAudioChunk: (base64: string) => ipcRenderer.send("rome:akira:audio-chunk", base64),
+    sendContext: (text: string) => ipcRenderer.send("rome:akira:context", text),
     onStatus: (listener: (value: unknown) => void) => on(AKIRA_CHANNELS.status, listener),
+    onVad: (listener: (value: unknown) => void) => on(AKIRA_CHANNELS.vad, listener),
     onTranscript: (listener: (value: unknown) => void) => on(AKIRA_CHANNELS.transcript, listener),
     onAudio: (listener: (value: unknown) => void) => on(AKIRA_CHANNELS.audio, listener),
     onApproval: (listener: (value: unknown) => void) => on(AKIRA_CHANNELS.approval, listener),

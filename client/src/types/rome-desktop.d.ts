@@ -79,7 +79,11 @@ interface RomeAkiraBridge {
   callCapability: (name: string, args: Record<string, unknown>) => Promise<unknown>;
   resolveRendererCommand: (result: RomeAkiraRendererCommandResult) => Promise<void>;
   shortcut: (action: string) => Promise<void>;
+  /** Base64 PCM16 mono at 16 kHz. Fire-and-forget; no acknowledgement. */
+  sendAudioChunk: (base64: string) => void;
+  sendContext: (text: string) => void;
   onStatus: (listener: (value: RomeAkiraStatus) => void) => () => void;
+  onVad: (listener: (value: { score: number; at: number }) => void) => () => void;
   onTranscript: (listener: (value: RomeAkiraTranscript) => void) => () => void;
   onAudio: (listener: (value: RomeAkiraAudioEvent) => void) => () => void;
   onApproval: (listener: (value: RomeAkiraApproval) => void) => () => void;

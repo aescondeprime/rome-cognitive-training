@@ -42,6 +42,13 @@ export const DEFAULT_AKIRA_SETTINGS: AkiraSettings = {
     conversationShortcut: DEFAULT_CONVERSATION_SHORTCUT,
     consoleShortcut: DEFAULT_CONSOLE_SHORTCUT,
   },
+  realtime: {
+    agentId: "",
+    greetingEnabled: true,
+    greetingText: "Yes?",
+    greetingDelayMs: 1_200,
+    shareLiveContext: true,
+  },
   agent: { provider: "openai", model: "gpt-5-mini", effort: "medium" },
   privacy: {
     allowActivePageReading: false,
@@ -76,6 +83,7 @@ function mergeSettings(value: Partial<AkiraSettings>): AkiraSettings {
     appearance: { ...DEFAULT_AKIRA_SETTINGS.appearance, ...appearance },
     voice: { ...DEFAULT_AKIRA_SETTINGS.voice, ...value.voice },
     input: { ...DEFAULT_AKIRA_SETTINGS.input, ...input },
+    realtime: { ...DEFAULT_AKIRA_SETTINGS.realtime, ...value.realtime },
     agent: { ...DEFAULT_AKIRA_SETTINGS.agent, ...value.agent },
     privacy: { ...DEFAULT_AKIRA_SETTINGS.privacy, ...value.privacy },
     permissions: { ...DEFAULT_AKIRA_SETTINGS.permissions, ...value.permissions },

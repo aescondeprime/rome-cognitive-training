@@ -205,12 +205,43 @@ export default function AkiraConsole() {
 
             {tab === "settings" && draft && status && (
               <section className="akira-settings">
+                <SettingGroup title="Conversation">
+                  <p className="akira-section-note">
+                    Akira talks through an ElevenLabs agent. Create one from a blank template,
+                    leave its first message empty, and paste its ID here.
+                  </p>
+                  <LabeledInput
+                    label="ElevenLabs agent ID"
+                    value={draft.realtime.agentId}
+                    onChange={value => setDraft({ ...draft, realtime: { ...draft.realtime, agentId: value.trim() } })}
+                    placeholder="agent_…"
+                  />
+                  <LabeledInput
+                    label={`ElevenLabs API key · ${status.settings.secrets.elevenLabsConfigured ? "configured" : "not configured"}`}
+                    value={elevenKey}
+                    onChange={setElevenKey}
+                    password
+                    placeholder="Stored encrypted; never shown again"
+                  />
+                  <Toggle
+                    label="Acknowledge when woken (“Yes?”)"
+                    checked={draft.realtime.greetingEnabled}
+                    onChange={checked => setDraft({ ...draft, realtime: { ...draft.realtime, greetingEnabled: checked } })}
+                  />
+                  <Toggle
+                    label="Share what you're looking at as you move around ROME"
+                    checked={draft.realtime.shareLiveContext}
+                    onChange={checked => setDraft({ ...draft, realtime: { ...draft.realtime, shareLiveContext: checked } })}
+                  />
+                </SettingGroup>
                 <SettingGroup title="Voice">
                   <Toggle label="Voice responses" checked={draft.voice.enabled} onChange={checked => setDraft({ ...draft, voice: { ...draft.voice, enabled: checked } })} />
                   <LabeledInput label="ElevenLabs voice ID" value={draft.voice.voiceId} onChange={value => setDraft({ ...draft, voice: { ...draft.voice, voiceId: value } })} />
                   <RangeInput label="Speech speed" value={draft.voice.speed} min={0.7} max={1.2} step={0.05} onChange={value => setDraft({ ...draft, voice: { ...draft.voice, speed: value } })} />
                   <RangeInput label="Playback volume" value={draft.voice.volume} min={0} max={1} step={0.05} onChange={value => setDraft({ ...draft, voice: { ...draft.voice, volume: value } })} />
-                  <LabeledInput label={`ElevenLabs API key · ${status.settings.secrets.elevenLabsConfigured ? "configured" : "not configured"}`} value={elevenKey} onChange={setElevenKey} password placeholder="Stored encrypted; never shown again" />
+                  <p className="akira-section-note">
+                    Voice and speech model are chosen on the agent in the ElevenLabs dashboard.
+                  </p>
                 </SettingGroup>
                 <SettingGroup title="Input">
                   <Toggle label="Local wake word “Akira”" checked={draft.input.wakeWordEnabled} onChange={checked => setDraft({ ...draft, input: { ...draft.input, wakeWordEnabled: checked } })} />
@@ -240,7 +271,11 @@ export default function AkiraConsole() {
                   <RangeInput label="Animation strength" value={draft.appearance.animationStrength} min={0} max={1} step={0.05} onChange={value => setDraft({ ...draft, appearance: { ...draft.appearance, animationStrength: value } })} />
                   <Toggle label="Reduce motion" checked={draft.appearance.reduceMotion} onChange={checked => setDraft({ ...draft, appearance: { ...draft.appearance, reduceMotion: checked } })} />
                 </SettingGroup>
-                <SettingGroup title="Agent">
+                <SettingGroup title="Background work (optional)">
+                  <p className="akira-section-note">
+                    Hermes handles long multi-step tasks in the background so they don't block the
+                    conversation. Akira works without it; leave this alone unless you've installed it.
+                  </p>
                   <label className="akira-field"><span>Cloud provider</span><select value={draft.agent.provider} onChange={event => setDraft({ ...draft, agent: { ...draft.agent, provider: event.target.value as AkiraSettings["agent"]["provider"] } })}><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option></select></label>
                   <LabeledInput label="Model" value={draft.agent.model} onChange={value => setDraft({ ...draft, agent: { ...draft.agent, model: value } })} />
                   <LabeledInput label={`${draft.agent.provider} API key · ${status.settings.secrets.providerConfigured ? "configured" : "not configured"}`} value={providerKey} onChange={setProviderKey} password placeholder="Stored encrypted; never shown again" />
