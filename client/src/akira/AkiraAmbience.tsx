@@ -36,7 +36,7 @@ const ACTIVE_STATES: ReadonlySet<AkiraState> = new Set<AkiraState>([
 ]);
 
 export default function AkiraAmbience() {
-  const { status } = useAkira();
+  const { status, notice } = useAkira();
   const [worldMode, setWorldMode] = useState(false);
   const [flashing, setFlashing] = useState(false);
   const errorFlashRef = useRef<number | null>(null);
@@ -83,21 +83,35 @@ export default function AkiraAmbience() {
     };
   }, [state]);
 
-  const visible = ACTIVE_STATES.has(state) || flashing;
+  const visible = ACTIVE_STATES.has(state) || flashing || Boolean(notice);
 
   return (
-    <div
-      aria-hidden="true"
-      data-testid="akira-ambience"
-      className={[
-        "akira-ambience",
-        `akira-ambience-${state.toLowerCase()}`,
-        worldMode ? "akira-ambience-framed" : "",
-        visible ? "is-visible" : "",
-        flashing ? "is-error-flash" : "",
-        reduceMotion ? "is-static" : "",
-      ].filter(Boolean).join(" ")}
-      style={{ "--akira-anim-strength": reduceMotion ? "0" : animationStrength.toFixed(2) } as CSSProperties}
-    />
+    <>
+      <div
+        aria-hidden="true"
+        data-testid="akira-ambience"
+        className={[
+          "akira-ambience",
+          `akira-ambience-${state.toLowerCase()}`,
+          worldMode ? "akira-ambience-framed" : "",
+          visible ? "is-visible" : "",
+          flashing || notice?.kind === "error" ? "is-error-flash" : "",
+          reduceMotion ? "is-static" : "",
+        ].filter(Boolean).join(" ")}
+        style={{ "--akira-anim-strength": reduceMotion ? "0" : animationStrength.toFixed(2) } as CSSProperties}
+      />
+      {/* Akira's only text surface outside the console. Without it, a shortcut
+          that fails is indistinguishable from a shortcut that isn't bound. */}
+      {notice && (
+        <div
+          className={`akira-notice-toast ${notice.kind}`}
+          role="status"
+          aria-live="polite"
+          data-testid="akira-notice"
+        >
+          {notice.text}
+        </div>
+      )}
+    </>
   );
 }

@@ -28,11 +28,20 @@ import { queryClient } from "@/lib/queryClient";
 import { loadFinancialState, saveFinancialState } from "@/lib/financialStore";
 import { makeId, projectFinancials, toDateInput, type ExpenseKind, type Recurrence } from "@/lib/financialEngine";
 
+/** A short-lived message shown by the ambience layer, then cleared. */
+export interface AkiraNotice {
+  text: string;
+  kind: "info" | "error";
+  at: number;
+}
+
 interface AkiraContextValue {
   status: AkiraStatus | null;
   transcripts: AkiraTranscriptEvent[];
   approval: AkiraApprovalRequest | null;
   microphoneArmed: boolean;
+  notice: AkiraNotice | null;
+  showNotice: (text: string, kind?: AkiraNotice["kind"]) => void;
   panelOpen: boolean;
   /** Accepts an updater so the summon shortcut can toggle without a stale read. */
   setPanelOpen: Dispatch<SetStateAction<boolean>>;
@@ -67,6 +76,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const [approval, setApproval] = useState<AkiraApprovalRequest | null>(null);
   const [microphoneArmed, setMicrophoneArmed] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [notice, setNotice] = useState<AkiraNotice | null>(null);
   const statusRef = useRef<AkiraStatus | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const captureContextRef = useRef<AudioContext | null>(null);
@@ -84,8 +94,23 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const playbackGenerationRef = useRef(0);
   const continueTimerRef = useRef<number | null>(null);
   const lastVadLevelRef = useRef(0);
+  const noticeTimerRef = useRef<number | null>(null);
 
   useEffect(() => { statusRef.current = status; }, [status]);
+
+  /**
+   * Transient, self-clearing feedback. Akira has no persistent interface, so
+   * this is how a failed shortcut or a missing runtime becomes visible without
+   * reintroducing a permanent dock.
+   */
+  const showNotice = useCallback((text: string, kind: AkiraNotice["kind"] = "info") => {
+    if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    setNotice({ text: text.slice(0, 240), kind, at: Date.now() });
+    noticeTimerRef.current = window.setTimeout(() => {
+      noticeTimerRef.current = null;
+      setNotice(null);
+    }, kind === "error" ? 6_000 : 3_200);
+  }, []);
 
   const cancelPlayback = useCallback(() => {
     playbackGenerationRef.current += 1;
@@ -304,14 +329,27 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
    * One key for the whole conversation: start it when dormant, end it when
    * active. Resolved from live status rather than a captured value so a rapid
    * double-press can't desynchronise the two halves.
+   *
+   * Failures are surfaced rather than thrown. With no dock and no visible
+   * chrome, an unhandled rejection here means pressing the key does *nothing
+   * at all* — no error, no sound, no glow — which is indistinguishable from a
+   * dead keybinding. The notice is the only feedback channel Akira has left.
    */
   const toggleConversation = useCallback(async () => {
     if (!bridge) return;
     const state = statusRef.current?.state;
     const dormant = !state || state === "DORMANT" || state === "DEACTIVATING" || state === "ERROR";
-    if (dormant) await activate();
-    else await standby();
-  }, [activate, bridge, standby]);
+    try {
+      if (dormant) await activate();
+      else await standby();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      showNotice(
+        reason || "Akira could not start a conversation.",
+        "error",
+      );
+    }
+  }, [activate, bridge, showNotice, standby]);
 
   const interrupt = useCallback(async () => {
     if (!bridge) return;
@@ -423,6 +461,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   }, [standby]);
 
   useEffect(() => () => {
+    if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
     if (continueTimerRef.current) window.clearTimeout(continueTimerRef.current);
     stopRecorder(true);
     cancelPlayback();
@@ -431,7 +470,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   }, [cancelPlayback, disarmMicrophone, stopRecorder]);
 
   const value = useMemo<AkiraContextValue>(() => ({
-    status, transcripts, approval, microphoneArmed, panelOpen, setPanelOpen,
+    status, transcripts, approval, microphoneArmed, notice, showNotice, panelOpen, setPanelOpen,
     activate, standby, interrupt, toggleConversation, submitText,
     respondToApproval: async approved => {
       if (!bridge || !approval) return;
@@ -446,7 +485,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     loadDiagnostics: () => bridge?.getDiagnostics() ?? Promise.resolve({}),
     loadCapabilities: () => bridge?.getCapabilities() ?? Promise.resolve([]),
     callCapability: (name, args) => bridge?.callCapability(name, args) ?? Promise.reject(new Error("Akira is desktop-only.")),
-  }), [activate, approval, bridge, interrupt, microphoneArmed, panelOpen, standby, status, submitText, toggleConversation, transcripts]);
+  }), [activate, approval, bridge, interrupt, microphoneArmed, notice, panelOpen, showNotice, standby, status, submitText, toggleConversation, transcripts]);
 
   return <AkiraContext.Provider value={value}>{children}</AkiraContext.Provider>;
 }
