@@ -1,15 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
+/**
+ * AkiraConsole — transcript, settings, memory, activity, and health.
+ *
+ * This was `AkiraAura` in V2, which rendered a permanent orb and an "AKIRA /
+ * Standby" label bar docked in the lower right of every screen. Both are gone.
+ * The console is now summoned (Command+Shift+' by default, or from Settings)
+ * and mounts nothing at all when closed.
+ *
+ * The approval dialog is the one exception: it stays mounted regardless,
+ * because a destructive action needs to interrupt by design.
+ */
+
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Activity,
-  Bot,
   Check,
-  ChevronDown,
-  CircleStop,
   Database,
-  KeyRound,
   Mic,
   MicOff,
-  PanelRightOpen,
   RotateCw,
   Send,
   Settings2,
@@ -17,7 +24,14 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import type { AkiraActivityEntry, AkiraCapabilityDescriptor, AkiraSettings, AkiraState } from "@shared/akira";
+import {
+  AKIRA_SHORTCUT_CHOICES,
+  type AkiraActivityEntry,
+  type AkiraCapabilityDescriptor,
+  type AkiraSettings,
+  type AkiraShortcut,
+  type AkiraState,
+} from "@shared/akira";
 import { useAkira } from "./AkiraProvider";
 
 type PanelTab = "conversation" | "settings" | "memory" | "activity" | "diagnostics";
@@ -36,7 +50,17 @@ const stateLabel: Record<AkiraState, string> = {
   UNAVAILABLE: "Unavailable",
 };
 
-export default function AkiraAura() {
+/** Human-readable accelerator, e.g. "Command+'" → "⌘ '". */
+function shortcutLabel(value: string): string {
+  return value
+    .replace(/Command/gi, "⌘")
+    .replace(/Control/gi, "⌃")
+    .replace(/Shift/gi, "⇧")
+    .replace(/Alt|Option/gi, "⌥")
+    .replace(/\+/g, " ");
+}
+
+export default function AkiraConsole() {
   const akira = useAkira();
   const { status, panelOpen, setPanelOpen } = akira;
   const [tab, setTab] = useState<PanelTab>("conversation");
@@ -61,7 +85,12 @@ export default function AkiraAura() {
     if (tab === "diagnostics") void akira.loadDiagnostics().then(setDiagnostics);
     if (tab === "settings") void akira.loadCapabilities().then(setCapabilities);
     if (tab === "memory") {
-      void akira.callCapability("rome.memory.list", {}).then((value: any) => setMemory(value?.result ?? [])).catch(error => setError(String(error?.message ?? error)));
+      // rome.memory.list is not registered until Phase 3; fail soft rather than
+      // throwing an unhandled rejection into the panel.
+      void akira
+        .callCapability("rome.memory.list", {})
+        .then((value: any) => setMemory(value?.result ?? []))
+        .catch(() => setMemory([]));
     }
   }, [akira, panelOpen, tab]);
 
@@ -75,21 +104,9 @@ export default function AkiraAura() {
   useEffect(() => {
     if (!status) return;
     const root = document.documentElement;
-    root.style.setProperty("--akira-gradient-a", status.settings.appearance.gradientA);
-    root.style.setProperty("--akira-gradient-b", status.settings.appearance.gradientB);
-    root.style.setProperty("--akira-intensity", String(status.settings.appearance.intensity));
-    root.style.setProperty("--akira-animation-strength", String(status.settings.appearance.animationStrength));
-    root.dataset.romeAkiraSize = status.settings.appearance.auraSize;
     root.dataset.romeAkiraReduceMotion = status.settings.appearance.reduceMotion ? "true" : "false";
-    return () => {
-      root.style.removeProperty("--akira-gradient-a");
-      root.style.removeProperty("--akira-gradient-b");
-      root.style.removeProperty("--akira-intensity");
-      root.style.removeProperty("--akira-animation-strength");
-      delete root.dataset.romeAkiraSize;
-      delete root.dataset.romeAkiraReduceMotion;
-    };
-  }, [status?.settings.appearance]);
+    return () => { delete root.dataset.romeAkiraReduceMotion; };
+  }, [status?.settings.appearance.reduceMotion]);
 
   if (!window.romeDesktop?.isDesktop) return null;
   const state = status?.state ?? "UNAVAILABLE";
@@ -112,20 +129,6 @@ export default function AkiraAura() {
     await akira.submitText(text);
   });
 
-  const primaryAction = () => {
-    if (state === "UNAVAILABLE" || state === "ERROR") {
-      setPanelOpen(true);
-      setTab("diagnostics");
-    } else if (state === "DORMANT" || !akira.microphoneArmed) {
-      void run(akira.activate);
-    } else if (state === "SPEAKING") {
-      void run(akira.interrupt);
-    } else {
-      setPanelOpen(true);
-      setTab("conversation");
-    }
-  };
-
   const saveSettings = () => run(async () => {
     if (!draft || !status) return;
     await akira.updateSettings(draft);
@@ -141,23 +144,6 @@ export default function AkiraAura() {
 
   return (
     <>
-      <div className={`akira-dock akira-state-${state.toLowerCase()}`} data-testid="akira-aura">
-        <button
-          className="akira-aura"
-          onClick={primaryAction}
-          aria-label={state === "DORMANT" ? "Activate Akira" : state === "SPEAKING" ? "Interrupt Akira" : "Open Akira"}
-          title={status?.reason || `Akira · ${label}`}
-        >
-          <span className="akira-aura-orbit" />
-          <span className="akira-aura-core">{state === "LISTENING" ? <Mic size={17} /> : state === "SPEAKING" ? <CircleStop size={15} /> : <Bot size={16} />}</span>
-        </button>
-        <button className="akira-dock-label" onClick={() => setPanelOpen(!panelOpen)}>
-          <span>AKIRA</span>
-          <small>{label}</small>
-          <PanelRightOpen size={11} />
-        </button>
-      </div>
-
       {panelOpen && (
         <aside className="akira-panel" aria-label="Akira console">
           <header className="akira-panel-header">
@@ -169,7 +155,7 @@ export default function AkiraAura() {
           </header>
 
           <nav className="akira-tabs" aria-label="Akira sections">
-            <TabButton active={tab === "conversation"} onClick={() => setTab("conversation")} icon={<Bot size={12} />} label="Talk" />
+            <TabButton active={tab === "conversation"} onClick={() => setTab("conversation")} icon={<Mic size={12} />} label="Talk" />
             <TabButton active={tab === "settings"} onClick={() => setTab("settings")} icon={<Settings2 size={12} />} label="Settings" />
             <TabButton active={tab === "memory"} onClick={() => setTab("memory")} icon={<Database size={12} />} label="Memory" />
             <TabButton active={tab === "activity"} onClick={() => setTab("activity")} icon={<Activity size={12} />} label="Activity" />
@@ -186,8 +172,10 @@ export default function AkiraAura() {
                   {akira.transcripts.length === 0 ? (
                     <div className="akira-empty">
                       <ShieldCheck size={24} />
-                      <p>While Akira is in Standby, say “Akira” or type below.</p>
-                      <small>Dormant audio stays on-device. Control+Escape returns to standby.</small>
+                      <p>Say “Akira” to begin, or type below.</p>
+                      <small>
+                        {shortcutLabel(status?.settings.input.conversationShortcut ?? "Command+'")} starts and ends a conversation.
+                      </small>
                     </div>
                   ) : akira.transcripts.map((entry, index) => (
                     <div key={`${entry.at}-${index}`} className={`akira-message ${entry.role}`}>
@@ -230,15 +218,27 @@ export default function AkiraAura() {
                   <Toggle label="Wake when ROME is unfocused (advanced)" checked={draft.input.wakeWhenUnfocused} onChange={checked => setDraft({ ...draft, input: { ...draft.input, wakeWhenUnfocused: checked } })} />
                   <RangeInput label="Wake strictness" value={draft.input.wakeSensitivity} min={0} max={1} step={0.05} onChange={value => setDraft({ ...draft, input: { ...draft.input, wakeSensitivity: value } })} />
                   <label className="akira-field"><span>Local speech model</span><select value={draft.input.sttModel} onChange={event => setDraft({ ...draft, input: { ...draft.input, sttModel: event.target.value as "tiny" | "base" } })}><option value="base">Base · recommended</option><option value="tiny">Tiny · lower memory</option></select></label>
-                  <label className="akira-field"><span>Standby shortcut</span><select value={draft.input.deactivationShortcut} onChange={event => setDraft({ ...draft, input: { ...draft.input, deactivationShortcut: event.target.value as AkiraSettings["input"]["deactivationShortcut"] } })}><option value="Control+Escape">Control + Escape</option><option value="Control+Shift+Escape">Control + Shift + Escape</option></select></label>
+                  <ShortcutSelect
+                    label="Conversation toggle"
+                    value={draft.input.conversationShortcut}
+                    exclude={draft.input.consoleShortcut}
+                    onChange={value => setDraft({ ...draft, input: { ...draft.input, conversationShortcut: value } })}
+                  />
+                  <ShortcutSelect
+                    label="Open this console"
+                    value={draft.input.consoleShortcut}
+                    exclude={draft.input.conversationShortcut}
+                    onChange={value => setDraft({ ...draft, input: { ...draft.input, consoleShortcut: value } })}
+                  />
                 </SettingGroup>
                 <SettingGroup title="Appearance">
-                  <label className="akira-field"><span>Aura size</span><select value={draft.appearance.auraSize} onChange={event => setDraft({ ...draft, appearance: { ...draft.appearance, auraSize: event.target.value as AkiraSettings["appearance"]["auraSize"] } })}><option value="compact">Compact</option><option value="standard">Standard</option><option value="large">Large</option></select></label>
-                  <ColorInput label="Gradient A" value={draft.appearance.gradientA} onChange={value => setDraft({ ...draft, appearance: { ...draft.appearance, gradientA: value } })} />
-                  <ColorInput label="Gradient B" value={draft.appearance.gradientB} onChange={value => setDraft({ ...draft, appearance: { ...draft.appearance, gradientB: value } })} />
-                  <RangeInput label="Aura intensity" value={draft.appearance.intensity} min={0.2} max={1} step={0.05} onChange={value => setDraft({ ...draft, appearance: { ...draft.appearance, intensity: value } })} />
+                  <p className="akira-section-note">
+                    Akira has no permanent interface. A live conversation is shown by the background
+                    gradient — set its colors in the Constellation editor (open the Constellation, press E).
+                  </p>
+                  <RangeInput label="Glow intensity" value={draft.appearance.intensity} min={0.2} max={1} step={0.05} onChange={value => setDraft({ ...draft, appearance: { ...draft.appearance, intensity: value } })} />
                   <RangeInput label="Animation strength" value={draft.appearance.animationStrength} min={0} max={1} step={0.05} onChange={value => setDraft({ ...draft, appearance: { ...draft.appearance, animationStrength: value } })} />
-                  <Toggle label="Reduce Aura motion" checked={draft.appearance.reduceMotion} onChange={checked => setDraft({ ...draft, appearance: { ...draft.appearance, reduceMotion: checked } })} />
+                  <Toggle label="Reduce motion" checked={draft.appearance.reduceMotion} onChange={checked => setDraft({ ...draft, appearance: { ...draft.appearance, reduceMotion: checked } })} />
                 </SettingGroup>
                 <SettingGroup title="Agent">
                   <label className="akira-field"><span>Cloud provider</span><select value={draft.agent.provider} onChange={event => setDraft({ ...draft, agent: { ...draft.agent, provider: event.target.value as AkiraSettings["agent"]["provider"] } })}><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option></select></label>
@@ -328,11 +328,11 @@ export default function AkiraAura() {
   );
 }
 
-function TabButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+function TabButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: ReactNode; label: string }) {
   return <button className={active ? "active" : ""} onClick={onClick}>{icon}<span>{label}</span></button>;
 }
 
-function SettingGroup({ title, children }: { title: string; children: React.ReactNode }) {
+function SettingGroup({ title, children }: { title: string; children: ReactNode }) {
   return <fieldset><legend>{title}</legend>{children}</fieldset>;
 }
 
@@ -348,6 +348,26 @@ function RangeInput({ label, value, min, max, step, onChange }: { label: string;
   return <label className="akira-field"><span>{label} · {value.toFixed(step < 0.1 ? 2 : 1)}</span><input type="range" value={value} min={min} max={max} step={step} onChange={event => onChange(Number(event.target.value))} /></label>;
 }
 
-function ColorInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <label className="akira-field"><span>{label}</span><input type="color" value={value} onChange={event => onChange(event.target.value)} /></label>;
+/** Accelerator picker that refuses to let both shortcuts collide. */
+function ShortcutSelect({
+  label,
+  value,
+  exclude,
+  onChange,
+}: {
+  label: string;
+  value: AkiraShortcut;
+  exclude: AkiraShortcut;
+  onChange: (value: AkiraShortcut) => void;
+}) {
+  return (
+    <label className="akira-field">
+      <span>{label}</span>
+      <select value={value} onChange={event => onChange(event.target.value as AkiraShortcut)}>
+        {AKIRA_SHORTCUT_CHOICES.filter(choice => choice === value || choice !== exclude).map(choice => (
+          <option key={choice} value={choice}>{shortcutLabel(choice)}</option>
+        ))}
+      </select>
+    </label>
+  );
 }

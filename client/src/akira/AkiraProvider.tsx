@@ -6,18 +6,23 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
-import type {
-  AkiraActivityEntry,
-  AkiraApprovalRequest,
-  AkiraCapabilityDescriptor,
-  AkiraAudioEvent,
-  AkiraDataChanged,
-  AkiraRendererCommand,
-  AkiraSettings,
-  AkiraStatus,
-  AkiraTranscriptEvent,
+import {
+  DEFAULT_CONSOLE_SHORTCUT,
+  DEFAULT_CONVERSATION_SHORTCUT,
+  matchesAkiraShortcut,
+  type AkiraActivityEntry,
+  type AkiraApprovalRequest,
+  type AkiraCapabilityDescriptor,
+  type AkiraAudioEvent,
+  type AkiraDataChanged,
+  type AkiraRendererCommand,
+  type AkiraSettings,
+  type AkiraStatus,
+  type AkiraTranscriptEvent,
 } from "@shared/akira";
 import { queryClient } from "@/lib/queryClient";
 import { loadFinancialState, saveFinancialState } from "@/lib/financialStore";
@@ -29,10 +34,13 @@ interface AkiraContextValue {
   approval: AkiraApprovalRequest | null;
   microphoneArmed: boolean;
   panelOpen: boolean;
-  setPanelOpen: (value: boolean) => void;
+  /** Accepts an updater so the summon shortcut can toggle without a stale read. */
+  setPanelOpen: Dispatch<SetStateAction<boolean>>;
   activate: () => Promise<void>;
   standby: () => Promise<void>;
   interrupt: () => Promise<void>;
+  /** Start a conversation when dormant, end it when active. Bound to Command+'. */
+  toggleConversation: () => Promise<void>;
   submitText: (text: string) => Promise<void>;
   respondToApproval: (approved: boolean) => Promise<void>;
   updateSettings: (patch: Partial<AkiraSettings>) => Promise<void>;
@@ -75,6 +83,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const playbackSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const playbackGenerationRef = useRef(0);
   const continueTimerRef = useRef<number | null>(null);
+  const lastVadLevelRef = useRef(0);
 
   useEffect(() => { statusRef.current = status; }, [status]);
 
@@ -193,6 +202,16 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
       return;
     }
     bargeFramesRef.current = 0;
+
+    // Feed microphone level straight to CSS so the ambience can breathe with
+    // your voice. Doing this through React state would mean a re-render on
+    // every audio frame; a custom property costs nothing.
+    const level = Math.max(0, Math.min(1, rms * 12));
+    if (Math.abs(level - lastVadLevelRef.current) > 0.04) {
+      lastVadLevelRef.current = level;
+      document.documentElement.style.setProperty("--akira-vad", level.toFixed(2));
+    }
+
     if (current.state !== "LISTENING" || recorderRef.current?.state !== "recording") return;
     if (rms > 0.025) {
       speechSeenRef.current = true;
@@ -276,8 +295,23 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     stopRecorder(true);
     cancelPlayback();
     await disarmMicrophone();
+    lastVadLevelRef.current = 0;
+    document.documentElement.style.setProperty("--akira-vad", "0");
     setStatus(await bridge.standby());
   }, [bridge, cancelPlayback, disarmMicrophone, stopRecorder]);
+
+  /**
+   * One key for the whole conversation: start it when dormant, end it when
+   * active. Resolved from live status rather than a captured value so a rapid
+   * double-press can't desynchronise the two halves.
+   */
+  const toggleConversation = useCallback(async () => {
+    if (!bridge) return;
+    const state = statusRef.current?.state;
+    const dormant = !state || state === "DORMANT" || state === "DEACTIVATING" || state === "ERROR";
+    if (dormant) await activate();
+    else await standby();
+  }, [activate, bridge, standby]);
 
   const interrupt = useCallback(async () => {
     if (!bridge) return;
@@ -328,14 +362,29 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
           .then(() => window.setTimeout(startRecorder, 30))
           .catch(() => void bridge.standby().then(value => setStatus(value)));
       }),
-      bridge.onShortcut(value => { if (value?.action === "standby") void standby(); }),
+      // Shortcuts pressed while a native browser view has focus arrive here,
+      // because the renderer never sees those key events at all.
+      bridge.onShortcut(value => {
+        if (value?.action === "standby") void standby();
+        else if (value?.action === "toggle") void toggleConversation();
+        else if (value?.action === "console") setPanelOpen(current => !current);
+      }),
     ];
     const keydown = (event: KeyboardEvent) => {
-      const shortcut = statusRef.current?.settings.input.deactivationShortcut ?? "Control+Escape";
-      const shiftMatches = shortcut === "Control+Shift+Escape" ? event.shiftKey : !event.shiftKey;
-      if (event.key === "Escape" && event.ctrlKey && shiftMatches && !event.altKey && !event.metaKey) {
+      const input = statusRef.current?.settings.input;
+      const conversation = input?.conversationShortcut ?? DEFAULT_CONVERSATION_SHORTCUT;
+      const consoleShortcut = input?.consoleShortcut ?? DEFAULT_CONSOLE_SHORTCUT;
+      // Check the console binding first: it is the more specific accelerator
+      // (it carries Shift), and matching is exact so order only matters if a
+      // future binding pair overlaps.
+      if (matchesAkiraShortcut(consoleShortcut, event)) {
         event.preventDefault();
-        void standby();
+        setPanelOpen(current => !current);
+        return;
+      }
+      if (matchesAkiraShortcut(conversation, event)) {
+        event.preventDefault();
+        void toggleConversation();
       }
     };
     window.addEventListener("keydown", keydown, true);
@@ -344,7 +393,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
       remove.forEach(dispose => dispose());
       window.removeEventListener("keydown", keydown, true);
     };
-  }, [armMicrophone, bridge, handleDataChanged, handleRendererCommand, playAudio, standby, startRecorder]);
+  }, [armMicrophone, bridge, handleDataChanged, handleRendererCommand, playAudio, standby, startRecorder, toggleConversation]);
 
   useEffect(() => {
     if (status?.state === "LISTENING" && microphoneArmed) {
@@ -383,7 +432,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AkiraContextValue>(() => ({
     status, transcripts, approval, microphoneArmed, panelOpen, setPanelOpen,
-    activate, standby, interrupt, submitText,
+    activate, standby, interrupt, toggleConversation, submitText,
     respondToApproval: async approved => {
       if (!bridge || !approval) return;
       const id = approval.id;
@@ -397,7 +446,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     loadDiagnostics: () => bridge?.getDiagnostics() ?? Promise.resolve({}),
     loadCapabilities: () => bridge?.getCapabilities() ?? Promise.resolve([]),
     callCapability: (name, args) => bridge?.callCapability(name, args) ?? Promise.reject(new Error("Akira is desktop-only.")),
-  }), [activate, approval, bridge, interrupt, microphoneArmed, panelOpen, standby, status, submitText, transcripts]);
+  }), [activate, approval, bridge, interrupt, microphoneArmed, panelOpen, standby, status, submitText, toggleConversation, transcripts]);
 
   return <AkiraContext.Provider value={value}>{children}</AkiraContext.Provider>;
 }

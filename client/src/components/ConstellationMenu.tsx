@@ -3,14 +3,44 @@ import { motion, useMotionValue, useSpring, animate } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
-import { loadLayout, saveLayout, resetLayout, DEFAULT_RAY_COLOR, DEFAULT_ACCENT_COLOR, type ConstellationLayout, type NodeOverride } from "@/lib/constellationLayout";
+import {
+  loadLayout,
+  saveLayout,
+  resetLayout,
+  defaultLayout,
+  DEFAULT_RAY_COLOR,
+  DEFAULT_ACCENT_COLOR,
+  DEFAULT_AKIRA_GRADIENT_A,
+  DEFAULT_AKIRA_GRADIENT_B,
+  DEFAULT_AKIRA_INTENSITY,
+  type ConstellationLayout,
+  type NodeOverride,
+} from "@/lib/constellationLayout";
 import { getRayState, pinRaySource, setRayDirection, setRayColor, setRayBrightness, setAccentColor } from "@/lib/lightRayState";
+import { setAkiraAmbience } from "@/lib/akiraAmbienceState";
 import ConstellationNode from "./ConstellationNode";
 import NodeBranchMenu from "./NodeBranchMenu";
 import ConstellationWidget from "./ConstellationWidget";
 import ProjectsWidget from "./ProjectsWidget";
 import ThreatsWidget from "./ThreatsWidget";
 import TaskStabilizerWidget from "./TaskStabilizerWidget";
+
+// ── Akira ambience presets ────────────────────────────────────────────────
+// Two colors form the conversation glow: A blooms from the lower left, B from
+// the upper right. Presets are cool and mid-luminance on purpose — the glow
+// sits behind working content and must never fight it for attention.
+const AKIRA_PRESETS: { label: string; hsl: string }[] = [
+  { label: "Cyan",    hsl: "178 76% 58%" },
+  { label: "Violet",  hsl: "268 82% 68%" },
+  { label: "Azure",   hsl: "212 84% 62%" },
+  { label: "Jade",    hsl: "158 62% 52%" },
+  { label: "Magenta", hsl: "312 70% 64%" },
+];
+
+const AKIRA_GRADIENT_ROWS: { side: "a" | "b"; label: string }[] = [
+  { side: "a", label: "Glow A · lower left" },
+  { side: "b", label: "Glow B · upper right" },
+];
 
 // ── Moving particle canvas ─────────────────────────────────────────────────
 function ParticleCanvas({
@@ -376,7 +406,15 @@ export default function ConstellationMenu({ onClose }: Props) {
     setRayColor(layout.ray.rayColor ?? DEFAULT_RAY_COLOR);
     setRayBrightness(layout.ray.rayBrightness ?? 1.0);
     setAccentColor(layout.accentColor ?? DEFAULT_ACCENT_COLOR);
-  }, [layout.ray.x, layout.ray.y, layout.ray.dirAngle, layout.ray.rayColor, layout.ray.rayBrightness, layout.accentColor]);
+    setAkiraAmbience(
+      layout.akiraGradientA ?? DEFAULT_AKIRA_GRADIENT_A,
+      layout.akiraGradientB ?? DEFAULT_AKIRA_GRADIENT_B,
+      layout.akiraIntensity ?? DEFAULT_AKIRA_INTENSITY,
+    );
+  }, [
+    layout.ray.x, layout.ray.y, layout.ray.dirAngle, layout.ray.rayColor, layout.ray.rayBrightness,
+    layout.accentColor, layout.akiraGradientA, layout.akiraGradientB, layout.akiraIntensity,
+  ]);
 
   // Dims
   const getDims = () => ({
@@ -462,14 +500,19 @@ export default function ConstellationMenu({ onClose }: Props) {
   // ESC to close/deselect/exit edit
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
+      // Only *bare* Escape controls the constellation. Without this guard any
+      // modified Escape — including Akira's old Control+Escape binding — also
+      // deselected the current node or dropped you out of edit mode.
+      if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
         if (editMode) { setEditMode(false); return; }
         if (selectedId) setSelectedId(null);
         else onClose();
+        return;
       }
-      // E to toggle edit mode — skip when typing in any input/textarea
-      if (e.key === "e" || e.key === "E") {
+      // E to toggle edit mode — skip when typing in any input/textarea, and
+      // never while a modifier is held.
+      if ((e.key === "e" || e.key === "E") && !e.metaKey && !e.ctrlKey && !e.altKey) {
         const tag = (e.target as HTMLElement).tagName;
         if (!selectedId && tag !== "INPUT" && tag !== "TEXTAREA") setEditMode(v => !v);
       }
@@ -545,9 +588,34 @@ export default function ConstellationMenu({ onClose }: Props) {
     setLayout(prev => ({ ...prev, particleHue: v }));
   }, []);
 
+  // Akira ambience — the background glow shown during a live conversation.
+  // Applied immediately so the picker previews against the real effect.
+  const handleAkiraGradientA = useCallback((hsl: string) => {
+    setLayout(prev => {
+      setAkiraAmbience(hsl, prev.akiraGradientB ?? DEFAULT_AKIRA_GRADIENT_B, prev.akiraIntensity ?? DEFAULT_AKIRA_INTENSITY);
+      return { ...prev, akiraGradientA: hsl };
+    });
+  }, []);
+
+  const handleAkiraGradientB = useCallback((hsl: string) => {
+    setLayout(prev => {
+      setAkiraAmbience(prev.akiraGradientA ?? DEFAULT_AKIRA_GRADIENT_A, hsl, prev.akiraIntensity ?? DEFAULT_AKIRA_INTENSITY);
+      return { ...prev, akiraGradientB: hsl };
+    });
+  }, []);
+
+  const handleAkiraIntensity = useCallback((v: number) => {
+    setLayout(prev => {
+      setAkiraAmbience(prev.akiraGradientA ?? DEFAULT_AKIRA_GRADIENT_A, prev.akiraGradientB ?? DEFAULT_AKIRA_GRADIENT_B, v);
+      return { ...prev, akiraIntensity: v };
+    });
+  }, []);
+
   const handleReset = useCallback(() => {
     resetLayout();
-    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null, widgetPos: null, widgetCollapsed: false, projectsWidgetPos: null, projectsWidgetCollapsed: false, threatsWidgetPos: null, threatsWidgetCollapsed: false, taskStabilizerWidgetPos: null, taskStabilizerWidgetCollapsed: false });
+    const fresh = defaultLayout();
+    setLayout(fresh);
+    setAkiraAmbience(fresh.akiraGradientA, fresh.akiraGradientB, fresh.akiraIntensity);
     pinRaySource(null, null);
     setRayDirection(null);
     setRayColor(DEFAULT_RAY_COLOR);
@@ -750,6 +818,9 @@ export default function ConstellationMenu({ onClose }: Props) {
         const currentColor = layout.ray.rayColor ?? DEFAULT_RAY_COLOR;
         const currentBrightness  = layout.ray.rayBrightness ?? 1.0;
         const currentAccent      = layout.accentColor ?? DEFAULT_ACCENT_COLOR;
+        const akiraA             = layout.akiraGradientA ?? DEFAULT_AKIRA_GRADIENT_A;
+        const akiraB             = layout.akiraGradientB ?? DEFAULT_AKIRA_GRADIENT_B;
+        const akiraIntensity     = layout.akiraIntensity ?? DEFAULT_AKIRA_INTENSITY;
 
         const ACCENT_PRESETS: { label: string; hsl: string }[] = [
           { label: "Gold",    hsl: "43 88% 60%"  },
@@ -932,6 +1003,99 @@ export default function ConstellationMenu({ onClose }: Props) {
                   style={{ width: "100%", accentColor: `hsl(${currentAccent})`, cursor: "pointer" }}
                 />
               </div>
+
+              {/* Divider */}
+              <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />
+
+              {/* ── Akira ambience ──────────────────────────────────────
+                  The background glow shown while a conversation is live.
+                  Akira has no other visible interface, so this is the only
+                  place its appearance can be tuned. Changes preview instantly. */}
+              <p style={{
+                fontFamily: "DM Mono, monospace",
+                fontSize: 8,
+                color: "hsl(var(--accent-h) var(--accent-s) var(--accent-l))",
+                letterSpacing: "0.18em",
+                textTransform: "uppercase",
+                marginBottom: 2,
+              }}>Akira Glow</p>
+              <p style={{
+                fontFamily: "DM Mono, monospace",
+                fontSize: 7,
+                color: "hsl(var(--accent-h) 25% 32%)",
+                letterSpacing: "0.08em",
+                margin: "0 0 8px",
+              }}>Shown only during a conversation</p>
+
+              {/* Live preview strip — the actual gradient, at full strength */}
+              <div style={{
+                height: 26,
+                borderRadius: 4,
+                marginBottom: 9,
+                border: "1px solid hsl(var(--accent-h) 20% 16%)",
+                background: `linear-gradient(110deg, hsl(${akiraA} / ${0.25 + 0.55 * akiraIntensity}) 0%, hsl(222 22% 6%) 48%, hsl(${akiraB} / ${0.25 + 0.55 * akiraIntensity}) 100%)`,
+              }} />
+
+              {AKIRA_GRADIENT_ROWS.map(row => {
+                const current = row.side === "a" ? akiraA : akiraB;
+                const apply   = row.side === "a" ? handleAkiraGradientA : handleAkiraGradientB;
+                return (
+                  <div key={row.side} style={{ marginBottom: 9 }}>
+                    <p style={{
+                      fontFamily: "DM Mono, monospace",
+                      fontSize: 7,
+                      color: "hsl(var(--accent-h) 30% 35%)",
+                      letterSpacing: "0.14em",
+                      textTransform: "uppercase",
+                      margin: "0 0 5px",
+                    }}>{row.label}</p>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 24px)", gap: 5 }}>
+                      {AKIRA_PRESETS.map(preset => {
+                        const isActive = current === preset.hsl;
+                        return (
+                          <button
+                            key={preset.hsl}
+                            title={preset.label}
+                            onClick={() => apply(preset.hsl)}
+                            style={{
+                              width: 24, height: 24, borderRadius: "50%",
+                              background: `hsl(${preset.hsl})`,
+                              border: isActive ? "2px solid hsl(var(--accent-h) 90% 80%)" : "2px solid transparent",
+                              outline: isActive ? "1px solid hsl(var(--accent-h) 60% 40%)" : "none",
+                              cursor: "pointer",
+                              transition: "transform 0.12s ease, border 0.12s ease",
+                              transform: isActive ? "scale(1.18)" : "scale(1)",
+                              boxShadow: isActive ? `0 0 8px hsl(${preset.hsl} / 0.7)` : `0 0 4px hsl(${preset.hsl} / 0.3)`,
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+                    <input
+                      type="range"
+                      min={0} max={360} step={1}
+                      value={parseInt(current.split(" ")[0]) || 0}
+                      onChange={e => {
+                        const parts = current.split(" ");
+                        apply(`${e.target.value} ${parts[1] ?? "80%"} ${parts[2] ?? "62%"}`);
+                      }}
+                      style={{ width: "100%", accentColor: `hsl(${current})`, cursor: "pointer", marginTop: 6 }}
+                    />
+                  </div>
+                );
+              })}
+
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 30% 35%)", letterSpacing: "0.14em", textTransform: "uppercase", margin: 0 }}>Intensity</p>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 8, color: "hsl(var(--accent-h) 60% 60%)", margin: 0 }}>{akiraIntensity.toFixed(2)}</p>
+              </div>
+              <input
+                type="range"
+                min={0.15} max={1} step={0.05}
+                value={akiraIntensity}
+                onChange={e => handleAkiraIntensity(Number(e.target.value))}
+                style={{ width: "100%", accentColor: `hsl(${akiraA})`, cursor: "pointer" }}
+              />
 
               {/* Divider */}
               <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />

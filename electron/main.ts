@@ -13,6 +13,10 @@ import { BrowserController } from "./browser/browser-controller";
 import { registerBrowserIpc } from "./browser/browser-ipc";
 import { AkiraController } from "./akira/controller";
 import { registerAkiraIpc } from "./akira/akira-ipc";
+import {
+  DEFAULT_CONSOLE_SHORTCUT,
+  DEFAULT_CONVERSATION_SHORTCUT,
+} from "../shared/akira";
 
 declare const __dirname: string;
 
@@ -448,7 +452,13 @@ async function createWindow(): Promise<void> {
   browserController = new BrowserController(
     window,
     getDataDir(),
-    () => akiraController?.status().settings.input.deactivationShortcut ?? "Control+Escape",
+    () => {
+      const input = akiraController?.status().settings.input;
+      return {
+        conversation: input?.conversationShortcut ?? DEFAULT_CONVERSATION_SHORTCUT,
+        console: input?.consoleShortcut ?? DEFAULT_CONSOLE_SHORTCUT,
+      };
+    },
   );
   void akiraController.initialize().catch((error) => {
     console.error("[Akira] Background initialization failed:", error);

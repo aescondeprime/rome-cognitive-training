@@ -194,113 +194,116 @@
   50%       { opacity: 1;   }
 }
 
-/* ─── Akira V2 — ambient voice/agent layer ───────────────────────── */
-.akira-dock {
-  --akira-state: var(--akira-gradient-a, hsl(var(--accent-h) 88% 62%));
+/* ─── Akira V3 — ambient conversation layer ──────────────────────────
+   V2 docked a permanent orb and label bar in the lower right. V3 has no
+   persistent chrome: when Akira is dormant nothing renders at all, and a
+   live conversation is signalled by the window edges blooming instead.   */
+
+.akira-ambience {
   position: fixed;
-  right: 18px;
-  bottom: 36px;
-  z-index: 420;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-family: 'DM Mono', monospace;
+  inset: 0;
+  z-index: 1;                 /* above the page background, below all content */
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .42s cubic-bezier(.4, 0, .2, 1);
+  --akira-vad: 0;             /* written by AkiraProvider from mic level */
+  --akira-anim-strength: .65;
+  --akira-spread: calc(28% + 16% * var(--akira-vad) * var(--akira-anim-strength));
+  --akira-alpha: calc(.10 + .16 * var(--akira-intensity, .6));
+  --akira-core-a: hsl(var(--akira-a-h, 178) var(--akira-a-s, 76%) var(--akira-a-l, 58%));
+  --akira-core-b: hsl(var(--akira-b-h, 268) var(--akira-b-s, 82%) var(--akira-b-l, 68%));
 }
 
-.akira-state-listening { --akira-state: var(--akira-gradient-a, hsl(178 76% 58%)); }
-.akira-state-processing,
-.akira-state-acting { --akira-state: var(--akira-gradient-b, hsl(268 82% 68%)); }
-.akira-state-speaking { --akira-state: hsl(42 94% 68%); }
-.akira-state-awaiting_approval { --akira-state: hsl(24 90% 60%); }
-.akira-state-error,
-.akira-state-unavailable { --akira-state: hsl(0 72% 60%); }
+.akira-ambience.is-visible { opacity: 1; }
 
-.akira-aura {
-  position: relative;
-  width: 42px;
-  height: 42px;
-  border: 1px solid color-mix(in srgb, var(--akira-state) 58%, transparent);
-  border-radius: 50%;
-  color: var(--akira-state);
-  background:
-    radial-gradient(circle at 42% 38%, color-mix(in srgb, var(--akira-state) 25%, white 4%) 0, transparent 42%),
-    hsl(222 22% 5% / .9);
-  box-shadow: 0 0 calc(12px + 20px * var(--akira-intensity, .75)) color-mix(in srgb, var(--akira-state) calc(12% + 22% * var(--akira-intensity, .75)), transparent), inset 0 0 18px hsl(222 30% 2% / .8);
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  isolation: isolate;
-}
-
-.akira-aura::before,
-.akira-aura::after {
+/* Two corner blooms reading inward, so the centre of the screen — where you
+   are actually working — stays untinted and legible. */
+.akira-ambience::before,
+.akira-ambience::after {
   content: '';
   position: absolute;
-  inset: -6px;
-  border: 1px solid color-mix(in srgb, var(--akira-state) 24%, transparent);
-  border-radius: 50%;
-  animation: akira-breathe 3.4s ease-in-out infinite;
-  pointer-events: none;
+  inset: 0;
+  transition: background .6s ease;
 }
 
-.akira-aura::after { inset: -12px; opacity: calc(.08 + .3 * var(--akira-animation-strength, .65)); animation-delay: -1.7s; }
-.akira-state-listening .akira-aura::before,
-.akira-state-speaking .akira-aura::before,
-.akira-state-processing .akira-aura::before,
-.akira-state-acting .akira-aura::before { animation-duration: 1.15s; }
-
-.akira-aura-orbit {
-  position: absolute;
-  inset: 4px;
-  border-radius: 50%;
-  border-top: 1px solid var(--akira-state);
-  border-right: 1px solid transparent;
-  animation: akira-orbit 4s linear infinite;
+.akira-ambience::before {
+  background:
+    radial-gradient(120% 78% at 0% 100%,
+      color-mix(in srgb, var(--akira-core-a) calc(var(--akira-alpha) * 100%), transparent) 0%,
+      transparent var(--akira-spread)),
+    radial-gradient(120% 78% at 100% 0%,
+      color-mix(in srgb, var(--akira-core-b) calc(var(--akira-alpha) * 100%), transparent) 0%,
+      transparent var(--akira-spread));
 }
 
-.akira-aura-core { position: relative; z-index: 1; display: grid; place-items: center; }
-
-html[data-rome-akira-size="compact"] .akira-aura { width: 34px; height: 34px; }
-html[data-rome-akira-size="large"] .akira-aura { width: 50px; height: 50px; }
-
-.akira-dock-label {
-  display: grid;
-  grid-template-columns: auto auto auto;
-  align-items: center;
-  gap: 7px;
-  min-height: 29px;
-  padding: 4px 8px 4px 10px;
-  border: 1px solid hsl(var(--accent-h) 22% 17% / .85);
-  border-radius: 999px;
-  background: hsl(222 22% 5% / .86);
-  backdrop-filter: blur(14px);
-  color: hsl(220 12% 58%);
-  font: inherit;
-  cursor: pointer;
+/* A faint top-and-bottom rim keeps the effect readable on light-heavy pages
+   where a corner wash alone can wash out entirely. */
+.akira-ambience::after {
+  background:
+    linear-gradient(to bottom,
+      color-mix(in srgb, var(--akira-core-b) calc(var(--akira-alpha) * 55%), transparent) 0,
+      transparent 12%),
+    linear-gradient(to top,
+      color-mix(in srgb, var(--akira-core-a) calc(var(--akira-alpha) * 55%), transparent) 0,
+      transparent 12%);
+  animation: akira-ambience-breathe 4.6s ease-in-out infinite;
 }
 
-.akira-dock-label span { color: var(--akira-state); font-size: 8px; letter-spacing: .19em; }
-.akira-dock-label small { font-size: 7px; letter-spacing: .08em; text-transform: uppercase; }
+.akira-ambience.is-static::after { animation: none; }
 
-/* A native WebContentsView always paints above renderer DOM. On the desktop
-   World Browser, keep Akira inside the shell header so the Aura remains
-   reachable; opening Akira then detaches the native view. */
-html[data-rome-desktop-world="true"] .akira-dock {
-  top: 3px;
-  right: 190px;
-  bottom: auto;
+/* Per-state character. Listening is calm and cyan-led; thinking and acting
+   shift toward gradient B; approval goes amber because it needs you. */
+.akira-ambience-listening   { --akira-alpha: calc(.10 + .16 * var(--akira-intensity, .6)); }
+.akira-ambience-processing,
+.akira-ambience-acting {
+  --akira-core-a: hsl(var(--akira-b-h, 268) var(--akira-b-s, 82%) var(--akira-b-l, 68%));
+  --akira-alpha: calc(.12 + .18 * var(--akira-intensity, .6));
+}
+.akira-ambience-speaking    { --akira-alpha: calc(.13 + .20 * var(--akira-intensity, .6)); }
+.akira-ambience-awaiting_approval {
+  --akira-core-a: hsl(24 90% 60%);
+  --akira-core-b: hsl(38 94% 62%);
+  --akira-alpha: calc(.16 + .20 * var(--akira-intensity, .6));
 }
 
-html[data-rome-desktop-world="true"] .akira-aura {
-  width: 25px;
-  height: 25px;
+.akira-ambience.is-error-flash {
+  --akira-core-a: hsl(8 82% 58%);
+  --akira-core-b: hsl(24 88% 60%);
+  --akira-alpha: .26;
 }
 
-html[data-rome-desktop-world="true"] .akira-aura::before { inset: -2px; }
-html[data-rome-desktop-world="true"] .akira-aura::after { display: none; }
-html[data-rome-desktop-world="true"] .akira-aura-orbit { inset: 2px; }
-html[data-rome-desktop-world="true"] .akira-aura-core svg { width: 11px; height: 11px; }
-html[data-rome-desktop-world="true"] .akira-dock-label { min-height: 24px; padding-block: 2px; }
+.akira-ambience-processing::after,
+.akira-ambience-acting::after { animation-duration: 2.4s; }
+.akira-ambience-speaking::after { animation-duration: 1.8s; }
+
+@keyframes akira-ambience-breathe {
+  0%, 100% { opacity: .62; }
+  50%      { opacity: 1; }
+}
+
+/* A native WebContentsView paints above renderer DOM, so on the World Browser
+   a full-bleed wash is simply invisible. Fall back to an inset frame drawn in
+   the shell margin around the native view, which still reads as "Akira is on"
+   without needing to cover the page. */
+.akira-ambience-framed::before {
+  background: none;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--akira-core-a) 45%, transparent),
+    inset 0 0 calc(18px + 26px * var(--akira-intensity, .6))
+      color-mix(in srgb, var(--akira-core-a) calc(var(--akira-alpha) * 190%), transparent);
+}
+
+.akira-ambience-framed::after {
+  background: none;
+  box-shadow:
+    inset 0 0 calc(34px + 40px * var(--akira-intensity, .6))
+      color-mix(in srgb, var(--akira-core-b) calc(var(--akira-alpha) * 120%), transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .akira-ambience::after { animation: none; }
+  .akira-ambience { transition-duration: .01ms; }
+}
 
 .akira-panel {
   position: fixed;
@@ -437,20 +440,12 @@ html[data-rome-desktop-world="true"] .akira-dock-label { min-height: 24px; paddi
 .akira-approval-card button { padding: 9px; border: 1px solid hsl(220 14% 19%); background: hsl(222 16% 8%); color: hsl(220 10% 57%); font: 9px 'DM Mono', monospace; cursor: pointer; }
 .akira-approval-card button.approve { border-color: hsl(28 55% 38%); background: hsl(28 40% 12%); color: hsl(28 82% 67%); }
 
-@keyframes akira-breathe { 0%, 100% { transform: scale(.96); opacity: .25; } 50% { transform: scale(1.07); opacity: .7; } }
-@keyframes akira-orbit { to { transform: rotate(360deg); } }
 @keyframes akira-panel-in { from { transform: translateX(16px); opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .akira-aura::before,
-  .akira-aura::after,
-  .akira-aura-orbit,
   .akira-panel { animation: none; }
 }
 
-html[data-rome-akira-reduce-motion="true"] .akira-aura::before,
-html[data-rome-akira-reduce-motion="true"] .akira-aura::after,
-html[data-rome-akira-reduce-motion="true"] .akira-aura-orbit,
 html[data-rome-akira-reduce-motion="true"] .akira-panel { animation: none; }
 
 /* Floating particle canvas */

@@ -33,13 +33,115 @@ export interface AkiraRuntimeStatus {
   updatedAt: number;
 }
 
+/**
+ * Akira keyboard shortcuts.
+ *
+ * V2 baked "Control+Escape" into the type system, so changing it meant editing
+ * four files that each had to agree. These are validated strings instead.
+ * Accelerators use Electron syntax so one literal works in the renderer, in
+ * `before-input-event`, and in any future `globalShortcut` registration.
+ */
+export const AKIRA_SHORTCUT_CHOICES = [
+  "Command+'",
+  "Command+Shift+'",
+  "Command+/",
+  "Control+'",
+  "Control+Shift+'",
+] as const;
+
+export type AkiraShortcut = (typeof AKIRA_SHORTCUT_CHOICES)[number];
+
+export const DEFAULT_CONVERSATION_SHORTCUT: AkiraShortcut = "Command+'";
+export const DEFAULT_CONSOLE_SHORTCUT: AkiraShortcut = "Command+Shift+'";
+
+export interface AkiraShortcutParts {
+  meta: boolean;
+  control: boolean;
+  shift: boolean;
+  alt: boolean;
+  key: string;
+}
+
+/** Parse an Electron-style accelerator into the flags a key event exposes. */
+export function parseAkiraShortcut(value: string): AkiraShortcutParts {
+  const segments = String(value).split("+").map(part => part.trim()).filter(Boolean);
+  const parts: AkiraShortcutParts = { meta: false, control: false, shift: false, alt: false, key: "" };
+  for (const segment of segments) {
+    const normalized = segment.toLowerCase();
+    if (normalized === "command" || normalized === "cmd" || normalized === "meta" || normalized === "super") parts.meta = true;
+    else if (normalized === "control" || normalized === "ctrl") parts.control = true;
+    else if (normalized === "commandorcontrol" || normalized === "cmdorctrl") { parts.meta = true; parts.control = true; }
+    else if (normalized === "shift") parts.shift = true;
+    else if (normalized === "alt" || normalized === "option") parts.alt = true;
+    else parts.key = segment;
+  }
+  return parts;
+}
+
+/**
+ * Physical key codes for the punctuation we bind.
+ *
+ * `event.key` reports the *produced character*, which shifts: holding Shift
+ * turns `'` into `"` and `/` into `?` on a US layout. Matching on `key` alone
+ * means `Command+Shift+'` never fires, which is silent and maddening. `code`
+ * names the physical key and is layout- and Shift-stable, so we accept either.
+ */
+const SHORTCUT_KEY_CODES: Record<string, string> = {
+  "'": "Quote",
+  '"': "Quote",
+  "/": "Slash",
+  "?": "Slash",
+  ";": "Semicolon",
+  "\\": "Backslash",
+  "[": "BracketLeft",
+  "]": "BracketRight",
+};
+
+function keyMatches(
+  expected: string,
+  event: { key: string; code?: string },
+): boolean {
+  if (String(event.key).toLowerCase() === expected.toLowerCase()) return true;
+  const expectedCode = SHORTCUT_KEY_CODES[expected];
+  return Boolean(expectedCode && event.code === expectedCode);
+}
+
+/**
+ * Does this key event match the accelerator?
+ *
+ * Modifiers must match exactly, so `Command+'` never fires on `Command+Shift+'`.
+ * `CommandOrControl` is the one exception and accepts either.
+ */
+export function matchesAkiraShortcut(
+  accelerator: string,
+  event: {
+    key: string;
+    code?: string;
+    metaKey: boolean;
+    ctrlKey: boolean;
+    shiftKey: boolean;
+    altKey: boolean;
+  },
+): boolean {
+  const parts = parseAkiraShortcut(accelerator);
+  if (!parts.key) return false;
+  if (!keyMatches(parts.key, event)) return false;
+  if (Boolean(event.shiftKey) !== parts.shift) return false;
+  if (Boolean(event.altKey) !== parts.alt) return false;
+  if (parts.meta && parts.control) return Boolean(event.metaKey || event.ctrlKey);
+  return Boolean(event.metaKey) === parts.meta && Boolean(event.ctrlKey) === parts.control;
+}
+
+export function normalizeAkiraShortcut(value: unknown, fallback: AkiraShortcut): AkiraShortcut {
+  return (AKIRA_SHORTCUT_CHOICES as readonly string[]).includes(String(value))
+    ? (String(value) as AkiraShortcut)
+    : fallback;
+}
+
 export interface AkiraSettings {
   appearance: {
-    auraSize: "compact" | "standard" | "large";
     showTranscript: boolean;
     reduceMotion: boolean;
-    gradientA: string;
-    gradientB: string;
     intensity: number;
     animationStrength: number;
   };
@@ -60,7 +162,10 @@ export interface AkiraSettings {
     wakeSensitivity: number;
     wakeWhenUnfocused: boolean;
     bargeInEnabled: boolean;
-    deactivationShortcut: "Control+Escape" | "Control+Shift+Escape";
+    /** Toggles the conversation on and off. Default `Command+'`. */
+    conversationShortcut: AkiraShortcut;
+    /** Summons the Akira console. Default `Command+Shift+'`. */
+    consoleShortcut: AkiraShortcut;
   };
   agent: {
     provider: "openai" | "anthropic" | "openrouter";

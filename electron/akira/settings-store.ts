@@ -1,5 +1,12 @@
 import path from "node:path";
-import type { AkiraPublicSettings, AkiraSecretName, AkiraSettings } from "../../shared/akira";
+import {
+  DEFAULT_CONSOLE_SHORTCUT,
+  DEFAULT_CONVERSATION_SHORTCUT,
+  normalizeAkiraShortcut,
+  type AkiraPublicSettings,
+  type AkiraSecretName,
+  type AkiraSettings,
+} from "../../shared/akira";
 import { ensurePrivateDirectory, readJson, writeJsonAtomic } from "./json-store";
 
 export interface SecureCipher {
@@ -10,11 +17,8 @@ export interface SecureCipher {
 
 export const DEFAULT_AKIRA_SETTINGS: AkiraSettings = {
   appearance: {
-    auraSize: "standard",
     showTranscript: true,
     reduceMotion: false,
-    gradientA: "#67e8f9",
-    gradientB: "#a78bfa",
     intensity: 0.75,
     animationStrength: 0.65,
   },
@@ -35,7 +39,8 @@ export const DEFAULT_AKIRA_SETTINGS: AkiraSettings = {
     wakeSensitivity: 0.65,
     wakeWhenUnfocused: false,
     bargeInEnabled: true,
-    deactivationShortcut: "Control+Escape",
+    conversationShortcut: DEFAULT_CONVERSATION_SHORTCUT,
+    consoleShortcut: DEFAULT_CONSOLE_SHORTCUT,
   },
   agent: { provider: "openai", model: "gpt-5-mini", effort: "medium" },
   privacy: {
@@ -46,15 +51,44 @@ export const DEFAULT_AKIRA_SETTINGS: AkiraSettings = {
   permissions: {},
 };
 
+/**
+ * Keys written by Akira V2 that V3 no longer owns. The gradient moved to the
+ * Constellation layout (the renderer draws it, so the renderer stores it), the
+ * aura is gone, and the shortcut is now a validated accelerator pair. Dropping
+ * them keeps `settings.json` honest instead of accumulating dead state.
+ */
+const LEGACY_SETTING_KEYS = {
+  appearance: ["auraSize", "gradientA", "gradientB"],
+  input: ["deactivationShortcut"],
+} as const;
+
+function stripLegacy<T extends Record<string, unknown>>(value: T | undefined, keys: readonly string[]): T | undefined {
+  if (!value || typeof value !== "object") return value;
+  const copy: Record<string, unknown> = { ...value };
+  for (const key of keys) delete copy[key];
+  return copy as T;
+}
+
 function mergeSettings(value: Partial<AkiraSettings>): AkiraSettings {
-  return {
-    appearance: { ...DEFAULT_AKIRA_SETTINGS.appearance, ...value.appearance },
+  const appearance = stripLegacy(value.appearance as Record<string, unknown> | undefined, LEGACY_SETTING_KEYS.appearance);
+  const input = stripLegacy(value.input as Record<string, unknown> | undefined, LEGACY_SETTING_KEYS.input);
+  const merged: AkiraSettings = {
+    appearance: { ...DEFAULT_AKIRA_SETTINGS.appearance, ...appearance },
     voice: { ...DEFAULT_AKIRA_SETTINGS.voice, ...value.voice },
-    input: { ...DEFAULT_AKIRA_SETTINGS.input, ...value.input },
+    input: { ...DEFAULT_AKIRA_SETTINGS.input, ...input },
     agent: { ...DEFAULT_AKIRA_SETTINGS.agent, ...value.agent },
     privacy: { ...DEFAULT_AKIRA_SETTINGS.privacy, ...value.privacy },
     permissions: { ...DEFAULT_AKIRA_SETTINGS.permissions, ...value.permissions },
   };
+  merged.input.conversationShortcut = normalizeAkiraShortcut(merged.input.conversationShortcut, DEFAULT_CONVERSATION_SHORTCUT);
+  merged.input.consoleShortcut = normalizeAkiraShortcut(merged.input.consoleShortcut, DEFAULT_CONSOLE_SHORTCUT);
+  // Both shortcuts landing on the same accelerator would make one unreachable.
+  if (merged.input.consoleShortcut === merged.input.conversationShortcut) {
+    merged.input.consoleShortcut = DEFAULT_CONSOLE_SHORTCUT === merged.input.conversationShortcut
+      ? DEFAULT_CONVERSATION_SHORTCUT
+      : DEFAULT_CONSOLE_SHORTCUT;
+  }
+  return merged;
 }
 
 export class AkiraSettingsStore {

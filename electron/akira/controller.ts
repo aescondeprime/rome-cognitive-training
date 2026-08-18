@@ -312,8 +312,19 @@ export class AkiraController {
     return this.registry.call(name, args);
   }
 
+  /**
+   * Keyboard actions arriving from the renderer or from a native browser view.
+   *
+   * `toggle` is the V3 default binding (Command+'): it starts a conversation
+   * when dormant and ends one when active, so a single key is the whole
+   * control surface. `standby` remains for explicit deactivation.
+   */
   shortcut(action: string): void {
-    if (action === "standby") void this.standby();
+    if (action === "standby") { void this.standby(); return; }
+    if (action !== "toggle") return;
+    const dormant = this.state.state === "DORMANT" || this.state.state === "DEACTIVATING";
+    if (dormant) void this.activate().catch(() => undefined);
+    else void this.standby();
   }
 
   shutdown(): void {
@@ -725,8 +736,8 @@ function redactArguments(args: Record<string, unknown>): Record<string, unknown>
 function sanitizeSettingsPatch(patch: Partial<AkiraSettings>): Partial<AkiraSettings> {
   const safe = structuredClone(patch);
   if (safe.appearance) {
-    safe.appearance.gradientA = safeColor(safe.appearance.gradientA, "#67e8f9");
-    safe.appearance.gradientB = safeColor(safe.appearance.gradientB, "#a78bfa");
+    // Gradient colors now live in the Constellation layout, next to the ray and
+    // accent colors the editor already owns. Nothing to sanitize here.
     safe.appearance.intensity = clampNumber(safe.appearance.intensity, 0.2, 1, 0.75);
     safe.appearance.animationStrength = clampNumber(safe.appearance.animationStrength, 0, 1, 0.65);
   }
@@ -749,11 +760,6 @@ function sanitizeSettingsPatch(patch: Partial<AkiraSettings>): Partial<AkiraSett
 function clampNumber(value: unknown, minimum: number, maximum: number, fallback: number): number {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? Math.max(minimum, Math.min(maximum, numeric)) : fallback;
-}
-
-function safeColor(value: unknown, fallback: string): string {
-  const text = String(value ?? "");
-  return /^#[0-9a-f]{6}$/i.test(text) ? text.toLowerCase() : fallback;
 }
 
 function isStandbyCommand(value: string): boolean {
