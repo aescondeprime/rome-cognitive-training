@@ -76,17 +76,15 @@ export function loadLayout(): ConstellationLayout {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultLayout();
     const parsed = JSON.parse(raw) as ConstellationLayout;
-    // Backfill dirAngle if missing (upgrading from v1)
-    if (parsed.ray && !("dirAngle" in parsed.ray)) {
-      parsed.ray.dirAngle = null;
-    }
-    // Backfill rayColor if missing
-    if (parsed.ray && !("rayColor" in parsed.ray)) {
-      parsed.ray.rayColor = DEFAULT_RAY_COLOR;
-    }
-    // Backfill rayBrightness if missing
-    if (parsed.ray && !("rayBrightness" in parsed.ray)) {
-      parsed.ray.rayBrightness = 1.0;
+    // Stored layouts predate several fields, so every read backfills.
+    // `ray` is cast through a loose record: narrowing `ConstellationLayout` with
+    // `"dirAngle" in parsed.ray` collapses the type to `never` (the property is
+    // already declared), which made three of these lines fail typecheck.
+    const ray = parsed.ray as unknown as Record<string, unknown> | undefined;
+    if (ray) {
+      if (!("dirAngle" in ray)) ray.dirAngle = null;
+      if (!("rayColor" in ray)) ray.rayColor = DEFAULT_RAY_COLOR;
+      if (!("rayBrightness" in ray)) ray.rayBrightness = 1.0;
     }
     // Backfill accentColor if missing
     if (!("accentColor" in parsed)) {

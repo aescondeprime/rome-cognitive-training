@@ -16,7 +16,9 @@ import {
   type ConstellationLayout,
   type NodeOverride,
 } from "@/lib/constellationLayout";
-import { getRayState, pinRaySource, setRayDirection, setRayColor, setRayBrightness, setAccentColor } from "@/lib/lightRayState";
+// setRayEditOffset was called by handleReset but never imported, so pressing
+// Reset in the Constellation editor threw a ReferenceError before it finished.
+import { getRayState, pinRaySource, setRayDirection, setRayColor, setRayBrightness, setAccentColor, setRayEditOffset } from "@/lib/lightRayState";
 import { setAkiraAmbience } from "@/lib/akiraAmbienceState";
 import ConstellationNode from "./ConstellationNode";
 import NodeBranchMenu from "./NodeBranchMenu";
