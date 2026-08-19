@@ -36,18 +36,26 @@ export interface RealtimeToolCall {
 export interface RealtimeConnectOptions {
   agentId: string;
   apiKey: string | null;
-  /** Replaces the agent's dashboard system prompt for this conversation. */
+  /**
+   * Replaces the agent's dashboard system prompt for this conversation.
+   *
+   * Requires "prompt" to be enabled under the agent's Security tab. ElevenLabs
+   * rejects an override that has not been enabled and closes the socket, so
+   * `connect` retries without it rather than failing outright.
+   */
   prompt?: string;
-  /** Spoken before the user says anything. Empty means no greeting. */
-  firstMessage?: string;
   /** Substituted into the agent's prompt template by ElevenLabs. */
   dynamicVariables?: Record<string, string | number | boolean>;
-  /** Generated from the capability registry; the agent calls these on us. */
-  tools?: Array<{
-    name: string;
-    description: string;
-    parameters: Record<string, unknown>;
-  }>;
+}
+
+/** Why a connection ended, when the reason is actionable. */
+export class RealtimeOverrideRejected extends Error {
+  constructor(readonly detail: string) {
+    super(
+      "The ElevenLabs agent rejected ROME's prompt override. Enable “prompt” under the agent's Security tab so Akira can see your ROME capabilities.",
+    );
+    this.name = "RealtimeOverrideRejected";
+  }
 }
 
 export interface RealtimeSocket extends EventEmitter {
@@ -65,6 +73,8 @@ export class ElevenLabsRealtimeSession extends EventEmitter {
   private conversationId: string | null = null;
   private outputSampleRate = 16_000;
   private closingIntentionally = false;
+  /** True once the server has acknowledged the handshake. */
+  private initialized = false;
 
   constructor(
     private readonly createSocket: RealtimeSocketFactory = url =>
@@ -85,10 +95,31 @@ export class ElevenLabsRealtimeSession extends EventEmitter {
     return this.outputSampleRate;
   }
 
+  /**
+   * Open a conversation.
+   *
+   * Overrides are attempted first and dropped on rejection. ElevenLabs requires
+   * each overridable field to be switched on under the agent's Security tab,
+   * and rejects the whole connection when one is not — which surfaces as the
+   * socket opening and then immediately closing, with no error frame. Retrying
+   * without the override means a misconfigured agent still talks, and the user
+   * gets told exactly which switch to flip.
+   */
   async connect(options: RealtimeConnectOptions): Promise<void> {
+    try {
+      await this.connectOnce(options, true);
+    } catch (error) {
+      if (!(error instanceof RealtimeOverrideRejected)) throw error;
+      this.emit("degraded", error);
+      await this.connectOnce(options, false);
+    }
+  }
+
+  private async connectOnce(options: RealtimeConnectOptions, withOverrides: boolean): Promise<void> {
     this.close();
     const generation = ++this.generation;
     this.closingIntentionally = false;
+    this.initialized = false;
 
     const url = await this.resolveUrl(options);
     if (generation !== this.generation) return;
@@ -120,32 +151,51 @@ export class ElevenLabsRealtimeSession extends EventEmitter {
 
     socket.on("message", (value: Buffer | string) => this.handleMessage(generation, value));
     socket.on("error", (error: Error) => this.emit("error", error));
-    socket.once("close", () => {
-      if (this.socket !== socket) return;
-      this.socket = null;
-      this.conversationId = null;
-      this.emit("close", { intentional: this.closingIntentionally });
+
+    // A close before the handshake completes is how ElevenLabs reports a
+    // rejected override — no error frame, just a disconnect. This promise lets
+    // connectOnce distinguish that from a mid-conversation drop.
+    const handshake = new Promise<void>((resolve, reject) => {
+      const settleTimer = setTimeout(() => resolve(), 6_000);
+      const onClose = (code: number, reasonBuffer: Buffer) => {
+        clearTimeout(settleTimer);
+        const reason = reasonBuffer?.toString("utf8") || "";
+        if (this.socket === socket) {
+          this.socket = null;
+          this.conversationId = null;
+        }
+        if (this.initialized) {
+          this.emit("close", { intentional: this.closingIntentionally, code, reason });
+          resolve();
+          return;
+        }
+        const detail = reason || `close code ${code}`;
+        if (withOverrides) reject(new RealtimeOverrideRejected(detail));
+        else {
+          this.emit("close", { intentional: this.closingIntentionally, code, reason });
+          reject(new Error(`ElevenLabs closed the connection during setup (${detail}).`));
+        }
+      };
+      socket.once("close", onClose);
+      this.once("initialized", () => { clearTimeout(settleTimer); resolve(); });
     });
 
-    // The agent will not speak until it receives this, so it doubles as the
-    // handshake. Overrides here beat whatever the dashboard has configured.
+    // The agent does not speak until it receives this, so it doubles as the
+    // handshake. `first_message` is deliberately absent: ElevenLabs advises
+    // omitting fields rather than sending empty strings, and ROME decides
+    // whether to greet based on whether speech followed the wake word.
     this.send({
       type: "conversation_initiation_client_data",
-      ...(options.prompt || options.firstMessage !== undefined
-        ? {
-            conversation_config_override: {
-              agent: {
-                ...(options.prompt ? { prompt: { prompt: options.prompt } } : {}),
-                ...(options.firstMessage !== undefined ? { first_message: options.firstMessage } : {}),
-              },
-            },
-          }
+      ...(withOverrides && options.prompt
+        ? { conversation_config_override: { agent: { prompt: { prompt: options.prompt } } } }
         : {}),
       ...(options.dynamicVariables && Object.keys(options.dynamicVariables).length
         ? { dynamic_variables: options.dynamicVariables }
         : {}),
     });
 
+    await handshake;
+    if (generation !== this.generation) return;
     this.emit("open");
   }
 
@@ -189,6 +239,7 @@ export class ElevenLabsRealtimeSession extends EventEmitter {
   close(): void {
     this.generation += 1;
     this.closingIntentionally = true;
+    this.initialized = false;
     const socket = this.socket;
     this.socket = null;
     this.conversationId = null;
@@ -251,6 +302,8 @@ export class ElevenLabsRealtimeSession extends EventEmitter {
         const format = String(meta.agent_output_audio_format ?? "pcm_16000");
         const parsed = Number(format.replace(/[^0-9]/g, ""));
         this.outputSampleRate = Number.isFinite(parsed) && parsed >= 8_000 ? parsed : 16_000;
+        this.initialized = true;
+        this.emit("initialized");
         this.emit("metadata", { conversationId: this.conversationId, sampleRate: this.outputSampleRate });
         break;
       }

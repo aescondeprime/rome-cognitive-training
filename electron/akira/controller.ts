@@ -135,12 +135,22 @@ export class AkiraController {
       this.publishStatus();
     });
 
-    this.realtime.on("close", ({ intentional }: { intentional: boolean }) => {
+    // The agent is configured correctly enough to talk, but not to see ROME.
+    this.realtime.on("degraded", (error: Error) => {
+      this.reason = error.message;
+      this.transcript({ role: "system", text: error.message, final: true, at: Date.now() });
+      this.publishStatus();
+    });
+
+    this.realtime.on("close", ({ intentional, code, reason }: { intentional: boolean; code?: number; reason?: string }) => {
       this.send(AKIRA_CHANNELS.audio, { type: "cancel" });
       if (intentional || this.disposed) return;
-      // Dropped mid-conversation. Surface it instead of leaving the ambience
-      // glowing over a socket that is no longer there.
-      this.state.force("ERROR", "The connection to Akira dropped.");
+      // Include the close code and reason. "The connection dropped" on its own
+      // is unactionable — the code is usually the whole diagnosis.
+      const detail = [reason, code ? `code ${code}` : ""].filter(Boolean).join(" · ");
+      this.state.force("ERROR", detail
+        ? `The connection to Akira closed: ${detail}`
+        : "The connection to Akira closed unexpectedly.");
     });
   }
 
@@ -291,10 +301,6 @@ export class AkiraController {
         agentId: settings.realtime.agentId.trim(),
         apiKey: this.settings.getSecret("elevenLabsApiKey"),
         prompt: await this.buildPrompt(),
-        // ROME decides whether to greet, because "Yes?" is only correct when
-        // the wake word arrives with nothing after it. Letting the dashboard
-        // greet unconditionally would answer requests you already made.
-        firstMessage: "",
         dynamicVariables: await this.buildDynamicVariables(),
       });
     } catch (error) {
