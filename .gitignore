@@ -12,3 +12,4 @@ data.db-wal
 # Electron build output
 release/
 dist-electron/
+_to_delete/

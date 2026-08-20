@@ -64,7 +64,9 @@ type RomeAkiraRendererCommandResult = import("@shared/akira").AkiraRendererComma
 
 interface RomeAkiraBridge {
   getStatus: () => Promise<RomeAkiraStatus>;
-  activate: () => Promise<RomeAkiraStatus>;
+  activate: (viaWakeWord?: boolean) => Promise<RomeAkiraStatus>;
+  /** Picovoice access key — needed in the renderer because Porcupine runs there. */
+  getWakeKey: () => Promise<string>;
   standby: () => Promise<RomeAkiraStatus>;
   interrupt: () => Promise<RomeAkiraStatus>;
   submitText: (text: string) => Promise<RomeAkiraStatus>;

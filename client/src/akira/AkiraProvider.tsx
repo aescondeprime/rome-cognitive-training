@@ -26,6 +26,7 @@ import {
 } from "@shared/akira";
 import { queryClient } from "@/lib/queryClient";
 import { AkiraMic } from "./AkiraMic";
+import { PorcupineWake } from "./wake/PorcupineWake";
 import { loadFinancialState, saveFinancialState } from "@/lib/financialStore";
 import { makeId, projectFinancials, toDateInput, type ExpenseKind, type Recurrence } from "@/lib/financialEngine";
 
@@ -46,7 +47,7 @@ interface AkiraContextValue {
   panelOpen: boolean;
   /** Accepts an updater so the summon shortcut can toggle without a stale read. */
   setPanelOpen: Dispatch<SetStateAction<boolean>>;
-  activate: () => Promise<void>;
+  activate: (viaWakeWord?: boolean) => Promise<void>;
   standby: () => Promise<void>;
   interrupt: () => Promise<void>;
   /** Start a conversation when dormant, end it when active. Bound to Command+'. */
@@ -80,6 +81,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<AkiraNotice | null>(null);
   const statusRef = useRef<AkiraStatus | null>(null);
   const micRef = useRef<AkiraMic | null>(null);
+  const wakeRef = useRef<PorcupineWake | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
   const playbackTimeRef = useRef(0);
   const playbackSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
@@ -191,6 +193,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
         lastVadLevelRef.current = level;
         document.documentElement.style.setProperty("--akira-vad", level.toFixed(2));
       },
+      onPcm: pcm => wakeRef.current?.process(pcm),
       onError: error => showNotice(error.message, "error"),
     });
     micRef.current = mic;
@@ -213,7 +216,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
    * first — usually already open — and streaming begins with a pre-roll flush,
    * so speech from before the trigger still reaches the agent.
    */
-  const activate = useCallback(async () => {
+  const activate = useCallback(async (viaWakeWord = false) => {
     if (!bridge) return;
     try {
       await armMicrophone();
@@ -222,7 +225,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
         ? new Error("ROME needs microphone access. Enable it in System Settings \u2192 Privacy & Security \u2192 Microphone.")
         : error;
     }
-    const next = await bridge.activate();
+    const next = await bridge.activate(viaWakeWord);
     setStatus(next);
     micRef.current?.beginStreaming(true);
   }, [armMicrophone, bridge]);
@@ -315,7 +318,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
       // The mic is already open, so a wake event only has to start streaming.
       // No device acquisition, no 30ms guess, no lost syllables.
       bridge.onWakeDetected(() => {
-        void activate().catch(error => showNotice(
+        void activate(true).catch(error => showNotice(
           error instanceof Error ? error.message : String(error),
           "error",
         ));
@@ -375,6 +378,72 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     else if (!conversing && mic.isStreaming) mic.endStreaming();
   }, [status]);
 
+  /**
+   * Wake-word lifecycle.
+   *
+   * Detection needs the microphone open, which in V2 it never was while
+   * dormant — that was the whole bug. Here the mic is armed as soon as Akira is
+   * configured, and Porcupine consumes the same frames the conversation later
+   * streams. A missing key or keyword file simply leaves it off; Command+'
+   * still works.
+   */
+  useEffect(() => {
+    if (!bridge || !status) return;
+    const settings = status.settings;
+    const wanted = settings.input.wakeWordEnabled
+      && settings.secrets.picovoiceConfigured
+      && status.available;
+
+    if (!wanted) {
+      if (wakeRef.current) {
+        const detector = wakeRef.current;
+        wakeRef.current = null;
+        void detector.stop();
+      }
+      return;
+    }
+    if (wakeRef.current) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        await armMicrophone();
+      } catch {
+        return; // Permission not granted yet; Command+' will prompt again.
+      }
+      if (cancelled) return;
+      // Porcupine runs in the renderer, so unlike the ElevenLabs key this one
+      // has to cross the bridge. It is a per-application usage key rather than
+      // an account credential, and it buys a single microphone shared between
+      // detection and conversation — the alternative is two capture streams
+      // fighting over the device, which is precisely what broke V2.
+      const accessKey = await bridge.getWakeKey().catch(() => "");
+      if (!accessKey || cancelled) return;
+      const detector = new PorcupineWake({
+        accessKey,
+        keywordPath: settings.input.wakeKeywordPath,
+        modelPath: settings.input.wakeModelPath,
+        sensitivity: settings.input.wakeSensitivity,
+        onDetected: () => {
+          if (statusRef.current?.state !== "DORMANT") return;
+          void activate(true).catch(error => showNotice(
+            error instanceof Error ? error.message : String(error),
+            "error",
+          ));
+        },
+        onError: error => showNotice(`Wake word unavailable: ${error.message}`, "error"),
+      });
+      if (cancelled) return;
+      wakeRef.current = detector;
+      const started = await detector.start();
+      if (!started && !cancelled) {
+        wakeRef.current = null;
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [activate, armMicrophone, bridge, showNotice, status?.available, status?.settings.input.wakeWordEnabled, status?.settings.secrets.picovoiceConfigured]);
+
   useEffect(() => {
     const onVisibility = () => {
       const current = statusRef.current;
@@ -389,6 +458,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
     if (continueTimerRef.current) window.clearTimeout(continueTimerRef.current);
     cancelPlayback();
+    void wakeRef.current?.stop();
     void disarmMicrophone();
     void playbackContextRef.current?.close();
   }, [cancelPlayback, disarmMicrophone]);

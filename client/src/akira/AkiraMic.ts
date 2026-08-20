@@ -30,6 +30,13 @@ export interface AkiraMicOptions {
   deviceId?: string;
   onChunk: (base64: string) => void;
   onLevel?: LevelListener;
+  /**
+   * Raw 16kHz Int16 frames, delivered whether or not streaming is enabled.
+   *
+   * This is what lets wake-word detection share the single microphone rather
+   * than opening its own — the contention that broke V2's wake word.
+   */
+  onPcm?: (pcm: Int16Array) => void;
   onError?: (error: Error) => void;
 }
 
@@ -200,6 +207,7 @@ export class AkiraMic {
 
     this.writeRing(pcm);
     this.options.onLevel?.(Math.sqrt(sum / out.length));
+    this.options.onPcm?.(pcm);
 
     if (!this.streaming) return;
     for (let index = 0; index < pcm.length; index += 1) this.pending.push(pcm[index]);

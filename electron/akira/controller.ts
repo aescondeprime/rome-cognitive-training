@@ -21,6 +21,7 @@ import { HermesGatewayClient, type GatewayEvent } from "./hermes-gateway";
 import { AkiraHostBridge } from "./host-bridge";
 import { writeJsonAtomic } from "./json-store";
 import { AkiraRendererBridge } from "./renderer-bridge";
+import { AkiraGreeting } from "./greeting";
 import { ElevenLabsRealtimeSession, type RealtimeToolCall } from "./realtime-session";
 import { HermesRuntimeManager } from "./runtime-manager";
 import { AkiraSettingsStore } from "./settings-store";
@@ -52,6 +53,9 @@ export class AkiraController {
   private readonly gateway = new HermesGatewayClient();
   private readonly voice = new ElevenLabsVoice();
   private readonly realtime = new ElevenLabsRealtimeSession();
+  private readonly greeting: AkiraGreeting;
+  private pendingGreeting = false;
+  private greetingTimer: NodeJS.Timeout | null = null;
   private readonly pendingApprovals = new Map<string, PendingApproval>();
   private runtime: HermesRuntimeManager | null = null;
   private registry: AkiraCapabilityRegistry | null = null;
@@ -80,6 +84,7 @@ export class AkiraController {
       decrypt: value => safeStorage.decryptString(value),
     });
     this.activity = new AkiraActivityStore(path.join(options.root, "state"));
+    this.greeting = new AkiraGreeting(path.join(options.root, "cache"));
     this.renderer = new AkiraRendererBridge(options.getWindow);
     this.state.on("change", change => {
       this.previousState = change.previous;
@@ -106,12 +111,15 @@ export class AkiraController {
     });
 
     this.realtime.on("userTranscript", (text: string) => {
+      // The user said more than the wake word, so no acknowledgement is owed.
+      this.cancelGreeting();
       this.lastUserText = text;
       this.transcript({ role: "user", text, final: true, at: Date.now() });
       if (this.state.state === "LISTENING") this.transition("PROCESSING", "Akira is thinking.");
     });
 
     this.realtime.on("agentResponse", (text: string) => {
+      this.cancelGreeting();
       this.lastAssistantText = text;
       this.assistantBuffer = "";
       this.transcript({ role: "assistant", text, final: true, at: Date.now() });
@@ -164,6 +172,7 @@ export class AkiraController {
    * or explain the refusal instead of going silent.
    */
   private async handleToolCall(call: RealtimeToolCall): Promise<void> {
+    this.cancelGreeting();
     if (call.toolName !== DISPATCH_TOOL_NAME) {
       this.realtime.sendToolResult(
         call.toolCallId,
@@ -287,8 +296,17 @@ export class AkiraController {
     return "No ElevenLabs API key configured. Add it in Akira's voice settings.";
   }
 
-  async activate(): Promise<AkiraStatus> {
+  /**
+   * Start a conversation.
+   *
+   * `viaWakeWord` decides whether Akira acknowledges. Summoned by name with
+   * nothing after it, it says "Yes?"; given an instruction in the same breath,
+   * it stays quiet and acts. That distinction is the whole difference between
+   * an assistant and a voice menu.
+   */
+  async activate(viaWakeWord = false): Promise<AkiraStatus> {
     if (!this.realtimeConfigured()) throw new Error(this.unavailableReason() ?? "Akira is not configured.");
+    this.pendingGreeting = viaWakeWord && this.settings.get().realtime.greetingEnabled;
     if (this.realtime.connected) {
       this.transition("LISTENING", "Akira is listening.");
       return this.status();
@@ -308,10 +326,58 @@ export class AkiraController {
       throw error;
     }
     this.transition("LISTENING", "Akira is listening.");
+    if (this.pendingGreeting) this.scheduleGreeting();
     return this.status();
   }
 
+  /**
+   * Speak the acknowledgement only if the silence holds.
+   *
+   * Any transcript, any tool call, any speech from the agent cancels it — by
+   * then the user clearly said more than just the wake word, and "Yes?" would
+   * be answering a question they already moved past.
+   */
+  private scheduleGreeting(): void {
+    this.clearGreetingTimer();
+    const settings = this.settings.get();
+    this.greetingTimer = setTimeout(() => {
+      this.greetingTimer = null;
+      if (!this.pendingGreeting || this.state.state !== "LISTENING") return;
+      this.pendingGreeting = false;
+      void this.speakGreeting(settings.realtime.greetingText);
+    }, Math.max(300, Math.min(4_000, settings.realtime.greetingDelayMs)));
+    this.greetingTimer.unref?.();
+  }
+
+  private cancelGreeting(): void {
+    this.pendingGreeting = false;
+    this.clearGreetingTimer();
+  }
+
+  private clearGreetingTimer(): void {
+    if (this.greetingTimer) clearTimeout(this.greetingTimer);
+    this.greetingTimer = null;
+  }
+
+  private async speakGreeting(text: string): Promise<void> {
+    const settings = this.settings.get();
+    const apiKey = this.settings.getSecret("elevenLabsApiKey");
+    if (!apiKey) return;
+    const audio = await this.greeting.render({
+      root: this.options.root,
+      apiKey,
+      agentId: settings.realtime.agentId.trim(),
+      text,
+      modelId: settings.voice.modelId,
+    });
+    // Still listening? The user may have started talking while this rendered.
+    if (!audio || this.state.state !== "LISTENING") return;
+    this.transcript({ role: "assistant", text, final: true, at: Date.now() });
+    this.send(AKIRA_CHANNELS.audio, { type: "chunk", audio, sampleRate: 16_000 });
+  }
+
   async standby(): Promise<AkiraStatus> {
+    this.cancelGreeting();
     if (this.state.state !== "DORMANT" && this.state.state !== "UNAVAILABLE") {
       this.transition("DEACTIVATING", "Ending the conversation.");
     }
@@ -421,7 +487,8 @@ export class AkiraController {
   }
 
   setSecret(name: AkiraSecretName, value: string): AkiraStatus {
-    const allowed: AkiraSecretName[] = ["elevenLabsApiKey", "openaiApiKey", "anthropicApiKey", "openrouterApiKey"];
+    if (name === "elevenLabsApiKey") this.greeting.invalidate();
+    const allowed: AkiraSecretName[] = ["picovoiceAccessKey", "elevenLabsApiKey", "openaiApiKey", "anthropicApiKey", "openrouterApiKey"];
     if (!allowed.includes(name)) throw new Error("Unknown Akira credential type.");
     if (value.length > 8_000) throw new Error("Credential is too long.");
     this.settings.setSecret(name, value);
@@ -469,6 +536,20 @@ export class AkiraController {
     };
   }
 
+  /**
+   * The Picovoice access key, for the renderer.
+   *
+   * Every other secret stays in the main process. Porcupine's web runtime needs
+   * this one client-side, and it is a per-application usage key rather than an
+   * account credential — the trade for one shared microphone instead of two
+   * competing captures.
+   */
+  wakeKey(): string {
+    return this.settings.get().input.wakeWordEnabled
+      ? this.settings.getSecret("picovoiceAccessKey") ?? ""
+      : "";
+  }
+
   listCapabilities(): AkiraCapabilityDescriptor[] {
     return this.registry?.list() ?? [];
   }
@@ -499,6 +580,7 @@ export class AkiraController {
     this.configurationRestartTimer = null;
     this.settleTurn();
     this.clearWakeHealthTimer();
+    this.clearGreetingTimer();
     this.voice.cancel();
     this.realtime.close();
     this.gateway.disconnect();

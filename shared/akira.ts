@@ -162,6 +162,13 @@ export interface AkiraSettings {
     wakeSensitivity: number;
     wakeWhenUnfocused: boolean;
     bargeInEnabled: boolean;
+    /**
+     * Files served from client/public. Detection runs on-device via Picovoice
+     * Porcupine, fed from ROME's existing microphone rather than opening a
+     * second one.
+     */
+    wakeKeywordPath: string;
+    wakeModelPath: string;
     /** Toggles the conversation on and off. Default `Command+'`. */
     conversationShortcut: AkiraShortcut;
     /** Summons the Akira console. Default `Command+Shift+'`. */
@@ -198,6 +205,7 @@ export interface AkiraSettings {
 
 export interface AkiraPublicSettings extends AkiraSettings {
   secrets: {
+    picovoiceConfigured: boolean;
     elevenLabsConfigured: boolean;
     providerConfigured: boolean;
     secureStorageAvailable: boolean;
@@ -205,6 +213,7 @@ export interface AkiraPublicSettings extends AkiraSettings {
 }
 
 export type AkiraSecretName =
+  | "picovoiceAccessKey"
   | "elevenLabsApiKey"
   | "openaiApiKey"
   | "anthropicApiKey"
