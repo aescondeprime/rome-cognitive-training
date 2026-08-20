@@ -13,6 +13,7 @@ import {
   DEFAULT_AKIRA_GRADIENT_A,
   DEFAULT_AKIRA_GRADIENT_B,
   DEFAULT_AKIRA_INTENSITY,
+  DEFAULT_PARTICLE_SATURATION,
   type ConstellationLayout,
   type NodeOverride,
 } from "@/lib/constellationLayout";
@@ -32,11 +33,12 @@ import TaskStabilizerWidget from "./TaskStabilizerWidget";
 // the upper right. Presets are cool and mid-luminance on purpose — the glow
 // sits behind working content and must never fight it for attention.
 const AKIRA_PRESETS: { label: string; hsl: string }[] = [
-  { label: "Cyan",    hsl: "178 76% 58%" },
-  { label: "Violet",  hsl: "268 82% 68%" },
-  { label: "Azure",   hsl: "212 84% 62%" },
-  { label: "Jade",    hsl: "158 62% 52%" },
-  { label: "Magenta", hsl: "312 70% 64%" },
+  { label: "Cyan",    hsl: "182 100% 52%" },
+  { label: "Violet",  hsl: "270 100% 66%" },
+  { label: "Azure",   hsl: "210 100% 56%" },
+  { label: "Jade",    hsl: "156 96% 46%" },
+  { label: "Magenta", hsl: "312 96% 60%" },
+  { label: "Ember",   hsl: "18 100% 56%" },
 ];
 
 const AKIRA_GRADIENT_ROWS: { side: "a" | "b"; label: string }[] = [
@@ -44,17 +46,72 @@ const AKIRA_GRADIENT_ROWS: { side: "a" | "b"; label: string }[] = [
   { side: "b", label: "Glow B · upper right" },
 ];
 
+/** Split "H S% L%" into numbers, tolerating malformed stored values. */
+function splitHsl(value: string, fallback: [number, number, number] = [43, 88, 60]): [number, number, number] {
+  const parts = String(value ?? "").replace(/%/g, "").trim().split(/\s+/).map(Number);
+  return [
+    Number.isFinite(parts[0]) ? parts[0] : fallback[0],
+    Number.isFinite(parts[1]) ? parts[1] : fallback[1],
+    Number.isFinite(parts[2]) ? parts[2] : fallback[2],
+  ];
+}
+
+/**
+ * Hue, saturation, and lightness sliders for one colour.
+ *
+ * The editor used to expose hue alone, so every colour was locked to whatever
+ * saturation its preset happened to carry and could never be pushed harder.
+ * Saturation runs to a full 100 and lightness is adjustable too, since a
+ * saturated colour often wants to be darker to stay readable.
+ */
+function ColorSliders({ value, onChange }: { value: string; onChange: (hsl: string) => void }) {
+  const [h, s, l] = splitHsl(value);
+  const rows: { label: string; key: 0 | 1 | 2; min: number; max: number; suffix: string }[] = [
+    { label: "Hue", key: 0, min: 0, max: 360, suffix: "" },
+    { label: "Saturation", key: 1, min: 0, max: 100, suffix: "%" },
+    { label: "Lightness", key: 2, min: 5, max: 95, suffix: "%" },
+  ];
+  const current = [h, s, l];
+  return (
+    <div style={{ marginTop: 7 }}>
+      {rows.map(row => (
+        <div key={row.label} style={{ marginBottom: 4 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 1 }}>
+            <span style={{ fontFamily: "DM Mono, monospace", fontSize: 6.5, color: "hsl(var(--accent-h) 25% 32%)", letterSpacing: "0.12em", textTransform: "uppercase" }}>{row.label}</span>
+            <span style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 55% 55%)" }}>{Math.round(current[row.key])}{row.suffix}</span>
+          </div>
+          <input
+            type="range"
+            min={row.min}
+            max={row.max}
+            step={1}
+            value={Math.round(current[row.key])}
+            onChange={event => {
+              const next: [number, number, number] = [h, s, l];
+              next[row.key] = Number(event.target.value);
+              onChange(`${Math.round(next[0])} ${Math.round(next[1])}% ${Math.round(next[2])}%`);
+            }}
+            style={{ width: "100%", accentColor: `hsl(${h} ${s}% ${l}%)`, cursor: "pointer" }}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Moving particle canvas ─────────────────────────────────────────────────
 function ParticleCanvas({
-  width, height, count = 280, particleHue,
-}: { width: number; height: number; count?: number; particleHue?: number }) {
+  width, height, count = 280, particleHue, saturation = DEFAULT_PARTICLE_SATURATION,
+}: { width: number; height: number; count?: number; particleHue?: number; saturation?: number }) {
   const canvasRef  = useRef<HTMLCanvasElement>(null);
   const countRef   = useRef(count);
   const hueRef     = useRef(particleHue);
+  const satRef     = useRef(saturation);
 
   // Keep refs in sync so the RAF loop always reads current values
   useEffect(() => { countRef.current = count; }, [count]);
   useEffect(() => { hueRef.current   = particleHue; }, [particleHue]);
+  useEffect(() => { satRef.current   = saturation; }, [saturation]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -93,7 +150,9 @@ function ParticleCanvas({
       const h = isWhite ? 43
         : rawHue != null ? rawHue
         : (parseInt(getComputedStyle(document.documentElement).getPropertyValue("--accent-h").trim()) || 43);
-      const sat = isWhite ? 10 : 55;
+      // White stays desaturated by definition; everything else follows the
+      // editor, which used to be pinned at a washed-out 55.
+      const sat = isWhite ? 10 : Math.max(0, Math.min(100, satRef.current));
 
       const visible = Math.min(countRef.current, MAX);
       for (let i = 0; i < visible; i++) {
@@ -590,6 +649,10 @@ export default function ConstellationMenu({ onClose }: Props) {
     setLayout(prev => ({ ...prev, particleHue: v }));
   }, []);
 
+  const handleParticleSaturation = useCallback((v: number) => {
+    setLayout(prev => ({ ...prev, particleSaturation: v }));
+  }, []);
+
   // Akira ambience — the background glow shown during a live conversation.
   // Applied immediately so the picker previews against the real effect.
   const handleAkiraGradientA = useCallback((hsl: string) => {
@@ -666,6 +729,7 @@ export default function ConstellationMenu({ onClose }: Props) {
         height={dims.h}
         count={layout.particleCount ?? 280}
         particleHue={layout.particleHue ?? undefined}
+          saturation={layout.particleSaturation ?? DEFAULT_PARTICLE_SATURATION}
       />
 
       {/* Edit mode grid overlay */}
@@ -825,30 +889,30 @@ export default function ConstellationMenu({ onClose }: Props) {
         const akiraIntensity     = layout.akiraIntensity ?? DEFAULT_AKIRA_INTENSITY;
 
         const ACCENT_PRESETS: { label: string; hsl: string }[] = [
-          { label: "Gold",    hsl: "43 88% 60%"  },
-          { label: "Amber",   hsl: "30 90% 58%"  },
-          { label: "Rose",    hsl: "345 80% 65%" },
-          { label: "Violet",  hsl: "270 75% 70%" },
-          { label: "Indigo",  hsl: "240 80% 68%" },
-          { label: "Sky",     hsl: "200 85% 62%" },
-          { label: "Teal",    hsl: "175 75% 52%" },
-          { label: "Emerald", hsl: "145 70% 52%" },
-          { label: "Lime",    hsl: "90 70% 52%"  },
-          { label: "White",   hsl: "43 10% 92%"  },
+          { label: "Gold", hsl: "43 100% 58%"  },
+          { label: "Amber",   hsl: "28 100% 55%"  },
+          { label: "Rose", hsl: "342 96% 62%" },
+          { label: "Violet",  hsl: "272 95% 66%" },
+          { label: "Indigo",  hsl: "242 96% 64%" },
+          { label: "Sky",  hsl: "199 100% 56%" },
+          { label: "Teal", hsl: "174 95% 46%" },
+          { label: "Emerald", hsl: "146 92% 46%" },
+          { label: "Lime", hsl: "88 92% 50%"  },
+          { label: "White",   hsl: "43 14% 94%"  },
         ];
 
         // Preset palette — hue groups that look great as light rays
         const RAY_PRESETS: { label: string; hsl: string }[] = [
-          { label: "Gold",       hsl: "43 88% 60%"  },
-          { label: "Amber",      hsl: "30 90% 58%"  },
-          { label: "Rose",       hsl: "345 80% 65%" },
-          { label: "Violet",     hsl: "270 75% 70%" },
-          { label: "Indigo",     hsl: "240 80% 68%" },
-          { label: "Sky",        hsl: "200 85% 62%" },
-          { label: "Teal",       hsl: "175 75% 52%" },
-          { label: "Emerald",    hsl: "145 70% 52%" },
-          { label: "Lime",       hsl: "90 70% 52%"  },
-          { label: "White",      hsl: "43 10% 92%"  },
+          { label: "Gold",       hsl: "43 100% 58%"  },
+          { label: "Amber",      hsl: "28 100% 55%"  },
+          { label: "Rose",       hsl: "342 96% 62%" },
+          { label: "Violet",     hsl: "272 95% 66%" },
+          { label: "Indigo",     hsl: "242 96% 64%" },
+          { label: "Sky",        hsl: "199 100% 56%" },
+          { label: "Teal",       hsl: "174 95% 46%" },
+          { label: "Emerald",    hsl: "146 92% 46%" },
+          { label: "Lime",       hsl: "88 92% 50%"  },
+          { label: "White",      hsl: "43 14% 94%"  },
         ];
 
         return (
@@ -927,26 +991,8 @@ export default function ConstellationMenu({ onClose }: Props) {
                   letterSpacing: "0.14em",
                   textTransform: "uppercase",
                   marginBottom: 4,
-                }}>Custom hue</p>
-                <input
-                  type="range"
-                  min={0}
-                  max={360}
-                  step={1}
-                  value={parseInt(currentColor.split(" ")[0]) || 43}
-                  onChange={e => {
-                    const hue = e.target.value;
-                    // Keep saturation + lightness from current, just replace hue
-                    const parts = currentColor.split(" ");
-                    const newHsl = `${hue} ${parts[1] ?? "80%"} ${parts[2] ?? "62%"}`;
-                    handleRayColor(newHsl);
-                  }}
-                  style={{
-                    width: "100%",
-                    accentColor: `hsl(${currentColor})`,
-                    cursor: "pointer",
-                  }}
-                />
+                }}>Custom</p>
+                <ColorSliders value={currentColor} onChange={handleRayColor} />
                 <p style={{
                   fontFamily: "DM Mono, monospace",
                   fontSize: 8,
@@ -991,20 +1037,7 @@ export default function ConstellationMenu({ onClose }: Props) {
                   );
                 })}
               </div>
-              {/* Accent hue slider */}
-              <div style={{ marginTop: 8 }}>
-                <input
-                  type="range"
-                  min={0} max={360} step={1}
-                  value={parseInt(currentAccent.split(" ")[0]) || 43}
-                  onChange={e => {
-                    const hue   = e.target.value;
-                    const parts = currentAccent.split(" ");
-                    handleAccentColor(`${hue} ${parts[1] ?? "80%"} ${parts[2] ?? "62%"}`);
-                  }}
-                  style={{ width: "100%", accentColor: `hsl(${currentAccent})`, cursor: "pointer" }}
-                />
-              </div>
+              <ColorSliders value={currentAccent} onChange={handleAccentColor} />
 
               {/* Divider */}
               <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />
@@ -1073,16 +1106,7 @@ export default function ConstellationMenu({ onClose }: Props) {
                         );
                       })}
                     </div>
-                    <input
-                      type="range"
-                      min={0} max={360} step={1}
-                      value={parseInt(current.split(" ")[0]) || 0}
-                      onChange={e => {
-                        const parts = current.split(" ");
-                        apply(`${e.target.value} ${parts[1] ?? "80%"} ${parts[2] ?? "62%"}`);
-                      }}
-                      style={{ width: "100%", accentColor: `hsl(${current})`, cursor: "pointer", marginTop: 6 }}
-                    />
+                    <ColorSliders value={current} onChange={apply} />
                   </div>
                 );
               })}
@@ -1126,6 +1150,19 @@ export default function ConstellationMenu({ onClose }: Props) {
 
               {/* Particle colour */}
               <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 30% 35%)", letterSpacing: "0.14em", textTransform: "uppercase", margin: "0 0 6px" }}>Colour</p>
+
+              {/* Particle saturation — was hard-coded at 55, which capped how
+                  vivid the field could ever look regardless of hue. */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 6.5, color: "hsl(var(--accent-h) 25% 32%)", letterSpacing: "0.12em", textTransform: "uppercase", margin: 0 }}>Saturation</p>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 55% 55%)", margin: 0 }}>{layout.particleSaturation ?? DEFAULT_PARTICLE_SATURATION}%</p>
+              </div>
+              <input
+                type="range" min={0} max={100} step={1}
+                value={layout.particleSaturation ?? DEFAULT_PARTICLE_SATURATION}
+                onChange={e => handleParticleSaturation(parseInt(e.target.value))}
+                style={{ width: "100%", accentColor: `hsl(var(--accent-h) var(--accent-s) var(--accent-l))`, cursor: "pointer", marginBottom: 8 }}
+              />
               {(() => {
                 const PARTICLE_PRESETS: { label: string; hue: number | null }[] = [
                   { label: "Auto",    hue: null },

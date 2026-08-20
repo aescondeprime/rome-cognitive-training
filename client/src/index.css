@@ -202,7 +202,11 @@
 .akira-ambience {
   position: fixed;
   inset: 0;
-  z-index: 1;                 /* above the page background, below all content */
+  /* Above the Constellation overlay (z-index 200), below Akira's own console
+     (410) and the approval dialog (500). At z-index 1 the glow was painted
+     over the moment the Constellation opened, so the one screen you spend the
+     most time on was the one screen that never showed it. */
+  z-index: 210;
   pointer-events: none;
   opacity: 0;
   transition: opacity .42s cubic-bezier(.4, 0, .2, 1);

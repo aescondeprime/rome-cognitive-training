@@ -20,6 +20,7 @@ export interface ConstellationLayout {
   accentColor: string;    // HSL components, e.g. "43 88% 60%"
   particleCount: number;  // 0–560, default 280
   particleHue: number | null;  // null = follow accent hue
+  particleSaturation: number;  // 0-100, was hard-coded at 55
   widgetPos: { x: number; y: number } | null;  // null = default top-right
   widgetCollapsed: boolean;
   projectsWidgetPos: { x: number; y: number } | null;
@@ -44,6 +45,7 @@ export const DEFAULT_ACCENT_COLOR = "43 88% 60%";
 export const DEFAULT_AKIRA_GRADIENT_A = "178 76% 58%";
 export const DEFAULT_AKIRA_GRADIENT_B = "268 82% 68%";
 export const DEFAULT_AKIRA_INTENSITY  = 0.6;
+export const DEFAULT_PARTICLE_SATURATION = 70;
 
 /**
  * A pristine layout. Exported so the editor's Reset uses exactly the same
@@ -57,6 +59,7 @@ export function defaultLayout(): ConstellationLayout {
     accentColor: DEFAULT_ACCENT_COLOR,
     particleCount: 280,
     particleHue: null,
+    particleSaturation: DEFAULT_PARTICLE_SATURATION,
     widgetPos: null,
     widgetCollapsed: false,
     projectsWidgetPos: null,
@@ -93,6 +96,7 @@ export function loadLayout(): ConstellationLayout {
     // Backfill particle settings if missing
     if (!("particleCount"    in parsed)) (parsed as any).particleCount    = 280;
     if (!("particleHue"      in parsed)) (parsed as any).particleHue      = null;
+    if (!("particleSaturation" in parsed)) (parsed as any).particleSaturation = DEFAULT_PARTICLE_SATURATION;
     if (!("widgetPos"              in parsed)) (parsed as any).widgetPos              = null;
     if (!("widgetCollapsed"        in parsed)) (parsed as any).widgetCollapsed        = false;
     if (!("projectsWidgetPos"      in parsed)) (parsed as any).projectsWidgetPos      = null;
