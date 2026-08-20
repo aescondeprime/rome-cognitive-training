@@ -52,6 +52,7 @@ export const DEFAULT_AKIRA_SETTINGS: AkiraSettings = {
     greetingText: "Yes?",
     greetingDelayMs: 1_200,
     shareLiveContext: true,
+    idleTimeoutMs: 20_000,
   },
   agent: { provider: "openai", model: "gpt-5-mini", effort: "medium" },
   privacy: {

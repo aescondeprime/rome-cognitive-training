@@ -56,6 +56,7 @@ export class AkiraController {
   private readonly greeting: AkiraGreeting;
   private pendingGreeting = false;
   private greetingTimer: NodeJS.Timeout | null = null;
+  private idleTimer: NodeJS.Timeout | null = null;
   private readonly pendingApprovals = new Map<string, PendingApproval>();
   private runtime: HermesRuntimeManager | null = null;
   private registry: AkiraCapabilityRegistry | null = null;
@@ -106,6 +107,7 @@ export class AkiraController {
     this.realtime.on("open", () => this.publishStatus());
 
     this.realtime.on("audio", ({ audio, sampleRate }: { audio: string; sampleRate: number }) => {
+      this.armIdleTimer();
       if (this.state.state !== "SPEAKING") this.transition("SPEAKING", "Akira is speaking.");
       this.send(AKIRA_CHANNELS.audio, { type: "chunk", audio, sampleRate });
     });
@@ -113,6 +115,7 @@ export class AkiraController {
     this.realtime.on("userTranscript", (text: string) => {
       // The user said more than the wake word, so no acknowledgement is owed.
       this.cancelGreeting();
+      this.armIdleTimer();
       this.lastUserText = text;
       this.transcript({ role: "user", text, final: true, at: Date.now() });
       if (this.state.state === "LISTENING") this.transition("PROCESSING", "Akira is thinking.");
@@ -120,6 +123,7 @@ export class AkiraController {
 
     this.realtime.on("agentResponse", (text: string) => {
       this.cancelGreeting();
+      this.armIdleTimer();
       this.lastAssistantText = text;
       this.assistantBuffer = "";
       this.transcript({ role: "assistant", text, final: true, at: Date.now() });
@@ -173,6 +177,7 @@ export class AkiraController {
    */
   private async handleToolCall(call: RealtimeToolCall): Promise<void> {
     this.cancelGreeting();
+    this.armIdleTimer();
     if (call.toolName !== DISPATCH_TOOL_NAME) {
       this.realtime.sendToolResult(
         call.toolCallId,
@@ -327,7 +332,45 @@ export class AkiraController {
     }
     this.transition("LISTENING", "Akira is listening.");
     if (this.pendingGreeting) this.scheduleGreeting();
+    this.armIdleTimer();
     return this.status();
+  }
+
+  /**
+   * Close a conversation nobody is having.
+   *
+   * The wake word has a real false-positive rate, and conversations bill by the
+   * minute — without this, one spurious trigger overnight runs the meter until
+   * morning. Any genuine activity rearms the timer, so a long pause mid-thought
+   * is safe; only true silence ends it.
+   */
+  private armIdleTimer(): void {
+    this.clearIdleTimer();
+    const timeout = this.settings.get().realtime.idleTimeoutMs;
+    if (!timeout || timeout <= 0) return;
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (!this.realtime.connected) return;
+      // Never cut in while Akira is mid-turn: thinking, speaking, acting, or
+      // waiting on an approval all mean the conversation is alive.
+      if (this.state.state !== "LISTENING" && this.state.state !== "AWAKE_IDLE") {
+        this.armIdleTimer();
+        return;
+      }
+      this.transcript({
+        role: "system",
+        text: "Closed after a period of silence.",
+        final: true,
+        at: Date.now(),
+      });
+      void this.standby();
+    }, Math.max(5_000, timeout));
+    this.idleTimer.unref?.();
+  }
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
   }
 
   /**
@@ -378,6 +421,7 @@ export class AkiraController {
 
   async standby(): Promise<AkiraStatus> {
     this.cancelGreeting();
+    this.clearIdleTimer();
     if (this.state.state !== "DORMANT" && this.state.state !== "UNAVAILABLE") {
       this.transition("DEACTIVATING", "Ending the conversation.");
     }
@@ -439,6 +483,7 @@ export class AkiraController {
     this.assistantBuffer = "";
     this.transcript({ role: "user", text, final: true, at: Date.now() });
     this.realtime.sendText(text);
+    this.armIdleTimer();
     this.transition("PROCESSING", "Akira is thinking.");
     this.publishStatus();
     return this.status();
@@ -567,6 +612,7 @@ export class AkiraController {
     this.settleTurn();
     this.clearWakeHealthTimer();
     this.clearGreetingTimer();
+    this.clearIdleTimer();
     this.voice.cancel();
     this.realtime.close();
     this.gateway.disconnect();

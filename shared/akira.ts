@@ -192,6 +192,14 @@ export interface AkiraSettings {
     greetingDelayMs: number;
     /** Send route changes and data updates as non-interrupting context. */
     shareLiveContext: boolean;
+    /**
+     * Close a conversation nobody is having.
+     *
+     * Matters because conversations bill per minute and the wake word has a
+     * real false-positive rate: without this, a spurious trigger at 2am leaves
+     * the meter running until morning. 0 disables it.
+     */
+    idleTimeoutMs: number;
   };
   agent: {
     provider: "openai" | "anthropic" | "openrouter";

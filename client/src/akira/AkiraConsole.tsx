@@ -228,6 +228,12 @@ export default function AkiraConsole() {
                     checked={draft.realtime.greetingEnabled}
                     onChange={checked => setDraft({ ...draft, realtime: { ...draft.realtime, greetingEnabled: checked } })}
                   />
+                  <RangeInput
+                    label="Close after silence (seconds · 0 = never)"
+                    value={Math.round(draft.realtime.idleTimeoutMs / 1000)}
+                    min={0} max={120} step={5}
+                    onChange={value => setDraft({ ...draft, realtime: { ...draft.realtime, idleTimeoutMs: value * 1000 } })}
+                  />
                   <Toggle
                     label="Share what you're looking at as you move around ROME"
                     checked={draft.realtime.shareLiveContext}
