@@ -66,16 +66,34 @@ function harness() {
     setImmediate(() => socket.emit("open"));
     return socket;
   });
-  return { session, sockets };
+
+  /**
+   * Wait until the session has attached its frame listeners to socket `index`.
+   *
+   * Counting ticks does not work here: `connect` awaits a signed-URL lookup
+   * before it constructs the socket, and attaches `message`/`close` only after
+   * the open event. A frame emitted before that lands on an emitter nobody is
+   * listening to and is silently dropped — which then shows up as a six-second
+   * handshake timeout rather than as a missing listener.
+   */
+  const live = async (index = 0): Promise<FakeSocket> => {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const socket = sockets[index];
+      if (socket && socket.listenerCount("message") > 0) return socket;
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    throw new Error(`socket ${index} never started receiving frames`);
+  };
+
+  return { session, sockets, live };
 }
 
 const OPTIONS = { agentId: "agent_test", apiKey: null, prompt: "SYSTEM PROMPT" };
 
 test("the handshake carries the prompt override and dynamic variables", async () => {
-  const { session, sockets } = harness();
+  const { session, sockets, live } = harness();
   const connecting = session.connect({ ...OPTIONS, dynamicVariables: { rome_route: "/taskboard" } });
-  await new Promise(resolve => setImmediate(resolve));
-  sockets[0].ready();
+  (await live()).ready();
   await connecting;
 
   const init = sockets[0].frames().find(frame => frame.type === "conversation_initiation_client_data");
@@ -89,17 +107,15 @@ test("the handshake carries the prompt override and dynamic variables", async ()
 });
 
 test("a 1008 close during setup retries without overrides", async () => {
-  const { session, sockets } = harness();
+  const { session, sockets, live } = harness();
   const degraded: Error[] = [];
   session.on("degraded", error => degraded.push(error));
 
   const connecting = session.connect(OPTIONS);
-  await new Promise(resolve => setImmediate(resolve));
   // How ElevenLabs reports an override that is not enabled: no error frame,
   // just a policy-violation close.
-  sockets[0].emit("close", 1008, Buffer.from("Override for field 'prompt' is not allowed by config"));
-  await new Promise(resolve => setImmediate(resolve));
-  sockets[1]?.ready();
+  (await live(0)).emit("close", 1008, Buffer.from("Override for field 'prompt' is not allowed by config"));
+  (await live(1)).ready();
   await connecting;
 
   assert.equal(sockets.length, 2, "expected a second connection attempt");
@@ -112,20 +128,18 @@ test("a 1008 close during setup retries without overrides", async () => {
 });
 
 test("a non-override close during setup is not retried", async () => {
-  const { session, sockets } = harness();
+  const { session, sockets, live } = harness();
   const connecting = session.connect(OPTIONS);
-  await new Promise(resolve => setImmediate(resolve));
-  sockets[0].emit("close", 1011, Buffer.from("internal error"));
+  (await live()).emit("close", 1011, Buffer.from("internal error"));
 
   await assert.rejects(connecting, /closed the connection during setup/);
   assert.equal(sockets.length, 1, "a server fault must not loop");
 });
 
 test("audio, transcripts, and VAD are surfaced with the negotiated sample rate", async () => {
-  const { session, sockets } = harness();
+  const { session, sockets, live } = harness();
   const connecting = session.connect(OPTIONS);
-  await new Promise(resolve => setImmediate(resolve));
-  sockets[0].ready(24_000);
+  (await live()).ready(24_000);
   await connecting;
 
   const audio: any[] = [];
@@ -150,10 +164,9 @@ test("audio, transcripts, and VAD are surfaced with the negotiated sample rate",
 });
 
 test("tool calls are surfaced and results are returned against the call id", async () => {
-  const { session, sockets } = harness();
+  const { session, sockets, live } = harness();
   const connecting = session.connect(OPTIONS);
-  await new Promise(resolve => setImmediate(resolve));
-  sockets[0].ready();
+  (await live()).ready();
   await connecting;
 
   const calls: any[] = [];
@@ -181,10 +194,9 @@ test("tool calls are surfaced and results are returned against the call id", asy
 });
 
 test("a ping is answered with the matching event id", async () => {
-  const { session, sockets } = harness();
+  const { session, sockets, live } = harness();
   const connecting = session.connect(OPTIONS);
-  await new Promise(resolve => setImmediate(resolve));
-  sockets[0].ready();
+  (await live()).ready();
   await connecting;
 
   sockets[0].receive({ type: "ping", ping_event: { event_id: 77, ping_ms: 12 } });
@@ -194,10 +206,9 @@ test("a ping is answered with the matching event id", async () => {
 });
 
 test("closing deliberately is distinguishable from dropping", async () => {
-  const { session, sockets } = harness();
+  const { session, live } = harness();
   const connecting = session.connect(OPTIONS);
-  await new Promise(resolve => setImmediate(resolve));
-  sockets[0].ready();
+  (await live()).ready();
   await connecting;
 
   const closes: any[] = [];
@@ -209,10 +220,9 @@ test("closing deliberately is distinguishable from dropping", async () => {
 });
 
 test("audio is not sent once the session is closed", async () => {
-  const { session, sockets } = harness();
+  const { session, sockets, live } = harness();
   const connecting = session.connect(OPTIONS);
-  await new Promise(resolve => setImmediate(resolve));
-  sockets[0].ready();
+  (await live()).ready();
   await connecting;
 
   const before = sockets[0].sent.length;
