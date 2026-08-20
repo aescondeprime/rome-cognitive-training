@@ -30,6 +30,41 @@ import { OpenWakeWord } from "./wake/OpenWakeWord";
 import { loadFinancialState, saveFinancialState } from "@/lib/financialStore";
 import { makeId, projectFinancials, toDateInput, type ExpenseKind, type Recurrence } from "@/lib/financialEngine";
 
+/**
+ * Human names for ROME's routes.
+ *
+ * Contextual updates are read by a language model, not parsed, so "the Idea
+ * Workshop" is worth more than "/idea-workshop" — it lets Akira resolve "the
+ * board I was just looking at" without being told the URL scheme.
+ */
+const ROUTE_LABELS: Record<string, string> = {
+  "/athena": "Athena Trials",
+  "/athena/dual-n-back": "the Dual N-Back drill",
+  "/athena/cwm": "the Complex Working Memory drill",
+  "/athena/mental-math": "the Mental Math drill",
+  "/athena/corsi": "the Corsi Blocks drill",
+  "/athena/memory-span": "the Memory Span drill",
+  "/athena/pasat": "the PASAT drill",
+  "/philosophy": "Philosophy Chambers",
+  "/strategic": "the Strategic node",
+  "/taskboard": "the Taskboard",
+  "/kronos-keep": "Kronos Keep",
+  "/creative": "the Creative node",
+  "/idea-workshop": "the Idea Workshop",
+  "/investigative": "the Investigative node",
+  "/component-board": "the Component Board",
+  "/research-lab": "the Research Lab",
+  "/world": "the World Browser",
+  "/funding": "the Funding Dashboard",
+  "/academia": "Academia",
+  "/settings": "Settings",
+};
+
+function describeRoute(hash: string): string | null {
+  const route = hash.replace(/^#/, "").split("?")[0] || "/";
+  return ROUTE_LABELS[route] ?? null;
+}
+
 /** A short-lived message shown by the ambience layer, then cleared. */
 export interface AkiraNotice {
   text: string;
@@ -287,6 +322,55 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     for (const queryKey of event.queryKeys) void queryClient.invalidateQueries({ queryKey });
     for (const store of event.localStores) window.dispatchEvent(new CustomEvent(`rome:${store}:refresh`, { detail: event }));
   }, []);
+
+  /**
+   * Tell Akira where the user is, without taking a turn.
+   *
+   * `contextual_update` folds into the conversation silently, so Akira can
+   * resolve "that board I was just looking at" without anyone having to say the
+   * name — the difference between an assistant that is present and one that is
+   * merely reachable.
+   *
+   * Only sent during a live conversation. Dormant, there is no socket and
+   * nothing to tell.
+   */
+  useEffect(() => {
+    if (!bridge) return;
+    let lastSent = "";
+    let timer: number | null = null;
+
+    const announce = () => {
+      const state = statusRef.current?.state;
+      if (!state || state === "DORMANT" || state === "UNAVAILABLE") return;
+      const label = describeRoute(window.location.hash);
+      if (!label || label === lastSent) return;
+      lastSent = label;
+      bridge.sendContext(`The user is now looking at ${label}.`);
+    };
+
+    // Debounced: hash routing fires on every intermediate navigation, and a
+    // burst of updates would crowd the conversation for no benefit.
+    const onHashChange = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(announce, 400);
+    };
+
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      window.removeEventListener("hashchange", onHashChange);
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [bridge]);
+
+  /**
+   * Announce the current screen when a conversation opens, so Akira starts
+   * oriented rather than having to ask or call a tool to find out.
+   */
+  useEffect(() => {
+    if (!bridge || status?.state !== "LISTENING") return;
+    const label = describeRoute(window.location.hash);
+    if (label) bridge.sendContext(`The user is looking at ${label}.`);
+  }, [bridge, status?.state === "LISTENING"]);
 
   const handleRendererCommand = useCallback(async (command: AkiraRendererCommand) => {
     if (!bridge) return;

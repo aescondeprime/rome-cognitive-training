@@ -1,49 +1,95 @@
-# Akira V2 performance notes
+# Akira V3 performance notes
 
-The default target is a 2022 MacBook Air with Apple M2 and 8 GB unified memory. Akira deliberately keeps language-model inference in the cloud while running only wake detection, speech recognition, audio worklets, and orchestration locally.
+Target hardware is a 2022 MacBook Air, Apple M2, 8 GB unified memory. V3 runs
+far lighter than V2, which kept a Python runtime, a Whisper model, and a
+separate wake engine resident.
 
-## Recommended profile for M2 / 8 GB
+## What runs locally
 
-- Hermes model inference: cloud provider.
-- Local STT: `base` for accuracy; choose `tiny` if memory pressure or first-transcript latency is uncomfortable.
-- Wake word: Sherpa open-vocabulary “Akira” model (small one-time asset).
-- ElevenLabs: `eleven_flash_v2_5`, streamed `pcm_24000`.
-- Active-page reads: off unless needed.
-- Runtime restart ceiling: three attempts per five minutes.
+| Component | Cost |
+|---|---|
+| Microphone capture + resample | One `AudioWorklet`, negligible |
+| Wake word (3 ONNX models via wasm) | ~10 MB resident, low single-digit % CPU |
+| Playback scheduling | Web Audio, negligible |
+| Everything else | Remote |
 
-No LLM weights, Whisper model, wake asset, Python environment, or Hermes runtime is packaged into the DMG. They live below `ROME/Akira`, so application updates remain small and do not duplicate models.
+Nothing large is packaged into the DMG. The wake models live in
+`client/public/akira/` and total a few megabytes.
 
-## Latency path
+**V2 comparison:** a managed Python 3.11 environment, `faster-whisper` holding a
+speech model warm, and a Sherpa listener — hundreds of megabytes, all of it now
+gone.
 
-Hermes's native Sherpa listener owns standby wake capture. After a wake event, an `AudioWorklet` performs active VAD while `MediaRecorder` produces a compressed utterance for local transcription. The renderer releases that stream before Hermes resumes standby capture. ElevenLabs PCM is scheduled ahead by roughly 25 ms rather than waiting for a complete audio file.
+## Latency
 
-The live ROME context is capped and parallelized. Recent notes/memory are limited, native browser content is absent by default, and readable page text is capped at 50,000 characters when explicitly enabled. Capability payloads and wake/audio IPC frames have hard size limits.
+The number that matters is time from you finishing a sentence to Akira starting
+to speak.
 
-## Memory behavior
+| | V2 | V3 |
+|---|---|---|
+| Silence detection | ~950 ms | server-side VAD |
+| Transcription | batch, after the utterance | streaming |
+| Model response | awaited to completion | streamed |
+| Speech synthesis | started after the full response | streamed |
+| **Time to first audio** | **6–15 s** | **target ≤ 800 ms** |
 
-Hermes and `faster-whisper` are separate from Chromium. The local STT model stays warm according to Hermes defaults, improving subsequent turns but retaining memory. On constrained systems:
+V2's stages were strictly serial — nothing overlapped, so the costs summed. V3
+overlaps all of them across one socket, which is the entire reason the
+conversation feels continuous.
 
-1. select the `tiny` speech model;
-2. close unneeded native browser tabs and large PDF/Academia views;
-3. keep active-page reading disabled;
-4. return Akira to standby when a continuous conversation is finished;
-5. restart ROME if an upstream native dependency fails to release memory.
+Local contributions are small: `eleven_flash_v2_5` is documented at ~75 ms, and
+playback schedules ~12 ms ahead rather than waiting for a complete buffer. The
+remainder is network and model latency.
 
-The UI keeps only the latest 100 transcript events, 500 activity items, 300 runtime log lines, and a bounded undo list. Audio source nodes are removed as they finish and all queued nodes are stopped on barge-in or standby.
+**Starting a conversation is instant**, because the microphone is already open.
+V2 spent hundreds of milliseconds acquiring the device *after* the wake word,
+which is where the lost syllables came from.
+
+## Memory behaviour
+
+The renderer holds a fixed 3-second Int16 ring buffer (96 KB) plus bounded
+transcript and activity lists. Audio source nodes are removed as they finish and
+all queued nodes stop on barge-in or standby.
+
+The main process holds the WebSocket, settings, and the cached greeting clip —
+a single short PCM file, synthesised once per voice.
+
+## Wake word accuracy
+
+A self-trained openWakeWord model is a real trade-off, and its metrics are
+printed at the end of training. A typical first run lands near 0.69 recall and
+~1.8 false positives per hour: it misses roughly three attempts in ten and fires
+spuriously once or twice an hour.
+
+The strictness slider moves along that curve. Because conversations bill per
+minute, the false-positive side has a direct cost, which is what the idle
+timeout is for — it turns a spurious trigger into a 20-second non-event.
+
+More training examples improve both numbers. Retraining replaces one file.
+
+## Cost
+
+Conversation minutes are the only running cost. The socket opens on wake or
+`⌘'` and closes on standby, error, or idle timeout, so dormant Akira costs
+nothing. Wake detection is local and free.
 
 ## Verification targets
 
-The fast desktop workflow packages Apple Silicon independently from Intel and Windows jobs. Deterministic Akira tests cover state transitions, ambiguity/bulk permission behavior, context assembly, mutation/invalidation, runtime replacement, gateway replacement, streamed PCM, and stale-audio cancellation.
+Deterministic tests cover accelerator matching, including the shifted-
+punctuation case and the Escape regression that V2 shipped with.
 
-Before release, verify on real M2 hardware:
+These require real hardware and should be recorded as release QA rather than
+inferred from unit tests:
 
-- first microphone permission and subsequent restart;
-- wake detection from near/far-field speech;
-- local base/tiny transcription latency and memory;
-- barge-in while ElevenLabs audio is queued;
-- continuous listening after a silent pause;
-- WebContentsView Aura visibility and Control+Escape;
-- sleep/wake, network loss, and runtime crash recovery;
-- signed/notarized DMG microphone entitlement behavior.
-
-Those real-device checks cannot be established by container builds alone and should be recorded as release QA rather than inferred from unit tests.
+- first microphone permission, and the prompt after a restart;
+- wake detection from near and far field, and the false-positive rate over a
+  normal working day;
+- time to first audio, measured rather than judged;
+- barge-in while audio is queued;
+- continuous conversation across a long pause;
+- ambience visibility over the Constellation and in the World Browser;
+- `⌘'` while a native browser tab holds focus;
+- sleep/wake, network loss, and microphone device change;
+- idle timeout firing, and *not* firing mid-turn;
+- signed and notarised DMG microphone entitlement — dev mode runs as Electron,
+  so it cannot validate this.
