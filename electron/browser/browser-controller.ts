@@ -9,7 +9,11 @@ import { BrowserStorage } from "./browser-storage";
 import { DownloadManager } from "./download-manager";
 import { PermissionManager } from "./permission-manager";
 import { SessionManager } from "./session-manager";
-import { TabManager } from "./tab-manager";
+import {
+  DEFAULT_AKIRA_SHORTCUT_BINDINGS,
+  TabManager,
+  type AkiraShortcutBindings,
+} from "./tab-manager";
 import type { BrowserSessionKind, BrowserViewport } from "./types";
 
 export class BrowserController {
@@ -35,7 +39,7 @@ export class BrowserController {
   constructor(
     private readonly host: BrowserWindow,
     dataDir: string,
-    getAkiraShortcut: () => "Control+Escape" | "Control+Shift+Escape" = () => "Control+Escape",
+    getAkiraShortcut: () => AkiraShortcutBindings = () => DEFAULT_AKIRA_SHORTCUT_BINDINGS,
   ) {
     const emit = (channel: string, payload: unknown) => {
       if (!host.isDestroyed()) host.webContents.send(channel, payload);

@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { ArrowLeft, Settings2, Play, RotateCcw } from "lucide-react";
 import { Link } from "wouter";
+import { recordDrillResultInBackground } from "@/lib/trainingRecorder";
 
 const LETTERS = ["C", "H", "K", "L", "Q", "R", "S", "T"];
 const GRID_SIZE = 9; // 3×3
@@ -63,6 +64,8 @@ export default function DualNBack() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stepRef  = useRef(0);
   const runningRef = useRef(false);
+  // When the current drill began, so recorded sessions carry a real duration.
+  const startedAtRef = useRef(0);
 
   const clearTimer = () => { if (timerRef.current) clearTimeout(timerRef.current); };
 
@@ -77,6 +80,12 @@ export default function DualNBack() {
     setResult({ nLevel: newN, ...s, total });
     setCfg(c => ({ ...c, n: newN }));
     setPhase("result");
+    recordDrillResultInBackground({
+      domain: "working_memory", activityId: "dual-n-back",
+      correct: s.audioHits + s.posHits,
+      total: s.audioHits + s.posHits + s.audioMisses + s.posMisses,
+      level: n, maxLevel: 6, startedAt: startedAtRef.current,
+    });
     setActivePos(null); setActiveLetter(null);
   }, [cfg]);
 
@@ -128,6 +137,7 @@ export default function DualNBack() {
   }, [cfg, endSession]);
 
   const startSession = useCallback(() => {
+    startedAtRef.current = Date.now();
     clearTimer();
     seqPos.current = []; seqLetter.current = [];
     pressedAudio.current = false; pressedPos.current = false;

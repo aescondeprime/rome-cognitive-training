@@ -13,7 +13,8 @@ import { setAccentColor } from "@/lib/lightRayState";
 import { loadLayout } from "@/lib/constellationLayout";
 import Login from "@/pages/Login";
 import { AkiraProvider } from "@/akira/AkiraProvider";
-import AkiraAura from "@/akira/AkiraAura";
+import AkiraAmbience from "@/akira/AkiraAmbience";
+import AkiraConsole from "@/akira/AkiraConsole";
 
 // Core pages kept
 import PhilosophyChambers from "@/pages/PhilosophyChambers";
@@ -100,6 +101,8 @@ export default function App() {
       <ThemeProvider>
         <AuthGate>
           <AkiraProvider>
+            {/* Akira's only always-mounted surface. Renders nothing while dormant. */}
+            <AkiraAmbience />
             <ConstellationPortal />
             <Router hook={useHashLocation}>
               <Switch>
@@ -181,7 +184,7 @@ export default function App() {
               </Route>
               </Switch>
             </Router>
-            <AkiraAura />
+            <AkiraConsole />
             <LightRay zIndex={201} />
             <Toaster />
           </AkiraProvider>

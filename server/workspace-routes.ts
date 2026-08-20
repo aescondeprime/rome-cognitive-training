@@ -412,6 +412,50 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
   }));
 
   // Strategic — Kronos Keep.
+  // ── Threats ────────────────────────────────────────────────────────────
+  // These existed only in api/index.ts (the Vercel handler), so the Threats
+  // widget and any capability calling /api/threats got a 404 in the desktop
+  // build. Ported here to match, with the ownership filter that the serverless
+  // version omits on PATCH and DELETE.
+
+  app.get("/api/threats", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const result = await sb.from("threats").select("*").eq("user_id", ownerId).order("created_at", { ascending: false });
+    ensureNoError(result);
+    res.json(result.data ?? []);
+  }));
+
+  app.post("/api/threats", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const title = String(req.body?.title ?? "").trim();
+    if (!title) { res.status(400).json({ error: "A title is required." }); return; }
+    const priorityValue = Number(req.body?.priority);
+    const priority = [1, 2, 3].includes(priorityValue) ? priorityValue : 1;
+    const now = Date.now();
+    const result = await sb.from("threats")
+      .insert({ user_id: ownerId, title, priority, resolved: false, created_at: now, updated_at: now })
+      .select().single();
+    ensureNoError(result);
+    res.json(result.data);
+  }));
+
+  app.patch("/api/threats/:id", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const patch = { ...pick(req.body ?? {}, ["title", "priority", "resolved"]), updated_at: Date.now() };
+    const result = await sb.from("threats")
+      .update(patch).eq("id", Number(req.params.id)).eq("user_id", ownerId);
+    ensureNoError(result);
+    res.json({ ok: true });
+  }));
+
+  app.delete("/api/threats/:id", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const result = await sb.from("threats")
+      .delete().eq("id", Number(req.params.id)).eq("user_id", ownerId);
+    ensureNoError(result);
+    res.json({ ok: true });
+  }));
+
   app.get("/api/kronos/today", route(async (req, res) => {
     const ownerId = await userId(req);
     const dateStr = typeof req.query.date === "string" ? req.query.date : new Date().toISOString().slice(0, 10);

@@ -7,6 +7,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { ArrowLeft, Settings2, Play, RotateCcw, Delete } from "lucide-react";
 import { Link } from "wouter";
+import { recordDrillResultInBackground } from "@/lib/trainingRecorder";
 
 type SpanType = "Digit" | "DigitReverse" | "DigitSorted" | "Letter" | "LetterReverse" | "LetterSorted";
 
@@ -59,6 +60,8 @@ export default function MemorySpan() {
   const [round, setRound] = useState(0);
   const [roundResults, setRoundResults] = useState<boolean[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // When the current drill began, so recorded sessions carry a real duration.
+  const startedAtRef = useRef(0);
 
   const clearTimers = () => { if (timerRef.current) clearTimeout(timerRef.current); };
 
@@ -87,6 +90,7 @@ export default function MemorySpan() {
   }, [cfg.type, showSequence]);
 
   const startSession = useCallback(() => {
+    startedAtRef.current = Date.now();
     clearTimers();
     setRoundResults([]);
     startRound(0, cfg.level);
@@ -112,6 +116,11 @@ export default function MemorySpan() {
                          : cfg.level;
           setCfg(c => ({ ...c, level: newLevel }));
           setPhase("result");
+          recordDrillResultInBackground({
+            domain: "recall", activityId: "memory-span",
+            correct: hits, total: cfg.rounds, level: cfg.level, maxLevel: 30,
+            startedAt: startedAtRef.current,
+          });
         } else {
           startRound(nextRound, cfg.level);
         }

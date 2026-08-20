@@ -6,33 +6,87 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
-import type {
-  AkiraActivityEntry,
-  AkiraApprovalRequest,
-  AkiraCapabilityDescriptor,
-  AkiraAudioEvent,
-  AkiraDataChanged,
-  AkiraRendererCommand,
-  AkiraSettings,
-  AkiraStatus,
-  AkiraTranscriptEvent,
+import {
+  DEFAULT_CONSOLE_SHORTCUT,
+  DEFAULT_CONVERSATION_SHORTCUT,
+  matchesAkiraShortcut,
+  type AkiraActivityEntry,
+  type AkiraApprovalRequest,
+  type AkiraCapabilityDescriptor,
+  type AkiraAudioEvent,
+  type AkiraDataChanged,
+  type AkiraRendererCommand,
+  type AkiraSettings,
+  type AkiraStatus,
+  type AkiraTranscriptEvent,
 } from "@shared/akira";
 import { queryClient } from "@/lib/queryClient";
+import { AkiraMic } from "./AkiraMic";
+import { OpenWakeWord } from "./wake/OpenWakeWord";
 import { loadFinancialState, saveFinancialState } from "@/lib/financialStore";
 import { makeId, projectFinancials, toDateInput, type ExpenseKind, type Recurrence } from "@/lib/financialEngine";
+
+/**
+ * Human names for ROME's routes.
+ *
+ * Contextual updates are read by a language model, not parsed, so "the Idea
+ * Workshop" is worth more than "/idea-workshop" — it lets Akira resolve "the
+ * board I was just looking at" without being told the URL scheme.
+ */
+const ROUTE_LABELS: Record<string, string> = {
+  "/athena": "Athena Trials",
+  "/athena/dual-n-back": "the Dual N-Back drill",
+  "/athena/cwm": "the Complex Working Memory drill",
+  "/athena/mental-math": "the Mental Math drill",
+  "/athena/corsi": "the Corsi Blocks drill",
+  "/athena/memory-span": "the Memory Span drill",
+  "/athena/pasat": "the PASAT drill",
+  "/philosophy": "Philosophy Chambers",
+  "/strategic": "the Strategic node",
+  "/taskboard": "the Taskboard",
+  "/kronos-keep": "Kronos Keep",
+  "/creative": "the Creative node",
+  "/idea-workshop": "the Idea Workshop",
+  "/investigative": "the Investigative node",
+  "/component-board": "the Component Board",
+  "/research-lab": "the Research Lab",
+  "/world": "the World Browser",
+  "/funding": "the Funding Dashboard",
+  "/academia": "Academia",
+  "/settings": "Settings",
+};
+
+function describeRoute(hash: string): string | null {
+  const route = hash.replace(/^#/, "").split("?")[0] || "/";
+  return ROUTE_LABELS[route] ?? null;
+}
+
+/** A short-lived message shown by the ambience layer, then cleared. */
+export interface AkiraNotice {
+  text: string;
+  kind: "info" | "error";
+  at: number;
+}
 
 interface AkiraContextValue {
   status: AkiraStatus | null;
   transcripts: AkiraTranscriptEvent[];
   approval: AkiraApprovalRequest | null;
   microphoneArmed: boolean;
+  notice: AkiraNotice | null;
+  showNotice: (text: string, kind?: AkiraNotice["kind"]) => void;
   panelOpen: boolean;
-  setPanelOpen: (value: boolean) => void;
-  activate: () => Promise<void>;
+  /** Accepts an updater so the summon shortcut can toggle without a stale read. */
+  setPanelOpen: Dispatch<SetStateAction<boolean>>;
+  activate: (viaWakeWord?: boolean) => Promise<void>;
   standby: () => Promise<void>;
   interrupt: () => Promise<void>;
+  /** Start a conversation when dormant, end it when active. Bound to Command+'. */
+  toggleConversation: () => Promise<void>;
   submitText: (text: string) => Promise<void>;
   respondToApproval: (approved: boolean) => Promise<void>;
   updateSettings: (patch: Partial<AkiraSettings>) => Promise<void>;
@@ -59,24 +113,33 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const [approval, setApproval] = useState<AkiraApprovalRequest | null>(null);
   const [microphoneArmed, setMicrophoneArmed] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [notice, setNotice] = useState<AkiraNotice | null>(null);
   const statusRef = useRef<AkiraStatus | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const captureContextRef = useRef<AudioContext | null>(null);
-  const captureNodeRef = useRef<AudioWorkletNode | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const recordChunksRef = useRef<Blob[]>([]);
-  const speechSeenRef = useRef(false);
-  const lastSpeechRef = useRef(0);
-  const recordingStartedRef = useRef(0);
-  const discardRecordingRef = useRef(false);
-  const bargeFramesRef = useRef(0);
+  const micRef = useRef<AkiraMic | null>(null);
+  const wakeRef = useRef<OpenWakeWord | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
   const playbackTimeRef = useRef(0);
   const playbackSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const playbackGenerationRef = useRef(0);
   const continueTimerRef = useRef<number | null>(null);
+  const lastVadLevelRef = useRef(0);
+  const noticeTimerRef = useRef<number | null>(null);
 
   useEffect(() => { statusRef.current = status; }, [status]);
+
+  /**
+   * Transient, self-clearing feedback. Akira has no persistent interface, so
+   * this is how a failed shortcut or a missing runtime becomes visible without
+   * reintroducing a permanent dock.
+   */
+  const showNotice = useCallback((text: string, kind: AkiraNotice["kind"] = "info") => {
+    if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    setNotice({ text: text.slice(0, 240), kind, at: Date.now() });
+    noticeTimerRef.current = window.setTimeout(() => {
+      noticeTimerRef.current = null;
+      setNotice(null);
+    }, kind === "error" ? 6_000 : 3_200);
+  }, []);
 
   const cancelPlayback = useCallback(() => {
     playbackGenerationRef.current += 1;
@@ -87,6 +150,25 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     playbackTimeRef.current = 0;
   }, []);
 
+  /**
+   * Playback context, created on demand.
+   *
+   * Left at the device's native rate rather than forced to the stream rate:
+   * `AudioBufferSourceNode` resamples a 16kHz buffer for us, whereas pinning
+   * the context to 16kHz reconfigures the output device and can pop.
+   */
+  const ensurePlaybackContext = useCallback(async () => {
+    const existing = playbackContextRef.current;
+    if (existing && existing.state !== "closed") {
+      if (existing.state === "suspended") await existing.resume();
+      return existing;
+    }
+    const context = new AudioContext({ latencyHint: "interactive" });
+    playbackContextRef.current = context;
+    await context.resume();
+    return context;
+  }, []);
+
   const playAudio = useCallback(async (event: AkiraAudioEvent) => {
     if (event.type === "cancel") {
       cancelPlayback();
@@ -94,20 +176,20 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     }
     if (event.type === "start") {
       cancelPlayback();
-      const context = playbackContextRef.current ?? new AudioContext({ latencyHint: "interactive", sampleRate: event.sampleRate ?? 24_000 });
-      playbackContextRef.current = context;
-      await context.resume();
+      const context = await ensurePlaybackContext();
       playbackTimeRef.current = context.currentTime + 0.025;
       return;
     }
     if (event.type !== "chunk" || !event.audio) return;
-    const context = playbackContextRef.current;
-    if (!context) return;
+    // The realtime session streams chunks with no preceding "start" event, so
+    // the context is created here. Requiring a start event silently dropped
+    // every packet of the first spoken response.
+    const context = await ensurePlaybackContext();
     const bytes = Uint8Array.from(atob(event.audio), character => character.charCodeAt(0));
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const samples = Math.floor(bytes.byteLength / 2);
     if (!samples) return;
-    const buffer = context.createBuffer(1, samples, event.sampleRate ?? 24_000);
+    const buffer = context.createBuffer(1, samples, event.sampleRate ?? 16_000);
     const channel = buffer.getChannelData(0);
     for (let index = 0; index < samples; index += 1) channel[index] = view.getInt16(index * 2, true) / 32768;
     const source = context.createBufferSource();
@@ -120,164 +202,110 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     playbackSourcesRef.current.add(source);
     source.onended = () => playbackSourcesRef.current.delete(source);
     source.start(startAt);
-  }, [cancelPlayback]);
+  }, [cancelPlayback, ensurePlaybackContext]);
 
-  const finishUtterance = useCallback(async (recorder: MediaRecorder) => {
-    if (!bridge) return;
-    const shouldDiscard = discardRecordingRef.current || !speechSeenRef.current;
-    const chunks = recordChunksRef.current;
-    recordChunksRef.current = [];
-    if (shouldDiscard || !chunks.length) {
-      if (statusRef.current?.state === "LISTENING") window.setTimeout(() => startRecorder(), 80);
-      return;
-    }
-    const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-    try {
-      const dataUrl = await blobToDataUrl(blob);
-      const result = await bridge.transcribe(dataUrl, blob.type || "audio/webm");
-      if (result.text.trim()) await bridge.submitText(result.text.trim());
-      else if (statusRef.current?.state === "LISTENING") window.setTimeout(() => startRecorder(), 80);
-    } catch {
-      if (statusRef.current?.state === "LISTENING") window.setTimeout(() => startRecorder(), 200);
-    }
-  }, [bridge]);
-
-  const startRecorder = useCallback(() => {
-    const stream = streamRef.current;
-    if (!stream || !bridge || statusRef.current?.state !== "LISTENING") return;
-    if (recorderRef.current?.state === "recording") return;
-    const preferred = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(type => MediaRecorder.isTypeSupported(type));
-    const recorder = new MediaRecorder(stream, preferred ? { mimeType: preferred, audioBitsPerSecond: 64_000 } : undefined);
-    recorderRef.current = recorder;
-    recordChunksRef.current = [];
-    speechSeenRef.current = false;
-    discardRecordingRef.current = false;
-    recordingStartedRef.current = performance.now();
-    lastSpeechRef.current = performance.now();
-    recorder.ondataavailable = event => { if (event.data.size) recordChunksRef.current.push(event.data); };
-    recorder.onstop = () => {
-      if (recorderRef.current === recorder) recorderRef.current = null;
-      void finishUtterance(recorder);
-    };
-    recorder.start(250);
-  }, [bridge, finishUtterance]);
-
-  const stopRecorder = useCallback((discard = false) => {
-    const recorder = recorderRef.current;
-    if (!recorder || recorder.state !== "recording") return;
-    discardRecordingRef.current = discard;
-    recorder.stop();
-  }, []);
-
-  const handleCaptureSamples = useCallback((input: Float32Array) => {
-    const current = statusRef.current;
-    if (!current || !bridge) return;
-    let sum = 0;
-    for (let index = 0; index < input.length; index += 1) sum += input[index] * input[index];
-    const rms = Math.sqrt(sum / Math.max(1, input.length));
-    const now = performance.now();
-
-    const playbackContext = playbackContextRef.current;
-    const playbackActive = Boolean(
-      playbackContext &&
-      playbackSourcesRef.current.size > 0 &&
-      playbackTimeRef.current > playbackContext.currentTime + 0.015,
-    );
-    if ((current.state === "SPEAKING" || playbackActive) && current.settings.input.bargeInEnabled) {
-      bargeFramesRef.current = rms > 0.065 ? bargeFramesRef.current + 1 : 0;
-      if (bargeFramesRef.current >= 4) {
-        bargeFramesRef.current = 0;
-        cancelPlayback();
-        void bridge.interrupt().then(() => window.setTimeout(startRecorder, 50));
-      }
-      return;
-    }
-    bargeFramesRef.current = 0;
-    if (current.state !== "LISTENING" || recorderRef.current?.state !== "recording") return;
-    if (rms > 0.025) {
-      speechSeenRef.current = true;
-      lastSpeechRef.current = now;
-    }
-    const silenceMs = current.settings.input.silenceMs;
-    if (speechSeenRef.current && now - lastSpeechRef.current >= silenceMs) {
-      stopRecorder(false);
-    } else if (!speechSeenRef.current && now - recordingStartedRef.current >= 15_000) {
-      stopRecorder(true);
-    }
-  }, [bridge, cancelPlayback, startRecorder, stopRecorder]);
-
+  /**
+   * The always-open microphone.
+   *
+   * Replaces V2's record-wait-for-silence-transcribe loop entirely. The stream
+   * is acquired once and held; starting a conversation only flips streaming on,
+   * so there is no device acquisition between you speaking and Akira hearing.
+   */
   const armMicrophone = useCallback(async () => {
-    if (streamRef.current) {
+    if (micRef.current?.open) {
       setMicrophoneArmed(true);
       return;
     }
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone capture is unavailable.");
-    const deviceId = statusRef.current?.settings.input.microphoneId;
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        deviceId: deviceId ? { exact: deviceId } : undefined,
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
+    const mic = new AkiraMic({
+      deviceId: statusRef.current?.settings.input.microphoneId || undefined,
+      onChunk: base64 => bridge?.sendAudioChunk(base64),
+      onLevel: rms => {
+        // Local level drives the ambience until the server's own VAD arrives,
+        // so the glow responds on the very first syllable. Written straight to
+        // CSS: React state here would re-render on every audio frame.
+        const level = Math.max(0, Math.min(1, rms * 12));
+        if (Math.abs(level - lastVadLevelRef.current) <= 0.04) return;
+        lastVadLevelRef.current = level;
+        document.documentElement.style.setProperty("--akira-vad", level.toFixed(2));
       },
-      video: false,
+      onPcm: pcm => wakeRef.current?.process(pcm),
+      onError: error => showNotice(error.message, "error"),
     });
-    streamRef.current = stream;
-    const context = new AudioContext({ latencyHint: "interactive" });
-    captureContextRef.current = context;
-    await context.resume();
-    const workletSource = `class AkiraCapture extends AudioWorkletProcessor { process(inputs) { const input = inputs[0] && inputs[0][0]; if (input) this.port.postMessage(input); return true; } } registerProcessor('akira-capture', AkiraCapture);`;
-    const url = URL.createObjectURL(new Blob([workletSource], { type: "text/javascript" }));
-    try { await context.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
-    const source = context.createMediaStreamSource(stream);
-    const node = new AudioWorkletNode(context, "akira-capture", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
-    const silent = context.createGain();
-    silent.gain.value = 0;
-    source.connect(node).connect(silent).connect(context.destination);
-    captureNodeRef.current = node;
-    node.port.onmessage = event => handleCaptureSamples(new Float32Array(event.data));
+    micRef.current = mic;
+    await mic.start();
     setMicrophoneArmed(true);
-  }, [handleCaptureSamples]);
+  }, [bridge, showNotice]);
 
   const disarmMicrophone = useCallback(async () => {
-    stopRecorder(true);
-    const node = captureNodeRef.current;
-    const context = captureContextRef.current;
-    const stream = streamRef.current;
-    captureNodeRef.current = null;
-    captureContextRef.current = null;
-    streamRef.current = null;
-    if (node) {
-      node.port.onmessage = null;
-      try { node.disconnect(); } catch { /* already disconnected */ }
-    }
-    stream?.getTracks().forEach(track => track.stop());
-    if (context && context.state !== "closed") await context.close().catch(() => undefined);
+    const mic = micRef.current;
+    micRef.current = null;
+    await mic?.stop();
     setMicrophoneArmed(false);
-  }, [stopRecorder]);
+    lastVadLevelRef.current = 0;
+    document.documentElement.style.setProperty("--akira-vad", "0");
+  }, []);
 
-  const activate = useCallback(async () => {
+  /**
+   * Order matters here. V2 connected first and armed the microphone second,
+   * which is why the first words of every request were lost. The mic is armed
+   * first — usually already open — and streaming begins with a pre-roll flush,
+   * so speech from before the trigger still reaches the agent.
+   */
+  const activate = useCallback(async (viaWakeWord = false) => {
     if (!bridge) return;
-    const next = await bridge.activate();
-    setStatus(next);
     try {
       await armMicrophone();
     } catch (error) {
-      setStatus(await bridge.standby());
-      throw error;
+      throw error instanceof Error && /denied|not allowed|NotAllowed/i.test(error.message)
+        ? new Error("ROME needs microphone access. Enable it in System Settings \u2192 Privacy & Security \u2192 Microphone.")
+        : error;
     }
+    const next = await bridge.activate(viaWakeWord);
+    setStatus(next);
+    micRef.current?.beginStreaming(true);
   }, [armMicrophone, bridge]);
 
+  /**
+   * Ending a conversation stops the upload but leaves the device open, so the
+   * next one starts instantly and the ring buffer keeps its history. Nothing
+   * leaves the machine while streaming is off.
+   */
   const standby = useCallback(async () => {
     if (!bridge) return;
     if (continueTimerRef.current) window.clearTimeout(continueTimerRef.current);
     continueTimerRef.current = null;
-    stopRecorder(true);
+    micRef.current?.endStreaming();
     cancelPlayback();
-    await disarmMicrophone();
+    lastVadLevelRef.current = 0;
+    document.documentElement.style.setProperty("--akira-vad", "0");
     setStatus(await bridge.standby());
-  }, [bridge, cancelPlayback, disarmMicrophone, stopRecorder]);
+  }, [bridge, cancelPlayback]);
+
+  /**
+   * One key for the whole conversation: start it when dormant, end it when
+   * active. Resolved from live status rather than a captured value so a rapid
+   * double-press can't desynchronise the two halves.
+   *
+   * Failures are surfaced rather than thrown. With no dock and no visible
+   * chrome, an unhandled rejection here means pressing the key does *nothing
+   * at all* — no error, no sound, no glow — which is indistinguishable from a
+   * dead keybinding. The notice is the only feedback channel Akira has left.
+   */
+  const toggleConversation = useCallback(async () => {
+    if (!bridge) return;
+    const state = statusRef.current?.state;
+    const dormant = !state || state === "DORMANT" || state === "DEACTIVATING" || state === "ERROR";
+    try {
+      if (dormant) await activate();
+      else await standby();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      showNotice(
+        reason || "Akira could not start a conversation.",
+        "error",
+      );
+    }
+  }, [activate, bridge, showNotice, standby]);
 
   const interrupt = useCallback(async () => {
     if (!bridge) return;
@@ -287,14 +315,62 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
 
   const submitText = useCallback(async (text: string) => {
     if (!bridge || !text.trim()) return;
-    stopRecorder(true);
     setStatus(await bridge.submitText(text));
-  }, [bridge, stopRecorder]);
+  }, [bridge]);
 
   const handleDataChanged = useCallback((event: AkiraDataChanged) => {
     for (const queryKey of event.queryKeys) void queryClient.invalidateQueries({ queryKey });
     for (const store of event.localStores) window.dispatchEvent(new CustomEvent(`rome:${store}:refresh`, { detail: event }));
   }, []);
+
+  /**
+   * Tell Akira where the user is, without taking a turn.
+   *
+   * `contextual_update` folds into the conversation silently, so Akira can
+   * resolve "that board I was just looking at" without anyone having to say the
+   * name — the difference between an assistant that is present and one that is
+   * merely reachable.
+   *
+   * Only sent during a live conversation. Dormant, there is no socket and
+   * nothing to tell.
+   */
+  useEffect(() => {
+    if (!bridge) return;
+    let lastSent = "";
+    let timer: number | null = null;
+
+    const announce = () => {
+      const state = statusRef.current?.state;
+      if (!state || state === "DORMANT" || state === "UNAVAILABLE") return;
+      const label = describeRoute(window.location.hash);
+      if (!label || label === lastSent) return;
+      lastSent = label;
+      bridge.sendContext(`The user is now looking at ${label}.`);
+    };
+
+    // Debounced: hash routing fires on every intermediate navigation, and a
+    // burst of updates would crowd the conversation for no benefit.
+    const onHashChange = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(announce, 400);
+    };
+
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      window.removeEventListener("hashchange", onHashChange);
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [bridge]);
+
+  /**
+   * Announce the current screen when a conversation opens, so Akira starts
+   * oriented rather than having to ask or call a tool to find out.
+   */
+  useEffect(() => {
+    if (!bridge || status?.state !== "LISTENING") return;
+    const label = describeRoute(window.location.hash);
+    if (label) bridge.sendContext(`The user is looking at ${label}.`);
+  }, [bridge, status?.state === "LISTENING"]);
 
   const handleRendererCommand = useCallback(async (command: AkiraRendererCommand) => {
     if (!bridge) return;
@@ -323,19 +399,43 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
       }),
       bridge.onDataChanged(handleDataChanged),
       bridge.onRendererCommand(value => void handleRendererCommand(value)),
+      // The mic is already open, so a wake event only has to start streaming.
+      // No device acquisition, no 30ms guess, no lost syllables.
       bridge.onWakeDetected(() => {
-        void armMicrophone()
-          .then(() => window.setTimeout(startRecorder, 30))
-          .catch(() => void bridge.standby().then(value => setStatus(value)));
+        void activate(true).catch(error => showNotice(
+          error instanceof Error ? error.message : String(error),
+          "error",
+        ));
       }),
-      bridge.onShortcut(value => { if (value?.action === "standby") void standby(); }),
+      // Server-side voice activity. Overrides the local estimate once the
+      // conversation is live, because it knows what is speech and what is a fan.
+      bridge.onVad(({ score }) => {
+        lastVadLevelRef.current = score;
+        document.documentElement.style.setProperty("--akira-vad", score.toFixed(2));
+      }),
+      // Shortcuts pressed while a native browser view has focus arrive here,
+      // because the renderer never sees those key events at all.
+      bridge.onShortcut(value => {
+        if (value?.action === "standby") void standby();
+        else if (value?.action === "toggle") void toggleConversation();
+        else if (value?.action === "console") setPanelOpen(current => !current);
+      }),
     ];
     const keydown = (event: KeyboardEvent) => {
-      const shortcut = statusRef.current?.settings.input.deactivationShortcut ?? "Control+Escape";
-      const shiftMatches = shortcut === "Control+Shift+Escape" ? event.shiftKey : !event.shiftKey;
-      if (event.key === "Escape" && event.ctrlKey && shiftMatches && !event.altKey && !event.metaKey) {
+      const input = statusRef.current?.settings.input;
+      const conversation = input?.conversationShortcut ?? DEFAULT_CONVERSATION_SHORTCUT;
+      const consoleShortcut = input?.consoleShortcut ?? DEFAULT_CONSOLE_SHORTCUT;
+      // Check the console binding first: it is the more specific accelerator
+      // (it carries Shift), and matching is exact so order only matters if a
+      // future binding pair overlaps.
+      if (matchesAkiraShortcut(consoleShortcut, event)) {
         event.preventDefault();
-        void standby();
+        setPanelOpen(current => !current);
+        return;
+      }
+      if (matchesAkiraShortcut(conversation, event)) {
+        event.preventDefault();
+        void toggleConversation();
       }
     };
     window.addEventListener("keydown", keydown, true);
@@ -344,24 +444,79 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
       remove.forEach(dispose => dispose());
       window.removeEventListener("keydown", keydown, true);
     };
-  }, [armMicrophone, bridge, handleDataChanged, handleRendererCommand, playAudio, standby, startRecorder]);
+  }, [activate, bridge, handleDataChanged, handleRendererCommand, playAudio, showNotice, standby, toggleConversation]);
 
+  /**
+   * Keep streaming aligned with conversation state.
+   *
+   * V2 needed a timer here to re-arm the recorder after every response, which
+   * is what made silence feel like the end of a turn. With a persistent socket
+   * there is nothing to re-arm: streaming is simply on for the whole
+   * conversation and off outside it, and a pause is just a pause.
+   */
   useEffect(() => {
-    if (status?.state === "LISTENING" && microphoneArmed) {
-      window.setTimeout(startRecorder, 30);
-    } else if (status && !["LISTENING", "DORMANT", "SPEAKING"].includes(status.state)) {
-      stopRecorder(true);
+    const mic = micRef.current;
+    if (!mic?.open || !status) return;
+    const conversing = !["DORMANT", "DEACTIVATING", "UNAVAILABLE", "ERROR"].includes(status.state);
+    if (conversing && !mic.isStreaming) mic.beginStreaming(true);
+    else if (!conversing && mic.isStreaming) mic.endStreaming();
+  }, [status]);
+
+  /**
+   * Wake-word lifecycle.
+   *
+   * Detection needs the microphone open, which in V2 it never was while
+   * dormant — that was the whole bug. Here the mic is armed as soon as Akira is
+   * configured, and Porcupine consumes the same frames the conversation later
+   * streams. A missing key or keyword file simply leaves it off; Command+'
+   * still works.
+   */
+  useEffect(() => {
+    if (!bridge || !status) return;
+    const settings = status.settings;
+    const wanted = settings.input.wakeWordEnabled && status.available;
+
+    if (!wanted) {
+      if (wakeRef.current) {
+        const detector = wakeRef.current;
+        wakeRef.current = null;
+        void detector.stop();
+      }
+      return;
     }
-    if (status?.state === "AWAKE_IDLE" && bridge) {
-      if (continueTimerRef.current) window.clearTimeout(continueTimerRef.current);
-      const context = playbackContextRef.current;
-      const wait = context ? Math.max(120, (playbackTimeRef.current - context.currentTime) * 1_000 + 80) : 120;
-      continueTimerRef.current = window.setTimeout(() => {
-        continueTimerRef.current = null;
-        if (statusRef.current?.state === "AWAKE_IDLE") void bridge.activate();
-      }, wait);
-    }
-  }, [bridge, microphoneArmed, startRecorder, status, stopRecorder]);
+    if (wakeRef.current) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        await armMicrophone();
+      } catch {
+        return; // Permission not granted yet; Command+' will prompt again.
+      }
+      if (cancelled) return;
+      // No credential of any kind: the models are local files.
+      const detector = new OpenWakeWord({
+        keywordModelPath: settings.input.wakeKeywordPath,
+        melModelPath: settings.input.wakeMelPath,
+        embeddingModelPath: settings.input.wakeEmbeddingPath,
+        threshold: settings.input.wakeThreshold,
+        onDetected: () => {
+          if (statusRef.current?.state !== "DORMANT") return;
+          void activate(true).catch(error => showNotice(
+            error instanceof Error ? error.message : String(error),
+            "error",
+          ));
+        },
+        onError: error => showNotice(`Wake word unavailable: ${error.message}`, "error"),
+      });
+      if (cancelled) return;
+      wakeRef.current = detector;
+      const started = await detector.start();
+      if (!started && !cancelled) wakeRef.current = null;
+    })();
+
+    return () => { cancelled = true; };
+  }, [activate, armMicrophone, bridge, showNotice, status?.available, status?.settings.input.wakeWordEnabled]);
 
   useEffect(() => {
     const onVisibility = () => {
@@ -374,16 +529,17 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   }, [standby]);
 
   useEffect(() => () => {
+    if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
     if (continueTimerRef.current) window.clearTimeout(continueTimerRef.current);
-    stopRecorder(true);
     cancelPlayback();
+    void wakeRef.current?.stop();
     void disarmMicrophone();
     void playbackContextRef.current?.close();
-  }, [cancelPlayback, disarmMicrophone, stopRecorder]);
+  }, [cancelPlayback, disarmMicrophone]);
 
   const value = useMemo<AkiraContextValue>(() => ({
-    status, transcripts, approval, microphoneArmed, panelOpen, setPanelOpen,
-    activate, standby, interrupt, submitText,
+    status, transcripts, approval, microphoneArmed, notice, showNotice, panelOpen, setPanelOpen,
+    activate, standby, interrupt, toggleConversation, submitText,
     respondToApproval: async approved => {
       if (!bridge || !approval) return;
       const id = approval.id;
@@ -397,7 +553,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     loadDiagnostics: () => bridge?.getDiagnostics() ?? Promise.resolve({}),
     loadCapabilities: () => bridge?.getCapabilities() ?? Promise.resolve([]),
     callCapability: (name, args) => bridge?.callCapability(name, args) ?? Promise.reject(new Error("Akira is desktop-only.")),
-  }), [activate, approval, bridge, interrupt, microphoneArmed, panelOpen, standby, status, submitText, transcripts]);
+  }), [activate, approval, bridge, interrupt, microphoneArmed, notice, panelOpen, showNotice, standby, status, submitText, toggleConversation, transcripts]);
 
   return <AkiraContext.Provider value={value}>{children}</AkiraContext.Provider>;
 }
@@ -517,13 +673,4 @@ async function runRendererCommand(action: string, args: Record<string, unknown>)
     };
   }
   throw new Error(`Unsupported renderer command: ${action}`);
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error("Could not read microphone recording."));
-    reader.readAsDataURL(blob);
-  });
 }

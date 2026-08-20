@@ -9,6 +9,11 @@ import { BrowserStorage, isWebUrl } from "./browser-storage";
 import { DownloadManager } from "./download-manager";
 import { PermissionManager } from "./permission-manager";
 import { SessionManager } from "./session-manager";
+import {
+  DEFAULT_CONSOLE_SHORTCUT,
+  DEFAULT_CONVERSATION_SHORTCUT,
+  matchesAkiraShortcut,
+} from "../../shared/akira";
 import type {
   BrowserSessionKind,
   BrowserTabState,
@@ -16,6 +21,20 @@ import type {
 } from "./types";
 
 const HOME_URL = "https://www.google.com/";
+
+/**
+ * Akira accelerators, read fresh on every keystroke so a settings change takes
+ * effect without recreating tabs.
+ */
+export interface AkiraShortcutBindings {
+  conversation: string;
+  console: string;
+}
+
+export const DEFAULT_AKIRA_SHORTCUT_BINDINGS: AkiraShortcutBindings = {
+  conversation: DEFAULT_CONVERSATION_SHORTCUT,
+  console: DEFAULT_CONSOLE_SHORTCUT,
+};
 
 interface ManagedTab {
   id: string;
@@ -72,7 +91,7 @@ export class TabManager {
     private readonly downloads: DownloadManager,
     private readonly storage: BrowserStorage,
     private readonly emit: (channel: string, payload: unknown) => void,
-    private readonly getAkiraShortcut: () => "Control+Escape" | "Control+Shift+Escape" = () => "Control+Escape",
+    private readonly getAkiraShortcut: () => AkiraShortcutBindings = () => DEFAULT_AKIRA_SHORTCUT_BINDINGS,
   ) {}
 
   initialize(): BrowserTabState[] {
@@ -196,18 +215,28 @@ export class TabManager {
       }
     });
     contents.on("before-input-event", (event, input) => {
-      if (
-        input.type === "keyDown" &&
-        input.key === "Escape" &&
-        input.control &&
-        input.shift === (this.getAkiraShortcut() === "Control+Shift+Escape") &&
-        !input.alt &&
-        !input.meta &&
-        !input.isAutoRepeat
-      ) {
-        event.preventDefault();
-        this.emit("rome:akira:shortcut", { action: "standby" });
-        return;
+      // Akira's shortcuts have to work while a native browser view holds focus,
+      // otherwise the only way out of a conversation is clicking back into ROME.
+      if (input.type === "keyDown" && !input.isAutoRepeat) {
+        const bindings = this.getAkiraShortcut();
+        const asKeyEvent = {
+          key: input.key,
+          code: input.code,
+          metaKey: input.meta,
+          ctrlKey: input.control,
+          shiftKey: input.shift,
+          altKey: input.alt,
+        };
+        if (matchesAkiraShortcut(bindings.conversation, asKeyEvent)) {
+          event.preventDefault();
+          this.emit("rome:akira:shortcut", { action: "toggle" });
+          return;
+        }
+        if (matchesAkiraShortcut(bindings.console, asKeyEvent)) {
+          event.preventDefault();
+          this.emit("rome:akira:shortcut", { action: "console" });
+          return;
+        }
       }
       const commandOrControl = process.platform === "darwin" ? input.meta : input.control;
       if (input.type === "keyDown" && commandOrControl && !input.alt && !input.isAutoRepeat) {

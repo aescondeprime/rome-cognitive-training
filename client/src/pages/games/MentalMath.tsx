@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { ArrowLeft, Settings2, Play, RotateCcw, Check, X } from "lucide-react";
 import { Link } from "wouter";
+import { recordDrillResultInBackground } from "@/lib/trainingRecorder";
 
 type Op = "+" | "-" | "×" | "÷" | "mixed";
 
@@ -69,6 +70,8 @@ export default function MentalMath() {
   const [correct, setCorrect] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // When the current drill began, so recorded sessions carry a real duration.
+  const startedAtRef = useRef(0);
 
   const nextProblem = useCallback((idx: number, levelIdx: number) => {
     setProblem(generateProblem(levelIdx, cfg.op));
@@ -88,6 +91,11 @@ export default function MentalMath() {
     setCfg(c => ({ ...c, levelIdx: newIdx }));
     setCorrect(correctCount);
     setPhase("result");
+    recordDrillResultInBackground({
+      domain: "problem_solving", activityId: "mental-math",
+      correct: correctCount, total, level: levelIdx + 1, maxLevel: LEVELS.length,
+      startedAt: startedAtRef.current,
+    });
   }, [cfg.threshAdvance, cfg.threshFallback]);
 
   const submit = useCallback(() => {
@@ -109,6 +117,7 @@ export default function MentalMath() {
   }, [problem, phase, input, trialNum, cfg, correct, endSession, nextProblem]);
 
   const startSession = useCallback(() => {
+    startedAtRef.current = Date.now();
     if (timerRef.current) clearTimeout(timerRef.current);
     setCorrect(0);
     nextProblem(0, cfg.levelIdx);

@@ -8,6 +8,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { ArrowLeft, Settings2, Play, RotateCcw } from "lucide-react";
 import { Link } from "wouter";
+import { recordDrillResultInBackground } from "@/lib/trainingRecorder";
 
 type Variant = "Classic" | "Reverse" | "Sticky Classic" | "Sticky Reverse";
 
@@ -53,6 +54,8 @@ export default function CorsiBlocks() {
   const [containerWidth, setContainerWidth] = useState(320);
   const containerRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // When the current drill began, so recorded sessions carry a real duration.
+  const startedAtRef = useRef(0);
 
   useEffect(() => {
     const observe = () => {
@@ -109,6 +112,7 @@ export default function CorsiBlocks() {
   }, [generateSequence, showSequence, cfg.variant]);
 
   const startSession = useCallback(() => {
+    startedAtRef.current = Date.now();
     clearTimers();
     setRoundResults([]);
     setRound(0);
@@ -137,6 +141,11 @@ export default function CorsiBlocks() {
                          : cfg.level;
           setCfg(c => ({ ...c, level: newLevel }));
           setPhase("result");
+          recordDrillResultInBackground({
+            domain: "working_memory", activityId: "corsi-blocks",
+            correct: hits, total: cfg.rounds, level: cfg.level, maxLevel: 20,
+            startedAt: startedAtRef.current,
+          });
         } else {
           startRound(nextRound, cfg.level);
         }

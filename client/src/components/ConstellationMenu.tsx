@@ -3,8 +3,24 @@ import { motion, useMotionValue, useSpring, animate } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
-import { loadLayout, saveLayout, resetLayout, DEFAULT_RAY_COLOR, DEFAULT_ACCENT_COLOR, type ConstellationLayout, type NodeOverride } from "@/lib/constellationLayout";
-import { getRayState, pinRaySource, setRayDirection, setRayColor, setRayBrightness, setAccentColor } from "@/lib/lightRayState";
+import {
+  loadLayout,
+  saveLayout,
+  resetLayout,
+  defaultLayout,
+  DEFAULT_RAY_COLOR,
+  DEFAULT_ACCENT_COLOR,
+  DEFAULT_AKIRA_GRADIENT_A,
+  DEFAULT_AKIRA_GRADIENT_B,
+  DEFAULT_AKIRA_INTENSITY,
+  DEFAULT_PARTICLE_SATURATION,
+  type ConstellationLayout,
+  type NodeOverride,
+} from "@/lib/constellationLayout";
+// setRayEditOffset was called by handleReset but never imported, so pressing
+// Reset in the Constellation editor threw a ReferenceError before it finished.
+import { getRayState, pinRaySource, setRayDirection, setRayColor, setRayBrightness, setAccentColor, setRayEditOffset } from "@/lib/lightRayState";
+import { setAkiraAmbience } from "@/lib/akiraAmbienceState";
 import ConstellationNode from "./ConstellationNode";
 import NodeBranchMenu from "./NodeBranchMenu";
 import ConstellationWidget from "./ConstellationWidget";
@@ -12,17 +28,90 @@ import ProjectsWidget from "./ProjectsWidget";
 import ThreatsWidget from "./ThreatsWidget";
 import TaskStabilizerWidget from "./TaskStabilizerWidget";
 
+// ── Akira ambience presets ────────────────────────────────────────────────
+// Two colors form the conversation glow: A blooms from the lower left, B from
+// the upper right. Presets are cool and mid-luminance on purpose — the glow
+// sits behind working content and must never fight it for attention.
+const AKIRA_PRESETS: { label: string; hsl: string }[] = [
+  { label: "Cyan",    hsl: "182 100% 52%" },
+  { label: "Violet",  hsl: "270 100% 66%" },
+  { label: "Azure",   hsl: "210 100% 56%" },
+  { label: "Jade",    hsl: "156 96% 46%" },
+  { label: "Magenta", hsl: "312 96% 60%" },
+  { label: "Ember",   hsl: "18 100% 56%" },
+];
+
+const AKIRA_GRADIENT_ROWS: { side: "a" | "b"; label: string }[] = [
+  { side: "a", label: "Glow A · lower left" },
+  { side: "b", label: "Glow B · upper right" },
+];
+
+/** Split "H S% L%" into numbers, tolerating malformed stored values. */
+function splitHsl(value: string, fallback: [number, number, number] = [43, 88, 60]): [number, number, number] {
+  const parts = String(value ?? "").replace(/%/g, "").trim().split(/\s+/).map(Number);
+  return [
+    Number.isFinite(parts[0]) ? parts[0] : fallback[0],
+    Number.isFinite(parts[1]) ? parts[1] : fallback[1],
+    Number.isFinite(parts[2]) ? parts[2] : fallback[2],
+  ];
+}
+
+/**
+ * Hue, saturation, and lightness sliders for one colour.
+ *
+ * The editor used to expose hue alone, so every colour was locked to whatever
+ * saturation its preset happened to carry and could never be pushed harder.
+ * Saturation runs to a full 100 and lightness is adjustable too, since a
+ * saturated colour often wants to be darker to stay readable.
+ */
+function ColorSliders({ value, onChange }: { value: string; onChange: (hsl: string) => void }) {
+  const [h, s, l] = splitHsl(value);
+  const rows: { label: string; key: 0 | 1 | 2; min: number; max: number; suffix: string }[] = [
+    { label: "Hue", key: 0, min: 0, max: 360, suffix: "" },
+    { label: "Saturation", key: 1, min: 0, max: 100, suffix: "%" },
+    { label: "Lightness", key: 2, min: 5, max: 95, suffix: "%" },
+  ];
+  const current = [h, s, l];
+  return (
+    <div style={{ marginTop: 7 }}>
+      {rows.map(row => (
+        <div key={row.label} style={{ marginBottom: 4 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 1 }}>
+            <span style={{ fontFamily: "DM Mono, monospace", fontSize: 6.5, color: "hsl(var(--accent-h) 25% 32%)", letterSpacing: "0.12em", textTransform: "uppercase" }}>{row.label}</span>
+            <span style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 55% 55%)" }}>{Math.round(current[row.key])}{row.suffix}</span>
+          </div>
+          <input
+            type="range"
+            min={row.min}
+            max={row.max}
+            step={1}
+            value={Math.round(current[row.key])}
+            onChange={event => {
+              const next: [number, number, number] = [h, s, l];
+              next[row.key] = Number(event.target.value);
+              onChange(`${Math.round(next[0])} ${Math.round(next[1])}% ${Math.round(next[2])}%`);
+            }}
+            style={{ width: "100%", accentColor: `hsl(${h} ${s}% ${l}%)`, cursor: "pointer" }}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Moving particle canvas ─────────────────────────────────────────────────
 function ParticleCanvas({
-  width, height, count = 280, particleHue,
-}: { width: number; height: number; count?: number; particleHue?: number }) {
+  width, height, count = 280, particleHue, saturation = DEFAULT_PARTICLE_SATURATION,
+}: { width: number; height: number; count?: number; particleHue?: number; saturation?: number }) {
   const canvasRef  = useRef<HTMLCanvasElement>(null);
   const countRef   = useRef(count);
   const hueRef     = useRef(particleHue);
+  const satRef     = useRef(saturation);
 
   // Keep refs in sync so the RAF loop always reads current values
   useEffect(() => { countRef.current = count; }, [count]);
   useEffect(() => { hueRef.current   = particleHue; }, [particleHue]);
+  useEffect(() => { satRef.current   = saturation; }, [saturation]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -61,7 +150,9 @@ function ParticleCanvas({
       const h = isWhite ? 43
         : rawHue != null ? rawHue
         : (parseInt(getComputedStyle(document.documentElement).getPropertyValue("--accent-h").trim()) || 43);
-      const sat = isWhite ? 10 : 55;
+      // White stays desaturated by definition; everything else follows the
+      // editor, which used to be pinned at a washed-out 55.
+      const sat = isWhite ? 10 : Math.max(0, Math.min(100, satRef.current));
 
       const visible = Math.min(countRef.current, MAX);
       for (let i = 0; i < visible; i++) {
@@ -376,7 +467,15 @@ export default function ConstellationMenu({ onClose }: Props) {
     setRayColor(layout.ray.rayColor ?? DEFAULT_RAY_COLOR);
     setRayBrightness(layout.ray.rayBrightness ?? 1.0);
     setAccentColor(layout.accentColor ?? DEFAULT_ACCENT_COLOR);
-  }, [layout.ray.x, layout.ray.y, layout.ray.dirAngle, layout.ray.rayColor, layout.ray.rayBrightness, layout.accentColor]);
+    setAkiraAmbience(
+      layout.akiraGradientA ?? DEFAULT_AKIRA_GRADIENT_A,
+      layout.akiraGradientB ?? DEFAULT_AKIRA_GRADIENT_B,
+      layout.akiraIntensity ?? DEFAULT_AKIRA_INTENSITY,
+    );
+  }, [
+    layout.ray.x, layout.ray.y, layout.ray.dirAngle, layout.ray.rayColor, layout.ray.rayBrightness,
+    layout.accentColor, layout.akiraGradientA, layout.akiraGradientB, layout.akiraIntensity,
+  ]);
 
   // Dims
   const getDims = () => ({
@@ -462,14 +561,19 @@ export default function ConstellationMenu({ onClose }: Props) {
   // ESC to close/deselect/exit edit
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
+      // Only *bare* Escape controls the constellation. Without this guard any
+      // modified Escape — including Akira's old Control+Escape binding — also
+      // deselected the current node or dropped you out of edit mode.
+      if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
         if (editMode) { setEditMode(false); return; }
         if (selectedId) setSelectedId(null);
         else onClose();
+        return;
       }
-      // E to toggle edit mode — skip when typing in any input/textarea
-      if (e.key === "e" || e.key === "E") {
+      // E to toggle edit mode — skip when typing in any input/textarea, and
+      // never while a modifier is held.
+      if ((e.key === "e" || e.key === "E") && !e.metaKey && !e.ctrlKey && !e.altKey) {
         const tag = (e.target as HTMLElement).tagName;
         if (!selectedId && tag !== "INPUT" && tag !== "TEXTAREA") setEditMode(v => !v);
       }
@@ -545,9 +649,38 @@ export default function ConstellationMenu({ onClose }: Props) {
     setLayout(prev => ({ ...prev, particleHue: v }));
   }, []);
 
+  const handleParticleSaturation = useCallback((v: number) => {
+    setLayout(prev => ({ ...prev, particleSaturation: v }));
+  }, []);
+
+  // Akira ambience — the background glow shown during a live conversation.
+  // Applied immediately so the picker previews against the real effect.
+  const handleAkiraGradientA = useCallback((hsl: string) => {
+    setLayout(prev => {
+      setAkiraAmbience(hsl, prev.akiraGradientB ?? DEFAULT_AKIRA_GRADIENT_B, prev.akiraIntensity ?? DEFAULT_AKIRA_INTENSITY);
+      return { ...prev, akiraGradientA: hsl };
+    });
+  }, []);
+
+  const handleAkiraGradientB = useCallback((hsl: string) => {
+    setLayout(prev => {
+      setAkiraAmbience(prev.akiraGradientA ?? DEFAULT_AKIRA_GRADIENT_A, hsl, prev.akiraIntensity ?? DEFAULT_AKIRA_INTENSITY);
+      return { ...prev, akiraGradientB: hsl };
+    });
+  }, []);
+
+  const handleAkiraIntensity = useCallback((v: number) => {
+    setLayout(prev => {
+      setAkiraAmbience(prev.akiraGradientA ?? DEFAULT_AKIRA_GRADIENT_A, prev.akiraGradientB ?? DEFAULT_AKIRA_GRADIENT_B, v);
+      return { ...prev, akiraIntensity: v };
+    });
+  }, []);
+
   const handleReset = useCallback(() => {
     resetLayout();
-    setLayout({ nodes: {}, ray: { x: 0, y: 0, dirAngle: null, rayColor: DEFAULT_RAY_COLOR, rayBrightness: 1.0 }, accentColor: DEFAULT_ACCENT_COLOR, particleCount: 280, particleHue: null, widgetPos: null, widgetCollapsed: false, projectsWidgetPos: null, projectsWidgetCollapsed: false, threatsWidgetPos: null, threatsWidgetCollapsed: false, taskStabilizerWidgetPos: null, taskStabilizerWidgetCollapsed: false });
+    const fresh = defaultLayout();
+    setLayout(fresh);
+    setAkiraAmbience(fresh.akiraGradientA, fresh.akiraGradientB, fresh.akiraIntensity);
     pinRaySource(null, null);
     setRayDirection(null);
     setRayColor(DEFAULT_RAY_COLOR);
@@ -596,6 +729,7 @@ export default function ConstellationMenu({ onClose }: Props) {
         height={dims.h}
         count={layout.particleCount ?? 280}
         particleHue={layout.particleHue ?? undefined}
+          saturation={layout.particleSaturation ?? DEFAULT_PARTICLE_SATURATION}
       />
 
       {/* Edit mode grid overlay */}
@@ -750,32 +884,35 @@ export default function ConstellationMenu({ onClose }: Props) {
         const currentColor = layout.ray.rayColor ?? DEFAULT_RAY_COLOR;
         const currentBrightness  = layout.ray.rayBrightness ?? 1.0;
         const currentAccent      = layout.accentColor ?? DEFAULT_ACCENT_COLOR;
+        const akiraA             = layout.akiraGradientA ?? DEFAULT_AKIRA_GRADIENT_A;
+        const akiraB             = layout.akiraGradientB ?? DEFAULT_AKIRA_GRADIENT_B;
+        const akiraIntensity     = layout.akiraIntensity ?? DEFAULT_AKIRA_INTENSITY;
 
         const ACCENT_PRESETS: { label: string; hsl: string }[] = [
-          { label: "Gold",    hsl: "43 88% 60%"  },
-          { label: "Amber",   hsl: "30 90% 58%"  },
-          { label: "Rose",    hsl: "345 80% 65%" },
-          { label: "Violet",  hsl: "270 75% 70%" },
-          { label: "Indigo",  hsl: "240 80% 68%" },
-          { label: "Sky",     hsl: "200 85% 62%" },
-          { label: "Teal",    hsl: "175 75% 52%" },
-          { label: "Emerald", hsl: "145 70% 52%" },
-          { label: "Lime",    hsl: "90 70% 52%"  },
-          { label: "White",   hsl: "43 10% 92%"  },
+          { label: "Gold", hsl: "43 100% 58%"  },
+          { label: "Amber",   hsl: "28 100% 55%"  },
+          { label: "Rose", hsl: "342 96% 62%" },
+          { label: "Violet",  hsl: "272 95% 66%" },
+          { label: "Indigo",  hsl: "242 96% 64%" },
+          { label: "Sky",  hsl: "199 100% 56%" },
+          { label: "Teal", hsl: "174 95% 46%" },
+          { label: "Emerald", hsl: "146 92% 46%" },
+          { label: "Lime", hsl: "88 92% 50%"  },
+          { label: "White",   hsl: "43 14% 94%"  },
         ];
 
         // Preset palette — hue groups that look great as light rays
         const RAY_PRESETS: { label: string; hsl: string }[] = [
-          { label: "Gold",       hsl: "43 88% 60%"  },
-          { label: "Amber",      hsl: "30 90% 58%"  },
-          { label: "Rose",       hsl: "345 80% 65%" },
-          { label: "Violet",     hsl: "270 75% 70%" },
-          { label: "Indigo",     hsl: "240 80% 68%" },
-          { label: "Sky",        hsl: "200 85% 62%" },
-          { label: "Teal",       hsl: "175 75% 52%" },
-          { label: "Emerald",    hsl: "145 70% 52%" },
-          { label: "Lime",       hsl: "90 70% 52%"  },
-          { label: "White",      hsl: "43 10% 92%"  },
+          { label: "Gold",       hsl: "43 100% 58%"  },
+          { label: "Amber",      hsl: "28 100% 55%"  },
+          { label: "Rose",       hsl: "342 96% 62%" },
+          { label: "Violet",     hsl: "272 95% 66%" },
+          { label: "Indigo",     hsl: "242 96% 64%" },
+          { label: "Sky",        hsl: "199 100% 56%" },
+          { label: "Teal",       hsl: "174 95% 46%" },
+          { label: "Emerald",    hsl: "146 92% 46%" },
+          { label: "Lime",       hsl: "88 92% 50%"  },
+          { label: "White",      hsl: "43 14% 94%"  },
         ];
 
         return (
@@ -854,26 +991,8 @@ export default function ConstellationMenu({ onClose }: Props) {
                   letterSpacing: "0.14em",
                   textTransform: "uppercase",
                   marginBottom: 4,
-                }}>Custom hue</p>
-                <input
-                  type="range"
-                  min={0}
-                  max={360}
-                  step={1}
-                  value={parseInt(currentColor.split(" ")[0]) || 43}
-                  onChange={e => {
-                    const hue = e.target.value;
-                    // Keep saturation + lightness from current, just replace hue
-                    const parts = currentColor.split(" ");
-                    const newHsl = `${hue} ${parts[1] ?? "80%"} ${parts[2] ?? "62%"}`;
-                    handleRayColor(newHsl);
-                  }}
-                  style={{
-                    width: "100%",
-                    accentColor: `hsl(${currentColor})`,
-                    cursor: "pointer",
-                  }}
-                />
+                }}>Custom</p>
+                <ColorSliders value={currentColor} onChange={handleRayColor} />
                 <p style={{
                   fontFamily: "DM Mono, monospace",
                   fontSize: 8,
@@ -918,20 +1037,91 @@ export default function ConstellationMenu({ onClose }: Props) {
                   );
                 })}
               </div>
-              {/* Accent hue slider */}
-              <div style={{ marginTop: 8 }}>
-                <input
-                  type="range"
-                  min={0} max={360} step={1}
-                  value={parseInt(currentAccent.split(" ")[0]) || 43}
-                  onChange={e => {
-                    const hue   = e.target.value;
-                    const parts = currentAccent.split(" ");
-                    handleAccentColor(`${hue} ${parts[1] ?? "80%"} ${parts[2] ?? "62%"}`);
-                  }}
-                  style={{ width: "100%", accentColor: `hsl(${currentAccent})`, cursor: "pointer" }}
-                />
+              <ColorSliders value={currentAccent} onChange={handleAccentColor} />
+
+              {/* Divider */}
+              <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />
+
+              {/* ── Akira ambience ──────────────────────────────────────
+                  The background glow shown while a conversation is live.
+                  Akira has no other visible interface, so this is the only
+                  place its appearance can be tuned. Changes preview instantly. */}
+              <p style={{
+                fontFamily: "DM Mono, monospace",
+                fontSize: 8,
+                color: "hsl(var(--accent-h) var(--accent-s) var(--accent-l))",
+                letterSpacing: "0.18em",
+                textTransform: "uppercase",
+                marginBottom: 2,
+              }}>Akira Glow</p>
+              <p style={{
+                fontFamily: "DM Mono, monospace",
+                fontSize: 7,
+                color: "hsl(var(--accent-h) 25% 32%)",
+                letterSpacing: "0.08em",
+                margin: "0 0 8px",
+              }}>Shown only during a conversation</p>
+
+              {/* Live preview strip — the actual gradient, at full strength */}
+              <div style={{
+                height: 26,
+                borderRadius: 4,
+                marginBottom: 9,
+                border: "1px solid hsl(var(--accent-h) 20% 16%)",
+                background: `linear-gradient(110deg, hsl(${akiraA} / ${0.25 + 0.55 * akiraIntensity}) 0%, hsl(222 22% 6%) 48%, hsl(${akiraB} / ${0.25 + 0.55 * akiraIntensity}) 100%)`,
+              }} />
+
+              {AKIRA_GRADIENT_ROWS.map(row => {
+                const current = row.side === "a" ? akiraA : akiraB;
+                const apply   = row.side === "a" ? handleAkiraGradientA : handleAkiraGradientB;
+                return (
+                  <div key={row.side} style={{ marginBottom: 9 }}>
+                    <p style={{
+                      fontFamily: "DM Mono, monospace",
+                      fontSize: 7,
+                      color: "hsl(var(--accent-h) 30% 35%)",
+                      letterSpacing: "0.14em",
+                      textTransform: "uppercase",
+                      margin: "0 0 5px",
+                    }}>{row.label}</p>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 24px)", gap: 5 }}>
+                      {AKIRA_PRESETS.map(preset => {
+                        const isActive = current === preset.hsl;
+                        return (
+                          <button
+                            key={preset.hsl}
+                            title={preset.label}
+                            onClick={() => apply(preset.hsl)}
+                            style={{
+                              width: 24, height: 24, borderRadius: "50%",
+                              background: `hsl(${preset.hsl})`,
+                              border: isActive ? "2px solid hsl(var(--accent-h) 90% 80%)" : "2px solid transparent",
+                              outline: isActive ? "1px solid hsl(var(--accent-h) 60% 40%)" : "none",
+                              cursor: "pointer",
+                              transition: "transform 0.12s ease, border 0.12s ease",
+                              transform: isActive ? "scale(1.18)" : "scale(1)",
+                              boxShadow: isActive ? `0 0 8px hsl(${preset.hsl} / 0.7)` : `0 0 4px hsl(${preset.hsl} / 0.3)`,
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+                    <ColorSliders value={current} onChange={apply} />
+                  </div>
+                );
+              })}
+
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 30% 35%)", letterSpacing: "0.14em", textTransform: "uppercase", margin: 0 }}>Intensity</p>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 8, color: "hsl(var(--accent-h) 60% 60%)", margin: 0 }}>{akiraIntensity.toFixed(2)}</p>
               </div>
+              <input
+                type="range"
+                min={0.15} max={1} step={0.05}
+                value={akiraIntensity}
+                onChange={e => handleAkiraIntensity(Number(e.target.value))}
+                style={{ width: "100%", accentColor: `hsl(${akiraA})`, cursor: "pointer" }}
+              />
 
               {/* Divider */}
               <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />
@@ -960,6 +1150,19 @@ export default function ConstellationMenu({ onClose }: Props) {
 
               {/* Particle colour */}
               <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 30% 35%)", letterSpacing: "0.14em", textTransform: "uppercase", margin: "0 0 6px" }}>Colour</p>
+
+              {/* Particle saturation — was hard-coded at 55, which capped how
+                  vivid the field could ever look regardless of hue. */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 6.5, color: "hsl(var(--accent-h) 25% 32%)", letterSpacing: "0.12em", textTransform: "uppercase", margin: 0 }}>Saturation</p>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 55% 55%)", margin: 0 }}>{layout.particleSaturation ?? DEFAULT_PARTICLE_SATURATION}%</p>
+              </div>
+              <input
+                type="range" min={0} max={100} step={1}
+                value={layout.particleSaturation ?? DEFAULT_PARTICLE_SATURATION}
+                onChange={e => handleParticleSaturation(parseInt(e.target.value))}
+                style={{ width: "100%", accentColor: `hsl(var(--accent-h) var(--accent-s) var(--accent-l))`, cursor: "pointer", marginBottom: 8 }}
+              />
               {(() => {
                 const PARTICLE_PRESETS: { label: string; hue: number | null }[] = [
                   { label: "Auto",    hue: null },
