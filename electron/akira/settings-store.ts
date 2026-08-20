@@ -39,8 +39,10 @@ export const DEFAULT_AKIRA_SETTINGS: AkiraSettings = {
     wakeSensitivity: 0.65,
     wakeWhenUnfocused: false,
     bargeInEnabled: true,
-    wakeKeywordPath: "akira/akira.ppn",
-    wakeModelPath: "akira/porcupine_params.pv",
+    wakeKeywordPath: "akira/akira.onnx",
+    wakeMelPath: "akira/melspectrogram.onnx",
+    wakeEmbeddingPath: "akira/embedding_model.onnx",
+    wakeThreshold: 0.5,
     conversationShortcut: DEFAULT_CONVERSATION_SHORTCUT,
     consoleShortcut: DEFAULT_CONSOLE_SHORTCUT,
   },
@@ -122,7 +124,6 @@ export class AkiraSettingsStore {
     return {
       ...this.get(),
       secrets: {
-        picovoiceConfigured: Boolean(this.getSecret("picovoiceAccessKey")),
         elevenLabsConfigured: Boolean(this.getSecret("elevenLabsApiKey")),
         providerConfigured: Boolean(this.getSecret(providerSecret)),
         secureStorageAvailable: this.cipher.isAvailable(),
@@ -157,7 +158,6 @@ export class AkiraSettingsStore {
 
   getSecret(name: AkiraSecretName): string | null {
     const environmentNames: Record<AkiraSecretName, string> = {
-      picovoiceAccessKey: "PICOVOICE_ACCESS_KEY",
       elevenLabsApiKey: "ELEVENLABS_API_KEY",
       openaiApiKey: "OPENAI_API_KEY",
       anthropicApiKey: "ANTHROPIC_API_KEY",

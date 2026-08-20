@@ -26,7 +26,7 @@ import {
 } from "@shared/akira";
 import { queryClient } from "@/lib/queryClient";
 import { AkiraMic } from "./AkiraMic";
-import { PorcupineWake } from "./wake/PorcupineWake";
+import { OpenWakeWord } from "./wake/OpenWakeWord";
 import { loadFinancialState, saveFinancialState } from "@/lib/financialStore";
 import { makeId, projectFinancials, toDateInput, type ExpenseKind, type Recurrence } from "@/lib/financialEngine";
 
@@ -81,7 +81,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<AkiraNotice | null>(null);
   const statusRef = useRef<AkiraStatus | null>(null);
   const micRef = useRef<AkiraMic | null>(null);
-  const wakeRef = useRef<PorcupineWake | null>(null);
+  const wakeRef = useRef<OpenWakeWord | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
   const playbackTimeRef = useRef(0);
   const playbackSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
@@ -390,9 +390,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!bridge || !status) return;
     const settings = status.settings;
-    const wanted = settings.input.wakeWordEnabled
-      && settings.secrets.picovoiceConfigured
-      && status.available;
+    const wanted = settings.input.wakeWordEnabled && status.available;
 
     if (!wanted) {
       if (wakeRef.current) {
@@ -412,18 +410,12 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
         return; // Permission not granted yet; Command+' will prompt again.
       }
       if (cancelled) return;
-      // Porcupine runs in the renderer, so unlike the ElevenLabs key this one
-      // has to cross the bridge. It is a per-application usage key rather than
-      // an account credential, and it buys a single microphone shared between
-      // detection and conversation — the alternative is two capture streams
-      // fighting over the device, which is precisely what broke V2.
-      const accessKey = await bridge.getWakeKey().catch(() => "");
-      if (!accessKey || cancelled) return;
-      const detector = new PorcupineWake({
-        accessKey,
-        keywordPath: settings.input.wakeKeywordPath,
-        modelPath: settings.input.wakeModelPath,
-        sensitivity: settings.input.wakeSensitivity,
+      // No credential of any kind: the models are local files.
+      const detector = new OpenWakeWord({
+        keywordModelPath: settings.input.wakeKeywordPath,
+        melModelPath: settings.input.wakeMelPath,
+        embeddingModelPath: settings.input.wakeEmbeddingPath,
+        threshold: settings.input.wakeThreshold,
         onDetected: () => {
           if (statusRef.current?.state !== "DORMANT") return;
           void activate(true).catch(error => showNotice(
@@ -436,13 +428,11 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
       if (cancelled) return;
       wakeRef.current = detector;
       const started = await detector.start();
-      if (!started && !cancelled) {
-        wakeRef.current = null;
-      }
+      if (!started && !cancelled) wakeRef.current = null;
     })();
 
     return () => { cancelled = true; };
-  }, [activate, armMicrophone, bridge, showNotice, status?.available, status?.settings.input.wakeWordEnabled, status?.settings.secrets.picovoiceConfigured]);
+  }, [activate, armMicrophone, bridge, showNotice, status?.available, status?.settings.input.wakeWordEnabled]);
 
   useEffect(() => {
     const onVisibility = () => {

@@ -488,7 +488,7 @@ export class AkiraController {
 
   setSecret(name: AkiraSecretName, value: string): AkiraStatus {
     if (name === "elevenLabsApiKey") this.greeting.invalidate();
-    const allowed: AkiraSecretName[] = ["picovoiceAccessKey", "elevenLabsApiKey", "openaiApiKey", "anthropicApiKey", "openrouterApiKey"];
+    const allowed: AkiraSecretName[] = ["elevenLabsApiKey", "openaiApiKey", "anthropicApiKey", "openrouterApiKey"];
     if (!allowed.includes(name)) throw new Error("Unknown Akira credential type.");
     if (value.length > 8_000) throw new Error("Credential is too long.");
     this.settings.setSecret(name, value);
@@ -534,20 +534,6 @@ export class AkiraController {
       pendingApprovals: this.pendingApprovals.size,
       paths: { root: this.options.root },
     };
-  }
-
-  /**
-   * The Picovoice access key, for the renderer.
-   *
-   * Every other secret stays in the main process. Porcupine's web runtime needs
-   * this one client-side, and it is a per-application usage key rather than an
-   * account credential — the trade for one shared microphone instead of two
-   * competing captures.
-   */
-  wakeKey(): string {
-    return this.settings.get().input.wakeWordEnabled
-      ? this.settings.getSecret("picovoiceAccessKey") ?? ""
-      : "";
   }
 
   listCapabilities(): AkiraCapabilityDescriptor[] {

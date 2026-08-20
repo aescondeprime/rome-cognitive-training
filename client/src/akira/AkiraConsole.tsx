@@ -73,7 +73,6 @@ export default function AkiraConsole() {
   const [capabilities, setCapabilities] = useState<AkiraCapabilityDescriptor[]>([]);
   const [elevenKey, setElevenKey] = useState("");
   const [providerKey, setProviderKey] = useState("");
-  const [picovoiceKey, setPicovoiceKey] = useState("");
   const [draft, setDraft] = useState<AkiraSettings | null>(null);
 
   useEffect(() => {
@@ -140,10 +139,6 @@ export default function AkiraConsole() {
     if (providerKey.trim()) {
       await akira.setSecret(`${draft.agent.provider}ApiKey`, providerKey);
       setProviderKey("");
-    }
-    if (picovoiceKey.trim()) {
-      await akira.setSecret("picovoiceAccessKey", picovoiceKey);
-      setPicovoiceKey("");
     }
   });
 
@@ -250,17 +245,16 @@ export default function AkiraConsole() {
                 </SettingGroup>
                 <SettingGroup title="Input">
                   <p className="akira-section-note">
-                    The wake word runs on-device and shares ROME's microphone — nothing is
-                    uploaded until a conversation starts. Needs a free Picovoice access key
-                    and an “Akira” keyword file in <code>client/public/akira/</code>.
+                    The wake word runs entirely on-device and shares ROME's microphone —
+                    no account, no key, and nothing is uploaded until a conversation
+                    starts. Needs the three openWakeWord models in <code>client/public/akira/</code>.
                   </p>
                   <Toggle label="Local wake word “Akira”" checked={draft.input.wakeWordEnabled} onChange={checked => setDraft({ ...draft, input: { ...draft.input, wakeWordEnabled: checked } })} />
-                  <LabeledInput
-                    label={`Picovoice access key · ${status.settings.secrets.picovoiceConfigured ? "configured" : "not configured"}`}
-                    value={picovoiceKey}
-                    onChange={setPicovoiceKey}
-                    password
-                    placeholder="Stored encrypted; never shown again"
+                  <RangeInput
+                    label="Wake word strictness"
+                    value={draft.input.wakeThreshold}
+                    min={0.1} max={0.95} step={0.05}
+                    onChange={value => setDraft({ ...draft, input: { ...draft.input, wakeThreshold: value } })}
                   />
                   <Toggle label="Barge-in interruption" checked={draft.input.bargeInEnabled} onChange={checked => setDraft({ ...draft, input: { ...draft.input, bargeInEnabled: checked } })} />
                   <Toggle label="Wake when ROME is unfocused (advanced)" checked={draft.input.wakeWhenUnfocused} onChange={checked => setDraft({ ...draft, input: { ...draft.input, wakeWhenUnfocused: checked } })} />

@@ -11,8 +11,6 @@ export function registerAkiraIpc(getController: () => AkiraController | null): v
 
   ipcMain.handle("rome:akira:status", event => withController(event, controller => controller.status()));
   ipcMain.handle("rome:akira:activate", (event, viaWakeWord: unknown) => withController(event, controller => controller.activate(Boolean(viaWakeWord))));
-  // The Picovoice key is the one secret the renderer needs: Porcupine runs there.
-  ipcMain.handle("rome:akira:wake-key", event => withController(event, controller => controller.wakeKey()));
   ipcMain.handle("rome:akira:standby", event => withController(event, controller => controller.standby()));
   ipcMain.handle("rome:akira:interrupt", event => withController(event, controller => controller.interrupt()));
   ipcMain.handle("rome:akira:submit-text", (event, text: unknown) => withController(event, controller => controller.submitText(String(text ?? ""))));

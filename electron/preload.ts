@@ -16,7 +16,6 @@ contextBridge.exposeInMainWorld("romeDesktop", {
   akira: {
     getStatus: () => ipcRenderer.invoke("rome:akira:status"),
     activate: (viaWakeWord?: boolean) => ipcRenderer.invoke("rome:akira:activate", viaWakeWord),
-    getWakeKey: () => ipcRenderer.invoke("rome:akira:wake-key"),
     standby: () => ipcRenderer.invoke("rome:akira:standby"),
     interrupt: () => ipcRenderer.invoke("rome:akira:interrupt"),
     submitText: (text: string) => ipcRenderer.invoke("rome:akira:submit-text", text),
