@@ -50,12 +50,24 @@ export interface RealtimeConnectOptions {
 
 /** Why a connection ended, when the reason is actionable. */
 export class RealtimeOverrideRejected extends Error {
+  /**
+   * Checked instead of `instanceof`. The class crosses an esbuild bundle
+   * boundary and an async rethrow, and prototype identity is not worth
+   * betting a recovery path on.
+   */
+  readonly overrideRejected = true;
+
   constructor(readonly detail: string) {
     super(
-      "The ElevenLabs agent rejected ROME's prompt override. Enable “prompt” under the agent's Security tab so Akira can see your ROME capabilities.",
+      "Akira connected without its ROME capabilities: the agent rejected the prompt override. Enable “prompt” under the agent's Security tab in ElevenLabs to fix this.",
     );
     this.name = "RealtimeOverrideRejected";
   }
+}
+
+/** ElevenLabs signals a rejected override by closing with policy-violation. */
+function looksLikeOverrideRejection(code: number, reason: string): boolean {
+  return code === 1008 || /override/i.test(reason);
 }
 
 export interface RealtimeSocket extends EventEmitter {
@@ -108,11 +120,19 @@ export class ElevenLabsRealtimeSession extends EventEmitter {
   async connect(options: RealtimeConnectOptions): Promise<void> {
     try {
       await this.connectOnce(options, true);
+      return;
     } catch (error) {
-      if (!(error instanceof RealtimeOverrideRejected)) throw error;
+      // Match on the flag rather than `instanceof`: this module is bundled by
+      // esbuild and re-thrown across an async boundary, and a subclass identity
+      // check is a fragile thing to hang a recovery path on.
+      const rejected = (error as { overrideRejected?: boolean })?.overrideRejected === true;
+      if (!rejected) throw error;
       this.emit("degraded", error);
-      await this.connectOnce(options, false);
     }
+    // Second attempt sends no conversation_config_override at all. Akira can
+    // still talk; it just cannot see the ROME capability catalogue, which the
+    // degraded event explains to the user.
+    await this.connectOnce(options, false);
   }
 
   private async connectOnce(options: RealtimeConnectOptions, withOverrides: boolean): Promise<void> {
@@ -156,9 +176,18 @@ export class ElevenLabsRealtimeSession extends EventEmitter {
     // rejected override — no error frame, just a disconnect. This promise lets
     // connectOnce distinguish that from a mid-conversation drop.
     const handshake = new Promise<void>((resolve, reject) => {
-      const settleTimer = setTimeout(() => resolve(), 6_000);
-      const onClose = (code: number, reasonBuffer: Buffer) => {
+      const onInitialized = () => { finish(); resolve(); };
+      const finish = () => {
         clearTimeout(settleTimer);
+        // Both listeners must go: a retry adds its own pair, and a leaked
+        // "initialized" handler from a failed attempt would fire against the
+        // next conversation's handshake.
+        this.removeListener("initialized", onInitialized);
+        socket.removeListener("close", onClose);
+      };
+      const settleTimer = setTimeout(() => { finish(); resolve(); }, 6_000);
+      const onClose = (code: number, reasonBuffer: Buffer) => {
+        finish();
         const reason = reasonBuffer?.toString("utf8") || "";
         if (this.socket === socket) {
           this.socket = null;
@@ -170,14 +199,18 @@ export class ElevenLabsRealtimeSession extends EventEmitter {
           return;
         }
         const detail = reason || `close code ${code}`;
-        if (withOverrides) reject(new RealtimeOverrideRejected(detail));
-        else {
-          this.emit("close", { intentional: this.closingIntentionally, code, reason });
-          reject(new Error(`ElevenLabs closed the connection during setup (${detail}).`));
+        // Only the override-carrying attempt can be retried without them.
+        // Rejecting quietly here keeps the failed attempt from surfacing as a
+        // user-visible drop when the retry is about to succeed.
+        if (withOverrides && looksLikeOverrideRejection(code, reason)) {
+          reject(new RealtimeOverrideRejected(detail));
+          return;
         }
+        this.emit("close", { intentional: this.closingIntentionally, code, reason });
+        reject(new Error(`ElevenLabs closed the connection during setup (${detail}).`));
       };
       socket.once("close", onClose);
-      this.once("initialized", () => { clearTimeout(settleTimer); resolve(); });
+      this.once("initialized", onInitialized);
     });
 
     // The agent does not speak until it receives this, so it doubles as the
