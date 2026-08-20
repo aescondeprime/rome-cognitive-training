@@ -5,9 +5,10 @@
  * Recall all memorized items in order after all rounds
  * Adaptive: advance level when ≥ 80% correct, fall back when < 50%
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { ArrowLeft, Settings2, Play, RotateCcw } from "lucide-react";
 import { Link } from "wouter";
+import { recordDrillResultInBackground } from "@/lib/trainingRecorder";
 
 // ── Word lists for verbal decision ────────────────────────────────────────
 const CORRECT_WORDS = ["brief","cloud","dream","earth","flame","grace","heart","light","magic","night","ocean","peace","quiet","river","storm","think","under","voice","water","world"];
@@ -58,6 +59,8 @@ export default function CWM() {
   const [recallIdx, setRecallIdx] = useState(0);
   const [score, setScore] = useState({ correct: 0, total: 0 });
 
+  // When the current drill began, so recorded sessions carry a real duration.
+  const startedAtRef = useRef(0);
   const buildRound = useCallback((): Round => {
     const decisionAnswers: boolean[] = [];
     const decisionCorrect: boolean[] = [];
@@ -79,6 +82,7 @@ export default function CWM() {
   }, [cfg.decisionsPerRound, type]);
 
   const startSession = useCallback(() => {
+    startedAtRef.current = Date.now();
     const builtRounds: Round[] = Array.from({ length: cfg.level }, () => buildRound());
     setRounds(builtRounds);
     setCurrentRound(0); setCurrentDecision(0);
@@ -163,6 +167,11 @@ export default function CWM() {
       setScore({ correct, total: cfg.level });
       setCfg(c => ({ ...c, level: newLevel }));
       setPhase("result");
+      recordDrillResultInBackground({
+        domain: "working_memory", activityId: "complex-working-memory",
+        correct, total: cfg.level, level: cfg.level, maxLevel: 8,
+        startedAt: startedAtRef.current,
+      });
     } else {
       setRecallIdx(next);
     }

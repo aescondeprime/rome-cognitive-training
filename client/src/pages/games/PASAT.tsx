@@ -9,6 +9,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { ArrowLeft, Settings2, Play, RotateCcw, Check } from "lucide-react";
 import { Link } from "wouter";
+import { recordDrillResultInBackground } from "@/lib/trainingRecorder";
 
 // Level table: level number → ISI in ms (how long between each new number)
 // Level 2 = 5s, Level 25 = 1.2s (brainscale-equivalent pacing)
@@ -54,6 +55,8 @@ export default function PASAT() {
   const idxRef = useRef(0);
   const statsRef = useRef({ correct: 0, answered: 0 });
   const runningRef = useRef(false);
+  // When the current drill began, so recorded sessions carry a real duration.
+  const startedAtRef = useRef(0);
 
   const clearAll = () => {
     if (intervalRef.current) clearInterval(intervalRef.current);
@@ -75,6 +78,11 @@ export default function PASAT() {
     setCfg(prev => ({ ...prev, level: newLevel }));
     setCorrect(c); setAnswered(a);
     setPhase("result");
+    recordDrillResultInBackground({
+      domain: "focus", activityId: "pasat",
+      correct: c, total: a, level: cfg.level, maxLevel: 25,
+      startedAt: startedAtRef.current,
+    });
   }, [cfg]);
 
   const advanceStep = useCallback(() => {
@@ -127,6 +135,7 @@ export default function PASAT() {
   }, [cfg.level]);
 
   const startSession = useCallback(() => {
+    startedAtRef.current = Date.now();
     clearAll();
     const s = buildStream(cfg.trials);
     streamRef.current = s;

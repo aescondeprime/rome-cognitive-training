@@ -269,6 +269,7 @@ export class AkiraCapabilityRegistry {
     this.registerResearchCapabilities();
     this.registerScheduleCapabilities();
     this.registerTrainingCapabilities();
+    this.registerThreatCapabilities();
 
     this.add(this.descriptor("rome.undo", "Undo an Akira action", "Applies a still-valid compensating action from the Akira activity log.", "write", "background", [["/api/boards"], ["/api/notes"], ["/api/memory"], ["/kronos"]], ["task-stabilizer", "finance"], false,
       objectSchema({ undoId: string("Undo id returned by a prior action.") }, ["undoId"])),
@@ -537,6 +538,53 @@ export class AkiraCapabilityRegistry {
           difficulty: Math.max(1, Math.min(5, Number(args.difficulty) || 1)),
           notes: args.notes ?? null,
         }) };
+      });
+  }
+
+
+  /**
+   * Threats — the risks and blockers tracked on the Constellation widget.
+   *
+   * The routes these call only reached the desktop app once they were ported
+   * out of the Vercel handler into workspace-routes; before that this whole
+   * surface 404'd.
+   */
+  private registerThreatCapabilities(): void {
+    const THREATS = [["threats"]];
+
+    this.add(this.descriptor("rome.threats.list", "List tracked threats", "Lists open and resolved threats for the active profile.", "read", "background", [], [], false,
+      objectSchema({ includeResolved: boolean("Include threats already resolved.") })),
+      async args => {
+        const values = await this.api<any[]>("GET", "/api/threats");
+        return { value: args.includeResolved ? values : values.filter(threat => !threat?.resolved) };
+      });
+
+    this.add(this.descriptor("rome.threats.create", "Track a new threat", "Records a risk or blocker with a priority from 1 to 3.", "write", "background", THREATS, [], true,
+      objectSchema({ title: string("What the threat is."), priority: number("1 = highest, 3 = lowest.") }, ["title"])),
+      async args => {
+        const priority = Math.max(1, Math.min(3, Math.round(Number(args.priority) || 1)));
+        const value = await this.api<any>("POST", "/api/threats", { title: requiredText(args.title, "title"), priority });
+        return { value, undo: { method: "DELETE", path: `/api/threats/${numericId(value?.id)}` } };
+      });
+
+    this.add(this.descriptor("rome.threats.resolve", "Resolve or reopen a threat", "Marks one threat resolved, or reopens it.", "write", "background", THREATS, [], true,
+      objectSchema({ id: number("Exact threat id."), title: string("Exact threat title if the id is unknown."), resolved: boolean("True to resolve, false to reopen.") })),
+      async args => {
+        const existing = await this.resolveRecord("/api/threats", args, "title");
+        const resolved = args.resolved === undefined ? true : Boolean(args.resolved);
+        await this.api("PATCH", `/api/threats/${numericId(existing.id)}`, { resolved });
+        return {
+          value: { id: existing.id, resolved },
+          undo: { method: "PATCH", path: `/api/threats/${numericId(existing.id)}`, body: { resolved: Boolean(existing.resolved) } },
+        };
+      });
+
+    this.add(this.descriptor("rome.threats.delete", "Delete a threat", "Permanently removes one tracked threat.", "destructive", "background", THREATS, [], false,
+      objectSchema({ id: number("Exact threat id."), title: string("Exact threat title if the id is unknown.") })),
+      async args => {
+        const existing = await this.resolveRecord("/api/threats", args, "title");
+        await this.api("DELETE", `/api/threats/${numericId(existing.id)}`);
+        return { value: { deleted: existing } };
       });
   }
 
