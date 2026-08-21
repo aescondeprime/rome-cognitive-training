@@ -6,6 +6,7 @@ import {
   type WebContents,
 } from "electron";
 import { BrowserStorage, isWebUrl } from "./browser-storage";
+import { GUEST_CURSOR_JS, guestCursorCss } from "./guest-cursor";
 import { DownloadManager } from "./download-manager";
 import { PermissionManager } from "./permission-manager";
 import { SessionManager } from "./session-manager";
@@ -82,6 +83,13 @@ export class TabManager {
   private readonly tabs = new Map<string, ManagedTab>();
   private activeId: string | null = null;
   private attachedView: WebContentsView | null = null;
+  /**
+   * Accent used by the cursor injected into guest pages. Cached because the
+   * user retunes it live in the Constellation editor, and re-read on each
+   * injection rather than pushed over IPC — a page load is not a hot path, and
+   * one extra plumbing channel is worse than one extra round trip.
+   */
+  private cursorAccent = { h: "43", s: "88%" };
   private viewport: BrowserViewport = { x: 0, y: 0, width: 0, height: 0, visible: false };
 
   constructor(
@@ -151,6 +159,39 @@ export class TabManager {
     return { ...tab.state };
   }
 
+  /** Read ROME's live accent out of the shell so the guest cursor matches it. */
+  private async refreshCursorAccent(): Promise<void> {
+    if (this.host.isDestroyed()) return;
+    try {
+      const read = (await this.host.webContents.executeJavaScript(
+        `(() => { const s = getComputedStyle(document.documentElement);` +
+        ` return { h: s.getPropertyValue("--accent-h").trim(),` +
+        ` s: s.getPropertyValue("--accent-s").trim() }; })()`,
+        true,
+      )) as { h?: string; s?: string } | null;
+      if (read && read.h) this.cursorAccent = { h: read.h, s: read.s || "88%" };
+    } catch {
+      // The shell may not have painted yet. The cached value is fine.
+    }
+  }
+
+  private async injectGuestCursor(tab: ManagedTab): Promise<void> {
+    const contents = tab.view.webContents;
+    if (contents.isDestroyed()) return;
+    // Only real pages. Error pages and about:blank get the native pointer,
+    // which is the correct signal that nothing is loaded.
+    if (!isWebUrl(contents.getURL())) return;
+    await this.refreshCursorAccent();
+    if (contents.isDestroyed()) return;
+    try {
+      await contents.insertCSS(guestCursorCss(this.cursorAccent.h, this.cursorAccent.s));
+      await contents.executeJavaScript(GUEST_CURSOR_JS, true);
+    } catch {
+      // A page that navigated away mid-injection is not an error worth
+      // surfacing; the next dom-ready will inject into whatever replaced it.
+    }
+  }
+
   private bind(tab: ManagedTab): void {
     const contents = tab.view.webContents;
     const sync = () => this.sync(tab);
@@ -162,6 +203,12 @@ export class TabManager {
       this.publish();
     });
     contents.on("did-stop-loading", sync);
+    // The renderer's own cursor cannot draw over a native WebContentsView, so
+    // the page draws its own. Fires per navigation; the payload guards against
+    // double-injection itself.
+    contents.on("dom-ready", () => {
+      void this.injectGuestCursor(tab);
+    });
     contents.on("page-title-updated", (_event, title) => {
       tab.state.title = title || "New Tab";
       this.publish();

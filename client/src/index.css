@@ -915,3 +915,214 @@ html[data-rome-akira-reduce-motion="true"] .akira-panel { animation: none; }
 .z-ray   { z-index: 1; }
 .z-ui    { z-index: 10; }
 .z-modal { z-index: 50; }
+
+/* ─── Node hologram ──────────────────────────────────────────────────
+   The projected dossier beside a zoomed constellation node. Everything
+   here is decoration over a translucent plate: fixed scanlines, one
+   brighter band sweeping through them, a light tracing the border, and
+   corner brackets. Opacity is deliberately NOT animated in CSS on
+   .holo-panel — framer-motion owns that inline, and a CSS animation
+   would outrank the inline style and eat the flicker-in and the exit. */
+.holo-panel {
+  position: relative;
+  overflow: hidden;
+  border-radius: 3px;
+  transform-origin: center;
+  background:
+    linear-gradient(158deg,
+      hsl(var(--accent-h) 45% 10% / 0.40) 0%,
+      hsl(220 16% 4% / 0.66) 62%,
+      hsl(var(--accent-h) 40% 8% / 0.46) 100%);
+  backdrop-filter: blur(7px) saturate(1.25);
+  -webkit-backdrop-filter: blur(7px) saturate(1.25);
+  border: 1px solid hsl(var(--accent-h) 55% 46% / 0.26);
+  box-shadow:
+    0 0 0 1px hsl(220 16% 3% / 0.55),
+    0 0 34px -10px hsl(var(--accent-h) 90% 55% / 0.50),
+    inset 0 0 26px -6px hsl(var(--accent-h) 80% 55% / 0.14);
+}
+
+.holo-scan {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: repeating-linear-gradient(to bottom,
+    hsl(var(--accent-h) 70% 62% / 0.06) 0 1px,
+    transparent 1px 3px);
+  mix-blend-mode: screen;
+}
+
+.holo-sweep {
+  position: absolute; left: 0; right: 0; top: -40%; height: 34%;
+  z-index: 1; pointer-events: none;
+  background: linear-gradient(to bottom,
+    transparent, hsl(var(--accent-h) 85% 66% / 0.10), transparent);
+  animation: holoSweep 3.1s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+}
+@keyframes holoSweep { from { top: -40%; } to { top: 108%; } }
+
+.holo-frame {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  z-index: 1; pointer-events: none;
+}
+/* pathLength=1 turns the border into a unit-length track, so one dash of
+   0.13 travelling -1 per cycle is exactly one lap. */
+.holo-trace {
+  animation: holoTrace 3.6s linear infinite;
+  filter: drop-shadow(0 0 3px hsl(var(--accent-h) 90% 62% / 0.85));
+}
+@keyframes holoTrace { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -1; } }
+
+.holo-corner {
+  position: absolute; width: 9px; height: 9px; z-index: 2; pointer-events: none;
+  border: 0 solid hsl(var(--accent-h) 80% 64% / 0.75);
+}
+.holo-corner-tl { top: -1px; left: -1px;  border-top-width: 1px; border-left-width: 1px; }
+.holo-corner-tr { top: -1px; right: -1px; border-top-width: 1px; border-right-width: 1px; }
+.holo-corner-bl { bottom: -1px; left: -1px;  border-bottom-width: 1px; border-left-width: 1px; }
+.holo-corner-br { bottom: -1px; right: -1px; border-bottom-width: 1px; border-right-width: 1px; }
+
+.holo-rule {
+  height: 1px; margin: 9px 0 10px; transform-origin: left center;
+  background: linear-gradient(to right,
+    hsl(var(--accent-h) 82% 62% / 0.55), hsl(var(--accent-h) 60% 50% / 0.05));
+  animation: holoRule 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.36s both;
+}
+@keyframes holoRule { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+.holo-base {
+  position: absolute; left: 12%; right: 12%; bottom: -1px; height: 1px; z-index: 2;
+  background: linear-gradient(to right, transparent,
+    hsl(var(--accent-h) 92% 68% / 0.85), transparent);
+  box-shadow: 0 0 12px 1px hsl(var(--accent-h) 92% 60% / 0.45);
+}
+
+/* Chromatic split — red/cyan fringing that misregisters every few seconds. */
+.holo-chroma {
+  text-shadow: 0.7px 0 0 hsl(348 92% 60% / 0.38), -0.7px 0 0 hsl(190 92% 62% / 0.38);
+  animation: holoChroma 4.7s steps(1, end) infinite;
+}
+@keyframes holoChroma {
+  0%, 88%, 100% { text-shadow: 0.7px 0 0 hsl(348 92% 60% / 0.38), -0.7px 0 0 hsl(190 92% 62% / 0.38); }
+  90%           { text-shadow: 1.9px 0 0 hsl(348 92% 60% / 0.52), -1.9px 0 0 hsl(190 92% 62% / 0.52); }
+  93%           { text-shadow: -1.3px 0 0 hsl(348 92% 60% / 0.46), 1.3px 0 0 hsl(190 92% 62% / 0.46); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .holo-sweep { display: none; }
+  .holo-trace, .holo-chroma, .holo-rule { animation: none; }
+  .holo-rule { transform: scaleX(1); }
+}
+
+/* ── RomeCursor ─────────────────────────────────────────────────────────────
+   Paired with client/src/components/RomeCursor.tsx. The component owns
+   position (it writes `transform` on the two wrappers every frame); this file
+   owns everything that has a resting state and a transition, so size and colour
+   changes animate in CSS while the transform stays untouched by them.
+
+   The native cursor is hidden from an attribute the component sets on <html>,
+   never from a blanket rule — the instant the component decides it should not
+   be running (touch input, or the World Browser's native view painting over the
+   DOM) the real cursor comes straight back. */
+
+html[data-rome-cursor="on"],
+html[data-rome-cursor="on"] * { cursor: none !important; }
+
+/* Text entry keeps the real I-beam: a circle gives you no idea where the
+   caret will land. Higher specificity than the blanket rule above. */
+html[data-rome-cursor="on"] textarea,
+html[data-rome-cursor="on"] [contenteditable=""],
+html[data-rome-cursor="on"] [contenteditable="true"],
+html[data-rome-cursor="on"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="color"]):not([type="file"]):not([type="image"]) {
+  cursor: text !important;
+}
+
+.rome-cursor-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;   /* above LightRay (201), the map (200) and Akira */
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .18s ease;
+}
+/* `is-live` is added on the first real mousemove, so the cursor never flashes
+   at the centre of the screen before the pointer has been anywhere. */
+.rome-cursor-layer.is-live { opacity: 1; }
+.rome-cursor-layer.is-text { opacity: 0; }
+
+.rome-cursor-dot,
+.rome-cursor-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform;
+}
+
+/* The wrapper is moved; the <i> is drawn and centred on it. Keeping those on
+   separate elements is what lets size transition without touching transform. */
+.rome-cursor-dot > i,
+.rome-cursor-ring > i {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  transition: width .16s cubic-bezier(.4,0,.2,1),
+              height .16s cubic-bezier(.4,0,.2,1),
+              opacity .16s ease,
+              border-color .16s ease,
+              background-color .16s ease;
+}
+
+.rome-cursor-dot > i {
+  width: 5px;
+  height: 5px;
+  background: hsl(var(--accent-h) 90% 72%);
+  box-shadow: 0 0 6px hsl(var(--accent-h) 90% 60% / .55);
+}
+
+.rome-cursor-ring > i {
+  width: 26px;
+  height: 26px;
+  border: 1px solid hsl(var(--accent-h) 60% 58% / .45);
+  background: hsl(var(--accent-h) 70% 60% / .04);
+}
+
+/* Over something clickable the ring opens and brightens, and the dot shrinks —
+   the pair reads as "the target is out there", not "here I am". */
+.rome-cursor-layer.is-hot .rome-cursor-ring > i {
+  width: 40px;
+  height: 40px;
+  border-color: hsl(var(--accent-h) 85% 65% / .8);
+  background: hsl(var(--accent-h) 80% 60% / .07);
+}
+.rome-cursor-layer.is-hot .rome-cursor-dot > i { width: 3px; height: 3px; }
+
+/* Press: the ring snaps in against the dot. */
+.rome-cursor-layer.is-down .rome-cursor-ring > i {
+  width: 15px;
+  height: 15px;
+  border-color: hsl(var(--accent-h) 95% 72% / .95);
+  background: hsl(var(--accent-h) 85% 62% / .16);
+}
+.rome-cursor-layer.is-down .rome-cursor-dot > i { width: 7px; height: 7px; }
+
+/* Release: one ring leaves from where the click landed. Spawned in JS, removed
+   on animationend, capped at six so a mash cannot pile up nodes. */
+.rome-cursor-ripple {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  border: 1px solid hsl(var(--accent-h) 90% 68% / .7);
+  pointer-events: none;
+  animation: romeCursorRipple .52s cubic-bezier(.15,.6,.3,1) forwards;
+}
+
+@keyframes romeCursorRipple {
+  from { transform: scale(1);   opacity: .75; }
+  to   { transform: scale(5.4); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rome-cursor-dot > i,
+  .rome-cursor-ring > i { transition-duration: .08s; }
+}

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect } from "react";
+import { lazy, Suspense, useState, useEffect, useRef } from "react";
 import { Switch, Route, Router, Redirect } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -9,17 +9,19 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import AppShell from "@/components/AppShell";
 import { ConstellationPortal } from "@/components/ConstellationOverlay";
 import LightRay from "@/components/LightRay";
-import { setAccentColor } from "@/lib/lightRayState";
 import { loadLayout } from "@/lib/constellationLayout";
+import { applyLayout } from "@/lib/applyLayout";
+import { playCue, primeAudio } from "@/lib/sound";
 import Login from "@/pages/Login";
 import { AkiraProvider } from "@/akira/AkiraProvider";
 import AkiraAmbience from "@/akira/AkiraAmbience";
 import AkiraConsole from "@/akira/AkiraConsole";
+import RomeCursor from "@/components/RomeCursor";
 
 // Core pages kept
 import PhilosophyChambers from "@/pages/PhilosophyChambers";
 import Settings from "@/pages/Settings";
-import Taskboard from "@/pages/Taskboard";
+import ContingencyGarden from "@/pages/ContingencyGarden";
 import ResearchLab from "@/pages/ResearchLab";
 import KronosKeep from "@/pages/KronosKeep";
 import IdeaWorkshop from "@/pages/IdeaWorkshop";
@@ -27,7 +29,7 @@ import ComponentBoard from "@/pages/ComponentBoard";
 import NotFound from "@/pages/not-found";
 
 // Athena Trials
-import AthenaTrials from "@/pages/AthenaTrials";
+import MidasDashboard from "@/pages/MidasDashboard";
 import DualNBack from "@/pages/games/DualNBack";
 import CWM from "@/pages/games/CWM";
 import MentalMath from "@/pages/games/MentalMath";
@@ -78,23 +80,50 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// Apply saved accent colour immediately on boot (module-eval time)
+// Apply the saved layout at module-eval time, before the first paint.
+//
+// This used to set only the accent colour, which is why a cold start showed the
+// prototype's drifting gold ray until you opened the Constellation — the menu's
+// effect was the only thing that had ever applied the rest.
 (() => {
-  try {
-    const layout = loadLayout();
-    if (layout.accentColor) setAccentColor(layout.accentColor);
-  } catch {}
+  try { applyLayout(loadLayout()); } catch {}
 })();
 
 export default function App() {
-  // Also apply inside a useEffect so it fires after React hydration,
-  // which can reset documentElement inline styles on first mount.
+  // Applied again after hydration: React can reset documentElement inline
+  // styles on first mount, which would drop the CSS custom properties the
+  // module-eval pass just wrote.
   useEffect(() => {
-    try {
-      const layout = loadLayout();
-      if (layout.accentColor) setAccentColor(layout.accentColor);
-    } catch {}
+    try { applyLayout(loadLayout()); } catch {}
   }, []);
+
+  // An AudioContext built before the first gesture starts suspended, so the
+  // first cue would pay its start-up cost and land late enough to feel detached
+  // from the click that caused it. Warm it once, on whatever is touched first.
+  useEffect(() => {
+    const prime = () => primeAudio();
+    window.addEventListener("pointerdown", prime, { once: true });
+    window.addEventListener("keydown", prime, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", prime);
+      window.removeEventListener("keydown", prime);
+    };
+  }, []);
+
+  // The arrival cue is driven by the route, not by any one control. Every path
+  // into a domain — a constellation branch, a placeholder sub-link, Akira, the
+  // back button — passes through here, so the sound can never disagree with
+  // where you actually ended up. Staying inside the same domain gets the
+  // lighter cue; crossing into a new one gets the full arrival.
+  const [location] = useHashLocation();
+  const previousLocation = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = previousLocation.current;
+    previousLocation.current = location;
+    if (previous === null || previous === location) return; // first paint is not an arrival
+    const domainOf = (path: string) => path.split("/")[1] ?? "";
+    playCue(domainOf(previous) === domainOf(location) ? "domainShift" : "domainEnter");
+  }, [location]);
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -113,7 +142,7 @@ export default function App() {
                 <AppShell>
                   <Switch>
                     {/* Athena Trials */}
-                    <Route path="/athena"             component={AthenaTrials} />
+                    <Route path="/athena"             component={MidasDashboard} />
                     <Route path="/athena/dual-n-back"  component={DualNBack} />
                     <Route path="/athena/cwm"          component={CWM} />
                     <Route path="/athena/mental-math"  component={MentalMath} />
@@ -124,20 +153,20 @@ export default function App() {
                     {/* Philosophy */}
                     <Route path="/philosophy" component={PhilosophyChambers} />
 
-                    {/* Strategic — Taskboard + Kronos Keep */}
+                    {/* Strategic — Contingency Garden + Kronos Keep */}
                     <Route path="/strategic">
                       <PlaceholderNode
                         title="Strategic"
                         symbol="♛"
                         accent="hsl(var(--accent-h) 88% 60%)"
-                        description="Planning and execution intelligence. Taskboard and Kronos Keep are accessible below."
+                        description="Planning and execution intelligence. Grow a plan in the Contingency Garden, then schedule it in Kronos Keep."
                         subRoutes={[
-                          { label: "Taskboard", path: "/taskboard" },
+                          { label: "Contingency Garden", path: "/taskboard" },
                           { label: "Kronos Keep", path: "/kronos-keep" },
                         ]}
                       />
                     </Route>
-                    <Route path="/taskboard"    component={Taskboard} />
+                    <Route path="/taskboard"    component={ContingencyGarden} />
                     <Route path="/kronos-keep"  component={KronosKeep} />
 
                     {/* Creative */}
@@ -186,6 +215,9 @@ export default function App() {
             </Router>
             <AkiraConsole />
             <LightRay zIndex={201} />
+            {/* Above everything, and self-disabling on touch input and on the
+                World Browser, where a native view paints over the DOM. */}
+            <RomeCursor />
             <Toaster />
           </AkiraProvider>
         </AuthGate>
