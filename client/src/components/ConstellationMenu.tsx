@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { motion, useMotionValue, useSpring, animate } from "framer-motion";
+import { motion, useMotionValue, useSpring, animate, AnimatePresence, type MotionValue } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
@@ -14,6 +14,9 @@ import {
   DEFAULT_AKIRA_GRADIENT_B,
   DEFAULT_AKIRA_INTENSITY,
   DEFAULT_PARTICLE_SATURATION,
+  DEFAULT_SOUND_ENABLED,
+  DEFAULT_SOUND_VOLUME,
+  DEFAULT_SOUND_PITCH,
   type ConstellationLayout,
   type NodeOverride,
 } from "@/lib/constellationLayout";
@@ -21,8 +24,11 @@ import {
 // Reset in the Constellation editor threw a ReferenceError before it finished.
 import { getRayState, pinRaySource, setRayDirection, setRayColor, setRayBrightness, setAccentColor, setRayEditOffset } from "@/lib/lightRayState";
 import { setAkiraAmbience } from "@/lib/akiraAmbienceState";
+import { applyLayout, isRayFloating } from "@/lib/applyLayout";
+import { playCue, setSoundEnabled, setSoundVolume, setSoundPitch, CUE_NAMES, CUE_LABELS } from "@/lib/sound";
 import ConstellationNode from "./ConstellationNode";
 import NodeBranchMenu from "./NodeBranchMenu";
+import NodeHologram from "./NodeHologram";
 import ConstellationWidget from "./ConstellationWidget";
 import ProjectsWidget from "./ProjectsWidget";
 import ThreatsWidget from "./ThreatsWidget";
@@ -100,18 +106,82 @@ function ColorSliders({ value, onChange }: { value: string; onChange: (hsl: stri
 }
 
 // ── Moving particle canvas ─────────────────────────────────────────────────
+//
+// Two things this field has to do that a plain drifting starfield does not:
+//
+// 1. Fake the camera. The canvas is mounted OUTSIDE the camera-transformed
+//    layer, so when the map flies to a node the field would otherwise sit
+//    frozen behind it and the depth illusion collapses. Every particle carries
+//    a `depth` (0 = far, 1 = near) and is projected through a weakened copy of
+//    the camera transform — near particles take almost all of the zoom and pan,
+//    far ones barely move. Wrapping is done in each layer's OWN world units
+//    (not in screen space), so on-screen density stays constant at every zoom
+//    instead of thinning out as the field is magnified.
+//
+// 2. Answer the pointer. A soft radial push inside a falloff radius, plus a
+//    tangential drag carried by the cursor's own velocity, applied as an
+//    impulse on the particle's velocity which then relaxes back to the drift it
+//    was born with. Nothing is yanked; the field stirs and settles.
+//
+// The camera values arrive as framer-motion MotionValues and are read with
+// `.get()` inside the RAF loop — subscribing React to them would re-render the
+// whole menu sixty times a second.
+
+/** Pointer influence — radius in screen px, and impulse strengths. */
+const PTR_RADIUS = 185;
+const PTR_PUSH   = 0.055;  // steady repulsion from a resting cursor
+const PTR_SWIRL  = 0.030;  // drag carried by cursor velocity
+const VEL_RELAX  = 0.040;  // per-frame pull back toward birth drift
+const MAX_SPEED  = 1.8;
+const WRAP_MARGIN = 56;    // wrap this far off-screen so pops are never seen
+
 function ParticleCanvas({
   width, height, count = 280, particleHue, saturation = DEFAULT_PARTICLE_SATURATION,
-}: { width: number; height: number; count?: number; particleHue?: number; saturation?: number }) {
+  camScale, camX, camY, depthStrength = 1,
+}: {
+  width: number; height: number; count?: number; particleHue?: number; saturation?: number;
+  camScale?: MotionValue<number>; camX?: MotionValue<number>; camY?: MotionValue<number>;
+  /** 0 disables camera parallax entirely (edit mode). */
+  depthStrength?: number;
+}) {
   const canvasRef  = useRef<HTMLCanvasElement>(null);
   const countRef   = useRef(count);
   const hueRef     = useRef(particleHue);
   const satRef     = useRef(saturation);
+  const depthRef   = useRef(depthStrength);
+  const camRef     = useRef({ camScale, camX, camY });
+
+  // Pointer state lives in a ref: a mousemove that set React state would
+  // re-render the menu on every pixel of cursor travel.
+  const ptrRef = useRef({ x: -9999, y: -9999, vx: 0, vy: 0, active: false });
 
   // Keep refs in sync so the RAF loop always reads current values
   useEffect(() => { countRef.current = count; }, [count]);
   useEffect(() => { hueRef.current   = particleHue; }, [particleHue]);
   useEffect(() => { satRef.current   = saturation; }, [saturation]);
+  useEffect(() => { depthRef.current = depthStrength; }, [depthStrength]);
+  useEffect(() => { camRef.current   = { camScale, camX, camY }; }, [camScale, camX, camY]);
+
+  useEffect(() => {
+    const ptr = ptrRef.current;
+    function onMove(e: MouseEvent) {
+      // movementX/Y is already a per-event delta, so it doubles as velocity
+      // without keeping a previous sample around.
+      ptr.vx = Math.max(-14, Math.min(14, (e.movementX || 0)));
+      ptr.vy = Math.max(-14, Math.min(14, (e.movementY || 0)));
+      ptr.x = e.clientX; ptr.y = e.clientY;
+      ptr.active = true;
+    }
+    function onLeave() { ptr.active = false; }
+    window.addEventListener("mousemove", onMove, { passive: true });
+    window.addEventListener("mouseleave", onLeave);
+    window.addEventListener("blur", onLeave);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseleave", onLeave);
+      window.removeEventListener("blur", onLeave);
+    };
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -119,15 +189,32 @@ function ParticleCanvas({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
+    const reduced = typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // A reduced-motion field still has depth, just a shallower one, and the
+    // pointer only breathes on it.
+    const depthGain = reduced ? 0.4 : 1;
+    const ptrGain   = reduced ? 0.35 : 1;
+
     // Spawn MAX_COUNT particles once; only draw the first `countRef.current` of them
     const MAX = 560;
     const particles = Array.from({ length: MAX }, () => {
       const angle = Math.random() * Math.PI * 2;
       const speed = Math.random() * 0.18 + 0.04;
+      const r     = Math.random() * 1.5 + 0.3;
+      const vx    = Math.cos(angle) * speed;
+      const vy    = Math.sin(angle) * speed;
       return {
         x: Math.random() * width, y: Math.random() * height,
-        vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-        r: Math.random() * 1.5 + 0.3,
+        vx, vy,
+        // Birth drift — every impulse decays back to this, so the field always
+        // returns to the motion it started with.
+        bvx: vx, bvy: vy,
+        r,
+        // Depth is read off the radius the particle already had, so a resting
+        // field looks exactly as it did before: big dots simply turn out to be
+        // the near ones.
+        depth: 0.14 + ((r - 0.3) / 1.5) * 0.86,
         alpha: Math.random() * 0.6 + 0.15,
         phase: Math.random() * Math.PI * 2,
         flicker: Math.random() * 0.025 + 0.008,
@@ -137,6 +224,8 @@ function ParticleCanvas({
     let t = 0;
     let raf: number;
     let cancelled = false;
+
+    const mod = (a: number, b: number) => ((a % b) + b) % b;
 
     function draw() {
       if (cancelled) return;
@@ -154,17 +243,71 @@ function ParticleCanvas({
       // editor, which used to be pinned at a washed-out 55.
       const sat = isWhite ? 10 : Math.max(0, Math.min(100, satRef.current));
 
+      // ── Camera, read once per frame ────────────────────────────────────
+      const cam = camRef.current;
+      const gain = depthGain * depthRef.current;
+      const camS = cam.camScale ? cam.camScale.get() : 1;
+      const camTX = cam.camX ? cam.camX.get() : 0;
+      const camTY = cam.camY ? cam.camY.get() : 0;
+
+      const ptr = ptrRef.current;
+      // Cursor velocity is an impulse, not a state — bleed it off every frame
+      // so a cursor that stops moving stops dragging.
+      ptr.vx *= 0.86; ptr.vy *= 0.86;
+
       const visible = Math.min(countRef.current, MAX);
       for (let i = 0; i < visible; i++) {
         const p = particles[i];
         p.x += p.vx; p.y += p.vy;
-        if (p.x < -2)        p.x = width + 2;
-        if (p.x > width + 2) p.x = -2;
-        if (p.y < -2)        p.y = height + 2;
-        if (p.y > height + 2) p.y = -2;
+
+        // Per-layer camera: depth 0 sits still, depth 1 rides the full move.
+        const d  = p.depth * gain;
+        const es = 1 + (camS - 1) * d;      // this layer's effective zoom
+        const tx = camTX * d;               // this layer's effective pan
+        const ty = camTY * d;
+
+        // Wrap inside the world window this layer actually shows, so density
+        // on screen never changes with zoom.
+        const spanX = (width  + WRAP_MARGIN * 2) / es;
+        const spanY = (height + WRAP_MARGIN * 2) / es;
+        const originX = (-WRAP_MARGIN - tx) / es;
+        const originY = (-WRAP_MARGIN - ty) / es;
+        p.x = originX + mod(p.x - originX, spanX);
+        p.y = originY + mod(p.y - originY, spanY);
+
+        const sx = p.x * es + tx;
+        const sy = p.y * es + ty;
+
+        if (ptr.active) {
+          const dx = sx - ptr.x, dy = sy - ptr.y;
+          const dist2 = dx * dx + dy * dy;
+          if (dist2 < PTR_RADIUS * PTR_RADIUS) {
+            const dist = Math.sqrt(dist2) || 0.0001;
+            const fall = 1 - dist / PTR_RADIUS;
+            const f = fall * fall * ptrGain;   // squared falloff = soft edge
+            // Impulses are computed in screen px, so divide by this layer's
+            // zoom to convert back into the world units velocity lives in.
+            p.vx += ((dx / dist) * PTR_PUSH + ptr.vx * PTR_SWIRL) * f / es;
+            p.vy += ((dy / dist) * PTR_PUSH + ptr.vy * PTR_SWIRL) * f / es;
+          }
+        }
+
+        // Relax toward birth drift, then clamp — the field can be stirred but
+        // never thrown.
+        p.vx += (p.bvx - p.vx) * VEL_RELAX;
+        p.vy += (p.bvy - p.vy) * VEL_RELAX;
+        const sp2 = p.vx * p.vx + p.vy * p.vy;
+        if (sp2 > MAX_SPEED * MAX_SPEED) {
+          const k = MAX_SPEED / Math.sqrt(sp2);
+          p.vx *= k; p.vy *= k;
+        }
+
+        if (sx < -4 || sx > width + 4 || sy < -4 || sy > height + 4) continue;
+
         const flicker = Math.sin(t * p.flicker + p.phase) * 0.28 + 0.72;
         ctx!.beginPath();
-        ctx!.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        // Near particles gain a little size with the zoom; far ones stay pins.
+        ctx!.arc(sx, sy, p.r * (0.82 + 0.18 * es), 0, Math.PI * 2);
         ctx!.fillStyle = `hsla(${h}, ${sat}%, 80%, ${(p.alpha * flicker).toFixed(3)})`;
         ctx!.fill();
       }
@@ -452,29 +595,21 @@ export default function ConstellationMenu({ onClose }: Props) {
   // Persist whenever layout changes
   useEffect(() => { saveLayout(layout); }, [layout]);
 
-  // Apply ray state (position + direction + colour) to shared state whenever layout changes
+  // Push the layout into live renderer state. `applyLayout` is the same
+  // function App calls at boot — the editor deliberately has no private copy of
+  // this logic, because two copies is what made a cold start look nothing like
+  // the settings you had saved.
+  //
+  // The dependency list stays field-by-field rather than `[layout]` so dragging
+  // a node, which rewrites `layout` on every pointer move, does not re-apply
+  // the audio settings sixty times a second.
   useEffect(() => {
-    // Pin source if user had set a position, otherwise let it drift freely
-    if (layout.ray.x !== 0 || layout.ray.y !== 0) {
-      pinRaySource(
-        Math.max(0.01, Math.min(0.99, 0.5  + layout.ray.x)),
-        Math.max(0.01, Math.min(0.99, 0.28 + layout.ray.y)),
-      );
-    } else {
-      pinRaySource(null, null);
-    }
-    setRayDirection(layout.ray.dirAngle ?? null);
-    setRayColor(layout.ray.rayColor ?? DEFAULT_RAY_COLOR);
-    setRayBrightness(layout.ray.rayBrightness ?? 1.0);
-    setAccentColor(layout.accentColor ?? DEFAULT_ACCENT_COLOR);
-    setAkiraAmbience(
-      layout.akiraGradientA ?? DEFAULT_AKIRA_GRADIENT_A,
-      layout.akiraGradientB ?? DEFAULT_AKIRA_GRADIENT_B,
-      layout.akiraIntensity ?? DEFAULT_AKIRA_INTENSITY,
-    );
+    applyLayout(layout);
   }, [
-    layout.ray.x, layout.ray.y, layout.ray.dirAngle, layout.ray.rayColor, layout.ray.rayBrightness,
+    layout.ray.x, layout.ray.y, layout.ray.dirAngle, layout.ray.rayColor,
+    layout.ray.rayBrightness, layout.ray.rayFloat,
     layout.accentColor, layout.akiraGradientA, layout.akiraGradientB, layout.akiraIntensity,
+    layout.soundEnabled, layout.soundVolume, layout.soundPitch,
   ]);
 
   // Dims
@@ -567,7 +702,7 @@ export default function ConstellationMenu({ onClose }: Props) {
       if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
         if (editMode) { setEditMode(false); return; }
-        if (selectedId) setSelectedId(null);
+        if (selectedId) { playCue("nodeDeselect"); setSelectedId(null); }
         else onClose();
         return;
       }
@@ -618,7 +753,23 @@ export default function ConstellationMenu({ onClose }: Props) {
     const normX = Math.max(0.01, Math.min(0.99, 0.5  + x));
     const normY = Math.max(0.01, Math.min(0.99, 0.28 + y));
     pinRaySource(normX, normY);
-    setLayout(prev => ({ ...prev, ray: { ...prev.ray, x, y } }));
+    // Dragging the handle is an explicit decision about where the source sits,
+    // so it takes the ray out of float.
+    setLayout(prev => ({ ...prev, ray: { ...prev.ray, x, y, rayFloat: false } }));
+  }, []);
+
+  /**
+   * Float the source, or pin it back where it was.
+   *
+   * Turning float on also clears the beam angle: a source that moves while the
+   * beam points at a fixed heading sweeps the light across the room, which
+   * reads as a fault rather than as a choice.
+   */
+  const handleRayFloat = useCallback((floating: boolean) => {
+    setLayout(prev => ({
+      ...prev,
+      ray: { ...prev.ray, rayFloat: floating, dirAngle: floating ? null : prev.ray.dirAngle },
+    }));
   }, []);
 
   const handleRayDirection = useCallback((angle: number | null) => {
@@ -676,16 +827,32 @@ export default function ConstellationMenu({ onClose }: Props) {
     });
   }, []);
 
+  // Sound, applied immediately for the same reason the colours are: the only
+  // way to judge a cue is to hear it at the setting you just chose.
+  const handleSoundEnabled = useCallback((v: boolean) => {
+    setLayout(prev => ({ ...prev, soundEnabled: v }));
+    setSoundEnabled(v);
+    if (v) playCue("nodeSelect", { force: true });
+  }, []);
+
+  const handleSoundVolume = useCallback((v: number) => {
+    setLayout(prev => ({ ...prev, soundVolume: v }));
+    setSoundVolume(v);
+  }, []);
+
+  // Pitch arrives from the slider in semitones and is stored as the multiplier
+  // the synth actually uses, so nothing downstream has to convert.
+  const handleSoundSemitones = useCallback((semitones: number) => {
+    const v = Math.pow(2, semitones / 12);
+    setLayout(prev => ({ ...prev, soundPitch: v }));
+    setSoundPitch(v);
+  }, []);
+
   const handleReset = useCallback(() => {
     resetLayout();
     const fresh = defaultLayout();
     setLayout(fresh);
-    setAkiraAmbience(fresh.akiraGradientA, fresh.akiraGradientB, fresh.akiraIntensity);
-    pinRaySource(null, null);
-    setRayDirection(null);
-    setRayColor(DEFAULT_RAY_COLOR);
-    setRayBrightness(1.0);
-    setAccentColor(DEFAULT_ACCENT_COLOR);
+    applyLayout(fresh);
     setRayEditOffset(0, 0);
   }, []);
 
@@ -699,6 +866,13 @@ export default function ConstellationMenu({ onClose }: Props) {
   const selectedNode = effectiveNodes.find(n => n.id === selectedId) ?? null;
   const activeId     = editMode ? null : (hoveredId ?? selectedId);
 
+  // One read at mount — the hologram and the assembly effect both branch on it.
+  const prefersReduced = useMemo(
+    () => typeof window !== "undefined" && typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    [],
+  );
+
   // Track camScale as a plain state so NodeBranchMenu receives a reactive value
   const [camScaleVal, setCamScaleVal] = useState(1);
   useEffect(() => {
@@ -707,9 +881,19 @@ export default function ConstellationMenu({ onClose }: Props) {
 
   const handleSelect = useCallback((id: string | null) => {
     if (editMode) return; // no navigation in edit mode
+    playCue(id ? "nodeSelect" : "nodeDeselect");
     setSelectedId(id);
     if (id) setHoveredId(null);
   }, [editMode]);
+
+  // Hover ticks live here rather than inside ConstellationNode because edit
+  // mode swaps these callbacks for no-ops. A cue fired from the node itself
+  // would still sound while dragging nodes around, which is the one place it
+  // must not.
+  const handleHover = useCallback((id: string | null) => {
+    if (id) playCue("nodeHover");
+    setHoveredId(id);
+  }, []);
 
   return (
     <div
@@ -729,7 +913,11 @@ export default function ConstellationMenu({ onClose }: Props) {
         height={dims.h}
         count={layout.particleCount ?? 280}
         particleHue={layout.particleHue ?? undefined}
-          saturation={layout.particleSaturation ?? DEFAULT_PARTICLE_SATURATION}
+        saturation={layout.particleSaturation ?? DEFAULT_PARTICLE_SATURATION}
+        camScale={camScale}
+        camX={camX}
+        camY={camY}
+        depthStrength={editMode ? 0 : 1}
       />
 
       {/* Edit mode grid overlay */}
@@ -786,7 +974,7 @@ export default function ConstellationMenu({ onClose }: Props) {
               x={-1000} y={-1000}
               width={dims.w + 2000} height={dims.h + 2000}
               fill="transparent"
-              onClick={selectedId && !editMode ? () => setSelectedId(null) : undefined}
+              onClick={selectedId && !editMode ? () => handleSelect(null) : undefined}
               style={{ cursor: selectedId && !editMode ? "default" : "none", pointerEvents: selectedId && !editMode ? "auto" : "none" }}
             />
             {/* Connection lines */}
@@ -823,7 +1011,7 @@ export default function ConstellationMenu({ onClose }: Props) {
                   isActive={!editMode && activeId !== null}
                   screenX={pos.x}
                   screenY={pos.y}
-                  onHover={editMode ? () => {} : setHoveredId}
+                  onHover={editMode ? () => {} : handleHover}
                   onSelect={editMode ? () => {} : handleSelect}
                 />
               );
@@ -875,6 +1063,23 @@ export default function ConstellationMenu({ onClose }: Props) {
         </motion.div>
       </motion.div>
 
+      {/* Holographic dossier — projected onto the half of the screen the
+          branch fan leaves empty. Outside the camera layer on purpose: at
+          2.2x zoom every glyph in it would be resampled. */}
+      <AnimatePresence>
+        {!editMode && selectedNode && nodePositions[selectedNode.id] && (
+          <NodeHologram
+            key={selectedNode.id}
+            node={selectedNode}
+            nodeX={nodePositions[selectedNode.id].x}
+            nodeY={nodePositions[selectedNode.id].y}
+            width={dims.w}
+            height={dims.h}
+            reduced={prefersReduced}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Ray source handle + direction handle + colour picker — fixed position, edit mode only */}
       {editMode && (() => {
         const W = window.innerWidth;
@@ -884,9 +1089,16 @@ export default function ConstellationMenu({ onClose }: Props) {
         const currentColor = layout.ray.rayColor ?? DEFAULT_RAY_COLOR;
         const currentBrightness  = layout.ray.rayBrightness ?? 1.0;
         const currentAccent      = layout.accentColor ?? DEFAULT_ACCENT_COLOR;
+        const rayFloating        = isRayFloating(layout);
         const akiraA             = layout.akiraGradientA ?? DEFAULT_AKIRA_GRADIENT_A;
         const akiraB             = layout.akiraGradientB ?? DEFAULT_AKIRA_GRADIENT_B;
         const akiraIntensity     = layout.akiraIntensity ?? DEFAULT_AKIRA_INTENSITY;
+        const soundEnabled       = layout.soundEnabled ?? DEFAULT_SOUND_ENABLED;
+        const soundVolume        = layout.soundVolume ?? DEFAULT_SOUND_VOLUME;
+        const soundPitch         = layout.soundPitch ?? DEFAULT_SOUND_PITCH;
+        // The stored value is a multiplier; the slider works in semitones,
+        // which is the scale the ear actually hears a transposition on.
+        const soundSemitones     = Math.round(12 * Math.log2(soundPitch));
 
         const ACCENT_PRESETS: { label: string; hsl: string }[] = [
           { label: "Gold", hsl: "43 100% 58%"  },
@@ -917,16 +1129,21 @@ export default function ConstellationMenu({ onClose }: Props) {
 
         return (
           <>
-            <RayHandle
-              offset={layout.ray}
-              onDrag={handleRayDrag}
-            />
-            <DirectionHandle
-              sourceX={srcScreenX}
-              sourceY={srcScreenY}
-              angle={layout.ray.dirAngle}
-              onAngle={handleRayDirection}
-            />
+            {/* Nothing to drag or aim while the source is flying itself. */}
+            {!rayFloating && (
+              <>
+                <RayHandle
+                  offset={layout.ray}
+                  onDrag={handleRayDrag}
+                />
+                <DirectionHandle
+                  sourceX={srcScreenX}
+                  sourceY={srcScreenY}
+                  angle={layout.ray.dirAngle}
+                  onAngle={handleRayDirection}
+                />
+              </>
+            )}
 
             {/* Ray colour picker — fixed top-left card */}
             <div
@@ -941,8 +1158,54 @@ export default function ConstellationMenu({ onClose }: Props) {
                 padding: "10px 12px",
                 backdropFilter: "blur(12px)",
                 minWidth: 160,
+                // The card now carries ray, accent, glow, sound and particles.
+                // Without this it runs off the bottom of a laptop screen and
+                // the last section is unreachable.
+                maxHeight: "calc(100vh - 40px)",
+                overflowY: "auto",
               }}
             >
+              {/* Ray source — floating or pinned. */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                <p style={{
+                  fontFamily: "DM Mono, monospace",
+                  fontSize: 8,
+                  color: "hsl(var(--accent-h) 40% 42%)",
+                  letterSpacing: "0.18em",
+                  textTransform: "uppercase",
+                  margin: 0,
+                }}>Ray Source</p>
+                <button
+                  onClick={() => handleRayFloat(!rayFloating)}
+                  style={{
+                    fontFamily: "DM Mono, monospace",
+                    fontSize: 7,
+                    letterSpacing: "0.14em",
+                    textTransform: "uppercase",
+                    padding: "2px 7px",
+                    borderRadius: 3,
+                    cursor: "pointer",
+                    color: rayFloating ? "hsl(var(--accent-h) 70% 66%)" : "hsl(var(--accent-h) 30% 46%)",
+                    background: rayFloating ? "hsl(var(--accent-h) 60% 50% / 0.14)" : "transparent",
+                    border: rayFloating
+                      ? "1px solid hsl(var(--accent-h) 50% 40%)"
+                      : "1px solid hsl(var(--accent-h) 15% 22%)",
+                  }}
+                >{rayFloating ? "Float" : "Pinned"}</button>
+              </div>
+              <p style={{
+                fontFamily: "DM Mono, monospace",
+                fontSize: 7,
+                lineHeight: 1.6,
+                color: "hsl(var(--accent-h) 25% 32%)",
+                letterSpacing: "0.06em",
+                margin: "0 0 10px",
+              }}>
+                {rayFloating
+                  ? "Drifting on its own path. Direction stays on Auto while it moves."
+                  : "Fixed where you dragged it. Drag the on-screen handles to move or aim it."}
+              </p>
+
               <p style={{
                 fontFamily: "DM Mono, monospace",
                 fontSize: 8,
@@ -1122,6 +1385,111 @@ export default function ConstellationMenu({ onClose }: Props) {
                 onChange={e => handleAkiraIntensity(Number(e.target.value))}
                 style={{ width: "100%", accentColor: `hsl(${akiraA})`, cursor: "pointer" }}
               />
+
+              {/* Divider */}
+              <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />
+
+              {/* Sound cues.
+                  Synthesised rather than sampled, so tuning one is only a
+                  matter of changing numbers — but you still have to hear it.
+                  The preview row fires each cue where it can be judged, rather
+                  than making you navigate the app hunting for its trigger. */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                <p style={{
+                  fontFamily: "DM Mono, monospace",
+                  fontSize: 8,
+                  color: "hsl(var(--accent-h) var(--accent-s) var(--accent-l))",
+                  letterSpacing: "0.18em",
+                  textTransform: "uppercase",
+                  margin: 0,
+                }}>Sound</p>
+                <button
+                  onClick={() => handleSoundEnabled(!soundEnabled)}
+                  style={{
+                    fontFamily: "DM Mono, monospace",
+                    fontSize: 7,
+                    letterSpacing: "0.14em",
+                    textTransform: "uppercase",
+                    padding: "2px 7px",
+                    borderRadius: 3,
+                    cursor: "pointer",
+                    color: soundEnabled ? "hsl(var(--accent-h) 70% 66%)" : "hsl(var(--accent-h) 15% 34%)",
+                    background: soundEnabled ? "hsl(var(--accent-h) 60% 50% / 0.14)" : "transparent",
+                    border: soundEnabled
+                      ? "1px solid hsl(var(--accent-h) 50% 40%)"
+                      : "1px solid hsl(var(--accent-h) 15% 22%)",
+                  }}
+                >{soundEnabled ? "On" : "Off"}</button>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 30% 35%)", letterSpacing: "0.14em", textTransform: "uppercase", margin: 0 }}>Volume</p>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 8, color: "hsl(var(--accent-h) 60% 60%)", margin: 0 }}>{Math.round(soundVolume * 100)}%</p>
+              </div>
+              {/* Preview fires on release, not on every step — dragging the
+                  slider would otherwise machine-gun the cue. */}
+              <input
+                type="range" min={0} max={1} step={0.05}
+                value={soundVolume}
+                disabled={!soundEnabled}
+                onChange={e => handleSoundVolume(Number(e.target.value))}
+                onMouseUp={() => playCue("nodeSelect", { force: true })}
+                onKeyUp={() => playCue("nodeSelect", { force: true })}
+                style={{
+                  width: "100%",
+                  accentColor: "hsl(var(--accent-h) var(--accent-s) var(--accent-l))",
+                  cursor: soundEnabled ? "pointer" : "not-allowed",
+                  opacity: soundEnabled ? 1 : 0.35,
+                  marginBottom: 8,
+                }}
+              />
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 30% 35%)", letterSpacing: "0.14em", textTransform: "uppercase", margin: 0 }}>Pitch</p>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 8, color: "hsl(var(--accent-h) 60% 60%)", margin: 0 }}>{soundSemitones > 0 ? "+" : ""}{soundSemitones} st</p>
+              </div>
+              {/* Transposes every frequency at once — voices, filter bands, the
+                  comb's enclosure, the room's window. Timing is untouched, so
+                  the machine stays a machine and only its material moves. */}
+              <input
+                type="range" min={-8} max={12} step={1}
+                value={soundSemitones}
+                disabled={!soundEnabled}
+                onChange={e => handleSoundSemitones(Number(e.target.value))}
+                onMouseUp={() => playCue("domainEnter", { force: true })}
+                onKeyUp={() => playCue("domainEnter", { force: true })}
+                style={{
+                  width: "100%",
+                  accentColor: "hsl(var(--accent-h) var(--accent-s) var(--accent-l))",
+                  cursor: soundEnabled ? "pointer" : "not-allowed",
+                  opacity: soundEnabled ? 1 : 0.35,
+                  marginBottom: 8,
+                }}
+              />
+
+              <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 30% 35%)", letterSpacing: "0.14em", textTransform: "uppercase", margin: "0 0 5px" }}>Preview</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {CUE_NAMES.map(name => (
+                  <button
+                    key={name}
+                    disabled={!soundEnabled}
+                    onClick={() => playCue(name, { force: true })}
+                    style={{
+                      fontFamily: "DM Mono, monospace",
+                      fontSize: 7,
+                      letterSpacing: "0.1em",
+                      textTransform: "uppercase",
+                      padding: "3px 6px",
+                      borderRadius: 3,
+                      cursor: soundEnabled ? "pointer" : "not-allowed",
+                      opacity: soundEnabled ? 1 : 0.35,
+                      color: "hsl(var(--accent-h) 50% 58%)",
+                      background: "hsl(222 18% 11% / 0.9)",
+                      border: "1px solid hsl(var(--accent-h) 20% 20%)",
+                    }}
+                  >{CUE_LABELS[name]}</button>
+                ))}
+              </div>
 
               {/* Divider */}
               <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />

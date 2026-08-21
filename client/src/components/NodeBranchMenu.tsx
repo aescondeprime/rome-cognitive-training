@@ -18,6 +18,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { ConstellationNode } from "@/lib/constellationData";
+import { suppressCue } from "@/lib/sound";
 
 // ── constants ─────────────────────────────────────────────────────────────
 const BRANCH_LEN   = 88;   // px — stem length (in SVG coords)
@@ -144,6 +145,9 @@ export default function NodeBranchMenu({
 
   const go = useCallback((e: React.MouseEvent, href: string) => {
     e.stopPropagation();
+    // Closing the map and entering the domain are one gesture, not two. Let the
+    // arrival cue carry it — the close cue underneath only muddies the attack.
+    suppressCue("constellationClose", 500);
     onClose();
     onNavigate(href);
     window.location.hash = href;

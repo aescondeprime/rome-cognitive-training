@@ -88,8 +88,9 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     size: 18,
     depth: 0.9,
     href: "/athena",
-    tagline: "Six cognitive trials — adaptive, precise, and minimal",
+    tagline: "MIDAS — your intelligence profile, and the six trials that feed it",
     subnodes: [
+      { id: "at-midas", label: "MIDAS Dashboard",       icon: "◈", href: "/athena",               description: "Multiple-intelligences profile, scales, and skills" },
       { id: "at-dnb",   label: "Dual N-Back",          icon: "⟁", href: "/athena/dual-n-back",   description: "Simultaneous audio + visual n-back task" },
       { id: "at-cwm",   label: "Complex Working Memory", icon: "◈", href: "/athena/cwm",           description: "Verbal or spatial span with decision interference" },
       { id: "at-math",  label: "Mental Math",            icon: "∑", href: "/athena/mental-math",   description: "Progressive arithmetic under time pressure" },
@@ -113,7 +114,7 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     href: "/strategic",
     tagline: "Planning, execution, and decision architecture",
     subnodes: [
-      { id: "st-task",   label: "Taskboard",    icon: "⊟", href: "/taskboard",    description: "Strategic task planning board" },
+      { id: "st-task",   label: "Contingency Garden", icon: "❦", href: "/taskboard",    description: "Branching plans with contingencies, traced into lettered routes" },
       { id: "st-kronos", label: "Kronos Keep",   icon: "⧗", href: "/kronos-keep",  description: "Time-aware calendar with routines, assignments and events" },
     ],
     connections: ["creative", "investigative"],

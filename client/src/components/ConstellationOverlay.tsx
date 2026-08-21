@@ -5,10 +5,27 @@
 //
 // Lives at the root of the app (above AppShell) via a React Portal.
 
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback, useState, useRef } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import ConstellationMenu from "./ConstellationMenu";
+import NanoTransition from "./NanoTransition";
+import { playCue } from "@/lib/sound";
+
+/**
+ * Assembly and disassembly timings, ms.
+ *
+ * Both are deliberately short. This is a transition the user makes constantly —
+ * Tab in, Tab out — and anything that reads as "an animation you wait through"
+ * would grate within a day. Build gets slightly longer than deconstruct because
+ * arriving somewhere deserves more ceremony than leaving it.
+ */
+const BUILD_MS = 560;
+const DECON_MS = 420;
+/** Reduced motion still gets a beat, just not a performance. */
+const REDUCED_MS = 150;
+
+type Phase = "idle" | "building" | "open" | "deconstructing";
 
 // Exported trigger button — rendered inside AppShell footer
 export function ConstellationTrigger({ onOpen }: { onOpen: () => void }) {
@@ -56,9 +73,61 @@ export function ConstellationTrigger({ onOpen }: { onOpen: () => void }) {
 // The portal overlay — mount this once at app root
 export function ConstellationPortal() {
   const [open, setOpen] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const timer = useRef<number | null>(null);
 
-  const openMap  = useCallback(() => setOpen(true), []);
-  const closeMap = useCallback(() => setOpen(false), []);
+  const reduced = typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const buildMs = reduced ? REDUCED_MS : BUILD_MS;
+  const deconMs = reduced ? REDUCED_MS : DECON_MS;
+
+  // The cue needs to know which way the map is moving, and a functional
+  // setState updater is the wrong place to ask: React runs it twice under
+  // StrictMode, which would fire the sound twice. A ref beside the state gives
+  // one synchronous answer, and also lets the toggle skip a no-op transition.
+  const openRef = useRef(false);
+
+  /**
+   * Drive the phase machine.
+   *
+   * The map stays mounted through `deconstructing` on purpose: you should watch
+   * it come apart, not watch a blank screen where it used to be. The pending
+   * timer is always cleared first, so hammering Tab mid-transition reverses
+   * cleanly instead of leaving a stale callback to unmount the map underneath a
+   * fresh build.
+   */
+  const applyOpen = useCallback((next: boolean) => {
+    if (openRef.current === next) return;
+    openRef.current = next;
+    playCue(next ? "constellationOpen" : "constellationClose");
+
+    if (timer.current !== null) { window.clearTimeout(timer.current); timer.current = null; }
+
+    if (next) {
+      setOpen(true);
+      setPhase("building");
+      timer.current = window.setTimeout(() => {
+        timer.current = null;
+        setPhase("open");
+      }, buildMs);
+    } else {
+      setPhase("deconstructing");
+      timer.current = window.setTimeout(() => {
+        timer.current = null;
+        setOpen(false);
+        setPhase("idle");
+      }, deconMs);
+    }
+  }, [buildMs, deconMs]);
+
+  useEffect(() => () => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+  }, []);
+
+  const openMap   = useCallback(() => applyOpen(true),  [applyOpen]);
+  const closeMap  = useCallback(() => applyOpen(false), [applyOpen]);
+  const toggleMap = useCallback(() => applyOpen(!openRef.current), [applyOpen]);
 
   // Tab key toggles
   useEffect(() => {
@@ -68,12 +137,12 @@ export function ConstellationPortal() {
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
         e.preventDefault();
-        setOpen(v => !v);
+        toggleMap();
       }
     }
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, []);
+  }, [toggleMap]);
 
   // Native WebContentsViews render above the React compositor regardless of
   // CSS z-index. Keep the browser page detached while the map owns the screen.
@@ -88,8 +157,8 @@ export function ConstellationPortal() {
   // When a remote page has focus its key events never reach this renderer.
   // Electron main intercepts ROME's Tab shortcut and forwards only this toggle.
   useEffect(() => {
-    return window.romeDesktop?.browser.onConstellationToggle(() => setOpen(v => !v));
-  }, []);
+    return window.romeDesktop?.browser.onConstellationToggle(toggleMap);
+  }, [toggleMap]);
 
   // Expose openMap so the trigger button inside AppShell can call it
   useEffect(() => {
@@ -97,21 +166,41 @@ export function ConstellationPortal() {
     return () => { delete (window as any).__romeOpenConstellation; };
   }, [openMap]);
 
+  const assembling = phase === "building" || phase === "deconstructing";
+
   return createPortal(
-    <AnimatePresence>
+    <>
       {open && (
         <motion.div
           key="constellation-overlay"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.3 }}
+          // The map itself only ever fades and breathes a little; the plates
+          // carry the gesture. Two competing animations would read as mush.
+          initial={{ opacity: 0, scale: 1.04 }}
+          animate={
+            phase === "deconstructing"
+              ? { opacity: 0, scale: 1.03 }
+              : { opacity: 1, scale: 1 }
+          }
+          transition={{
+            duration: (phase === "deconstructing" ? deconMs : buildMs) / 1000,
+            // Arrive fast and settle; leave by falling away.
+            ease: phase === "deconstructing" ? [0.4, 0, 1, 1] : [0.16, 0.9, 0.3, 1],
+          }}
           style={{ position: "fixed", inset: 0, zIndex: 200 }}
         >
           <ConstellationMenu onClose={closeMap} />
         </motion.div>
       )}
-    </AnimatePresence>,
+      {assembling && !reduced && (
+        <NanoTransition
+          // Remounting per pass is the point: each transition wants a freshly
+          // scattered field, and the key is what forces it.
+          key={`nano-${phase}-${open}`}
+          mode={phase === "building" ? "build" : "deconstruct"}
+          duration={phase === "building" ? buildMs : deconMs}
+        />
+      )}
+    </>,
     document.body
   );
 }
