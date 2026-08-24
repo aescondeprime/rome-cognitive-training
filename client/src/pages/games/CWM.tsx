@@ -1,28 +1,43 @@
 /**
- * Complex Working Memory (CWM)
- * Verbal: decide if a word is spelled correctly → remember a letter
- * Spatial: decide if a figure is Y-axis symmetric → remember a grid cell
- * Recall all memorized items in order after all rounds
- * Adaptive: advance level when ≥ 80% correct, fall back when < 50%
+ * Complex Working Memory
+ *
+ * The classic complex-span shape: a processing task you must keep answering
+ * (is this word spelled right / is this shape symmetric about the vertical
+ * axis) interleaved with items to hold, all recalled in order at the end.
+ *
+ * Changes from the first version:
+ *
+ * - **Keyboard answers.** Yes/No are bound to keys — A and L by default,
+ *   rebindable, because the mouse round-trip was most of the response time and
+ *   because the Arena needs two drills to be able to avoid each other's keys.
+ * - **Recall by keyboard too** in the verbal variant: type the letter.
+ * - **The processing task is scored**, not just performed. Answering the
+ *   spelling questions at chance while nailing recall is not the same skill,
+ *   and the result screen now says so.
  */
-import { useState, useEffect, useCallback, useRef } from "react";
-import { ArrowLeft, Settings2, Play, RotateCcw } from "lucide-react";
-import { Link } from "wouter";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import GameShell, { type Setting } from "@/components/games/GameShell";
+import {
+  MONO, SERIF, alpha, keyLabel, pick, randInt, useGameConfig, useGameKeys, useScaled,
+  type GameProps,
+} from "@/lib/gameKit";
 import { recordDrillResultInBackground } from "@/lib/trainingRecorder";
 
-// ── Word lists for verbal decision ────────────────────────────────────────
 const CORRECT_WORDS = ["brief","cloud","dream","earth","flame","grace","heart","light","magic","night","ocean","peace","quiet","river","storm","think","under","voice","water","world"];
-const WRONG_WORDS   = ["breif","cloud","dreem","earht","flmae","graec","haert","lihgt","mgicc","nihgt","ocaen","paece","qiuet","rivir","strom","tinhk","undre","voiice","watre","wrold"];
+const WRONG_WORDS   = ["breif","cluod","dreem","earht","flmae","graec","haert","lihgt","mgicc","nihgt","ocaen","paece","qiuet","rivir","strom","tinhk","undre","voiice","watre","wrold"];
 
-// ── Symmetric shapes SVG paths (Y-axis symmetric) ─────────────────────────
 const SYM_SHAPES  = ["M10,2 L18,10 L14,18 L10,14 L6,18 L2,10 Z", "M10,2 L18,10 L10,18 L2,10 Z", "M2,10 L10,2 L18,10 L10,18 Z", "M5,2 L15,2 L18,10 L15,18 L5,18 L2,10 Z"];
 const ASYM_SHAPES = ["M2,2 L14,4 L18,14 L8,18 Z", "M2,6 L16,2 L18,16 L4,18 Z", "M2,2 L18,8 L14,18 L6,12 Z", "M4,2 L18,4 L16,18 L2,12 Z"];
 
 const LETTERS_POOL = "BCDFGHJKLMNPQRSTVWXZ".split("");
-const GRID_COLS = 4; const GRID_ROWS = 4; const GRID_CELLS = GRID_COLS * GRID_ROWS;
+const GRID_COLS = 4;
+const GRID_CELLS = GRID_COLS * GRID_COLS;
 
-function pick<T>(arr: T[]): T { return arr[Math.floor(Math.random() * arr.length)]; }
-function pickIdx(max: number) { return Math.floor(Math.random() * max); }
+const accent = "hsl(270 60% 65%)";
+
+type GameType = "verbal" | "spatial";
+type Phase = "idle" | "decision" | "memorize" | "recall" | "result";
 
 interface Config {
   level: number;
@@ -30,289 +45,279 @@ interface Config {
   trialMs: number;
   threshAdvance: number;
   threshFallback: number;
+  type: GameType;
+  keyYes: string;
+  keyNo: string;
 }
-const DEFAULT_CONFIG: Config = { level: 2, decisionsPerRound: 4, trialMs: 1500, threshAdvance: 80, threshFallback: 50 };
 
-type GameType = "verbal" | "spatial";
-type Phase = "idle" | "decision" | "memorize" | "recall" | "result";
+const DEFAULTS: Config = {
+  level: 3, decisionsPerRound: 4, trialMs: 1500,
+  threshAdvance: 80, threshFallback: 50, type: "verbal",
+  keyYes: "a", keyNo: "l",
+};
 
-interface Round { decisionAnswers: boolean[]; decisionCorrect: boolean[]; itemToRemember: string | number; }
+interface Round { truths: boolean[]; item: string | number }
 
-const accent = "hsl(270 60% 65%)";
+export default function CWM({ embedded, autoStart, onSessionComplete }: GameProps) {
+  const [cfg, setCfg] = useGameConfig<Config>("cwm", DEFAULTS);
+  const px = useScaled();
 
-export default function CWM() {
-  const [cfg, setCfg] = useState<Config>(DEFAULT_CONFIG);
-  const [type, setType] = useState<GameType>("verbal");
-  const [showSettings, setShowSettings] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
-
-  // Round state
-  const [currentRound, setCurrentRound] = useState(0);
-  const [currentDecision, setCurrentDecision] = useState(0);
   const [rounds, setRounds] = useState<Round[]>([]);
-  const [currentWord, setCurrentWord] = useState("");
-  const [currentWordCorrect, setCurrentWordCorrect] = useState(false);
-  const [currentShape, setCurrentShape] = useState("");
-  const [currentShapeSym, setCurrentShapeSym] = useState(false);
-  const [currentMemItem, setCurrentMemItem] = useState<string | number | null>(null);
+  const [roundIdx, setRoundIdx] = useState(0);
+  const [decisionIdx, setDecisionIdx] = useState(0);
+  const [stimulus, setStimulus] = useState<string>("");
+  const [memItem, setMemItem] = useState<string | number | null>(null);
   const [recallInput, setRecallInput] = useState<(string | number | null)[]>([]);
   const [recallIdx, setRecallIdx] = useState(0);
-  const [score, setScore] = useState({ correct: 0, total: 0 });
+  const [score, setScore] = useState({ correct: 0, total: 0, proc: 0, procTotal: 0 });
+  const [flash, setFlash] = useState<"yes" | "no" | null>(null);
 
-  // When the current drill began, so recorded sessions carry a real duration.
-  const startedAtRef = useRef(0);
-  const buildRound = useCallback((): Round => {
-    const decisionAnswers: boolean[] = [];
-    const decisionCorrect: boolean[] = [];
-    for (let i = 0; i < cfg.decisionsPerRound; i++) {
-      if (type === "verbal") {
-        const useCorrect = Math.random() > 0.5;
-        decisionCorrect.push(useCorrect);
-        decisionAnswers.push(false);
-      } else {
-        const useSym = Math.random() > 0.5;
-        decisionCorrect.push(useSym);
-        decisionAnswers.push(false);
-      }
-    }
-    const itemToRemember = type === "verbal"
-      ? pick(LETTERS_POOL)
-      : pickIdx(GRID_CELLS);
-    return { decisionAnswers, decisionCorrect, itemToRemember };
-  }, [cfg.decisionsPerRound, type]);
+  const procRef = useRef({ correct: 0, total: 0 });
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const gen = useRef(0);
+  const startedAt = useRef(0);
+  const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
+  useEffect(() => () => { gen.current += 1; clearTimers(); }, []);
+
+  const stimulusFor = useCallback((truth: boolean, type: GameType) =>
+    type === "verbal"
+      ? (truth ? pick(CORRECT_WORDS) : pick(WRONG_WORDS))
+      : (truth ? pick(SYM_SHAPES) : pick(ASYM_SHAPES)), []);
+
+  const buildRound = useCallback((type: GameType, decisions: number): Round => ({
+    truths: Array.from({ length: decisions }, () => Math.random() > 0.5),
+    item: type === "verbal" ? pick(LETTERS_POOL) : randInt(GRID_CELLS),
+  }), []);
 
   const startSession = useCallback(() => {
-    startedAtRef.current = Date.now();
-    const builtRounds: Round[] = Array.from({ length: cfg.level }, () => buildRound());
-    setRounds(builtRounds);
-    setCurrentRound(0); setCurrentDecision(0);
-    setRecallInput([]); setRecallIdx(0);
-    setScore({ correct: 0, total: cfg.level });
-
-    // Generate first decision stimulus
-    if (type === "verbal") {
-      const useCorrect = builtRounds[0].decisionCorrect[0];
-      setCurrentWord(useCorrect ? pick(CORRECT_WORDS) : pick(WRONG_WORDS));
-      setCurrentWordCorrect(useCorrect);
-    } else {
-      const useSym = builtRounds[0].decisionCorrect[0];
-      setCurrentShape(useSym ? pick(SYM_SHAPES) : pick(ASYM_SHAPES));
-      setCurrentShapeSym(useSym);
-    }
+    gen.current += 1;
+    clearTimers();
+    startedAt.current = Date.now();
+    const built = Array.from({ length: cfg.level }, () => buildRound(cfg.type, cfg.decisionsPerRound));
+    procRef.current = { correct: 0, total: 0 };
+    setRounds(built);
+    setRoundIdx(0);
+    setDecisionIdx(0);
+    setRecallInput([]);
+    setRecallIdx(0);
+    setMemItem(null);
+    setScore({ correct: 0, total: cfg.level, proc: 0, procTotal: 0 });
+    setStimulus(stimulusFor(built[0].truths[0], cfg.type));
     setPhase("decision");
-  }, [cfg.level, buildRound, type]);
+  }, [cfg.level, cfg.type, cfg.decisionsPerRound, buildRound, stimulusFor]);
 
-  const handleDecision = useCallback((answer: boolean) => {
-    const round = rounds[currentRound];
-    // check answer
-    const correct = answer === round.decisionCorrect[currentDecision];
-    const updatedRounds = rounds.map((r, ri) => ri === currentRound
-      ? { ...r, decisionAnswers: r.decisionAnswers.map((a, ai) => ai === currentDecision ? answer : a) }
-      : r
-    );
-    setRounds(updatedRounds);
+  const startRef = useRef(startSession);
+  startRef.current = startSession;
+  useEffect(() => { if (autoStart) startRef.current(); }, [autoStart]);
 
-    const nextDec = currentDecision + 1;
-    if (nextDec >= cfg.decisionsPerRound) {
-      // Show memorize item
-      setCurrentMemItem(round.itemToRemember);
-      setPhase("memorize");
-      setTimeout(() => {
-        setCurrentMemItem(null);
-        const nextRound = currentRound + 1;
-        if (nextRound >= cfg.level) {
-          // Start recall
-          setRecallInput(Array(cfg.level).fill(null));
-          setRecallIdx(0);
-          setPhase("recall");
-        } else {
-          setCurrentRound(nextRound); setCurrentDecision(0);
-          const r = updatedRounds[nextRound];
-          if (type === "verbal") {
-            setCurrentWord(r.decisionCorrect[0] ? pick(CORRECT_WORDS) : pick(WRONG_WORDS));
-            setCurrentWordCorrect(r.decisionCorrect[0]);
-          } else {
-            setCurrentShape(r.decisionCorrect[0] ? pick(SYM_SHAPES) : pick(ASYM_SHAPES));
-            setCurrentShapeSym(r.decisionCorrect[0]);
-          }
-          setPhase("decision");
-        }
-      }, cfg.trialMs);
-    } else {
-      setCurrentDecision(nextDec);
-      const r = updatedRounds[currentRound];
-      if (type === "verbal") {
-        setCurrentWord(r.decisionCorrect[nextDec] ? pick(CORRECT_WORDS) : pick(WRONG_WORDS));
-        setCurrentWordCorrect(r.decisionCorrect[nextDec]);
-      } else {
-        setCurrentShape(r.decisionCorrect[nextDec] ? pick(SYM_SHAPES) : pick(ASYM_SHAPES));
-        setCurrentShapeSym(r.decisionCorrect[nextDec]);
-      }
+  const answer = useCallback((said: boolean) => {
+    if (phase !== "decision") return;
+    const round = rounds[roundIdx];
+    if (!round) return;
+    setFlash(said ? "yes" : "no");
+    setTimeout(() => setFlash(null), 110);
+
+    procRef.current.total++;
+    if (said === round.truths[decisionIdx]) procRef.current.correct++;
+
+    const nextDecision = decisionIdx + 1;
+    if (nextDecision < cfg.decisionsPerRound) {
+      setDecisionIdx(nextDecision);
+      setStimulus(stimulusFor(round.truths[nextDecision], cfg.type));
+      return;
     }
-  }, [rounds, currentRound, currentDecision, cfg, type]);
 
-  const handleRecall = useCallback((item: string | number) => {
+    // Round finished: show the item to hold, then move on.
+    const myGen = gen.current;
+    setMemItem(round.item);
+    setPhase("memorize");
+    timers.current.push(setTimeout(() => {
+      if (myGen !== gen.current) return;
+      setMemItem(null);
+      const nextRound = roundIdx + 1;
+      if (nextRound >= cfg.level) {
+        setRecallInput(Array(cfg.level).fill(null));
+        setRecallIdx(0);
+        setPhase("recall");
+        return;
+      }
+      setRoundIdx(nextRound);
+      setDecisionIdx(0);
+      setStimulus(stimulusFor(rounds[nextRound].truths[0], cfg.type));
+      setPhase("decision");
+    }, cfg.trialMs));
+  }, [phase, rounds, roundIdx, decisionIdx, cfg.decisionsPerRound, cfg.level, cfg.trialMs, cfg.type, stimulusFor]);
+
+  const recall = useCallback((item: string | number) => {
+    if (phase !== "recall") return;
     const updated = [...recallInput];
     updated[recallIdx] = item;
     setRecallInput(updated);
     const next = recallIdx + 1;
-    if (next >= cfg.level) {
-      // Score
-      let correct = 0;
-      rounds.forEach((r, i) => { if (updated[i] === r.itemToRemember) correct++; });
-      const acc = (correct / cfg.level) * 100;
-      const newLevel = acc >= cfg.threshAdvance ? cfg.level + 1
-                     : acc < cfg.threshFallback && cfg.level > 1 ? cfg.level - 1
-                     : cfg.level;
-      setScore({ correct, total: cfg.level });
-      setCfg(c => ({ ...c, level: newLevel }));
-      setPhase("result");
-      recordDrillResultInBackground({
-        domain: "working_memory", activityId: "complex-working-memory",
-        correct, total: cfg.level, level: cfg.level, maxLevel: 8,
-        startedAt: startedAtRef.current,
-      });
-    } else {
-      setRecallIdx(next);
-    }
-  }, [recallInput, recallIdx, cfg, rounds]);
+    if (next < cfg.level) { setRecallIdx(next); return; }
+
+    let correct = 0;
+    rounds.forEach((r, i) => { if (updated[i] === r.item) correct++; });
+    const acc = (correct / cfg.level) * 100;
+    const newLevel = acc >= cfg.threshAdvance && cfg.level < 12 ? cfg.level + 1
+      : acc < cfg.threshFallback && cfg.level > 1 ? cfg.level - 1
+      : cfg.level;
+    const proc = procRef.current;
+    setScore({ correct, total: cfg.level, proc: proc.correct, procTotal: proc.total });
+    setCfg(c => ({ ...c, level: newLevel }));
+    setPhase("result");
+    recordDrillResultInBackground({
+      domain: "working_memory", activityId: "complex-working-memory",
+      correct: correct + proc.correct, total: cfg.level + proc.total,
+      level: cfg.level, maxLevel: 12, startedAt: startedAt.current,
+    });
+    onSessionComplete?.({ correct, total: cfg.level, level: newLevel });
+  }, [phase, recallInput, recallIdx, cfg, rounds, setCfg, onSessionComplete]);
+
+  // Yes/No during the processing task…
+  useGameKeys([cfg.keyYes], () => answer(true), phase === "decision");
+  useGameKeys([cfg.keyNo], () => answer(false), phase === "decision");
+  // …and the letter pool while recalling the verbal variant.
+  useGameKeys(
+    cfg.type === "verbal" ? LETTERS_POOL.map(l => l.toLowerCase()) : [],
+    k => recall(k.toUpperCase()),
+    phase === "recall" && cfg.type === "verbal",
+  );
+
+  const settings: Setting[] = [
+    { kind: "select", key: "type", label: "Variant", options: [{ value: "verbal", label: "Verbal" }, { value: "spatial", label: "Spatial" }] },
+    { kind: "range", key: "level", label: "Items to recall", min: 1, max: 12 },
+    { kind: "range", key: "decisionsPerRound", label: "Decisions per item", min: 1, max: 8 },
+    { kind: "range", key: "trialMs", label: "Memorise time", min: 500, max: 3000, step: 100, format: v => `${(v / 1000).toFixed(1)}s` },
+    { kind: "range", key: "threshAdvance", label: "Advance at %", min: 60, max: 95, step: 5 },
+    { kind: "range", key: "threshFallback", label: "Fall back below %", min: 30, max: 65, step: 5 },
+    { kind: "key", key: "keyYes", label: "Yes key" },
+    { kind: "key", key: "keyNo", label: "No key" },
+  ];
+
+  const shellPhase = phase === "idle" ? "idle" : phase === "result" ? "result" : "running";
+  const gridPx = Math.min(px(230), 230 * 1.7);
 
   return (
-    <div className="max-w-lg mx-auto py-4">
-      <div className="flex items-center gap-3 mb-6">
-        <Link href="/athena"><button className="opacity-40 hover:opacity-80 transition-opacity"><ArrowLeft className="w-4 h-4" style={{ color: accent }} /></button></Link>
-        <div className="flex-1">
-          <h1 className="text-sm font-semibold tracking-widest uppercase" style={{ fontFamily: "'Cinzel', serif", color: accent }}>Complex Working Memory</h1>
-          <p className="text-[10px]" style={{ color: "hsl(214 20% 40%)", fontFamily: "DM Mono, monospace" }}>Level {cfg.level} · {type}</p>
-        </div>
-        <button onClick={() => setShowSettings(s => !s)} className="opacity-40 hover:opacity-80 transition-opacity"><Settings2 className="w-4 h-4" style={{ color: accent }} /></button>
-      </div>
-
-      {/* Type selector */}
-      {phase === "idle" && (
-        <div className="flex gap-2 mb-4">
+    <GameShell
+      title="Complex Working Memory" accent={accent} embedded={embedded}
+      subtitle={`Level ${cfg.level} · ${cfg.type} · ${cfg.decisionsPerRound} decisions/item`}
+      phase={shellPhase} onStart={startSession} settings={settings} cfg={cfg} setCfg={setCfg}
+      variants={
+        <div className="flex" style={{ gap: px(8) }}>
           {(["verbal", "spatial"] as GameType[]).map(t => (
-            <button key={t} onClick={() => setType(t)}
-              className="flex-1 py-2 rounded-lg text-[11px] font-semibold tracking-widest uppercase transition-all"
-              style={{ background: type === t ? `${accent}20` : "hsl(222 20% 5%)", border: `1px solid ${type === t ? accent : "hsl(var(--accent-h) 15% 14%)"}`, color: type === t ? accent : "hsl(214 20% 45%)", fontFamily: "'Cinzel', serif" }}>
-              {t}
-            </button>
+            <button key={t} onClick={() => setCfg(c => ({ ...c, type: t }))}
+              className="flex-1 rounded-lg font-semibold tracking-widest uppercase transition-all"
+              style={{
+                padding: `${px(8)}px 0`, fontSize: px(11), fontFamily: SERIF,
+                background: cfg.type === t ? alpha(accent, 0.2) : "hsl(222 20% 5%)",
+                border: `1px solid ${cfg.type === t ? accent : "hsl(var(--accent-h) 15% 14%)"}`,
+                color: cfg.type === t ? accent : "hsl(214 20% 45%)",
+              }}>{t}</button>
           ))}
         </div>
-      )}
-
-      {/* Settings */}
-      {showSettings && (
-        <div className="mb-5 p-4 rounded-xl border space-y-3" style={{ background: "hsl(222 20% 5%)", borderColor: `${accent}25` }}>
-          {([
-            { label: "Level (items to recall)", key: "level", min: 1, max: 12, step: 1 },
-            { label: "Decisions per round", key: "decisionsPerRound", min: 2, max: 8, step: 1 },
-            { label: "Memorize time (ms)", key: "trialMs", min: 800, max: 3000, step: 200 },
-            { label: "Advance threshold %", key: "threshAdvance", min: 60, max: 95, step: 5 },
-            { label: "Fallback threshold %", key: "threshFallback", min: 30, max: 65, step: 5 },
-          ] as const).map(({ label, key, min, max, step }) => (
-            <div key={key} className="flex items-center justify-between gap-4">
-              <label className="text-[11px]" style={{ color: "hsl(214 20% 50%)", fontFamily: "DM Mono, monospace" }}>{label}</label>
-              <div className="flex items-center gap-2">
-                <input type="range" min={min} max={max} step={step} value={(cfg as any)[key]}
-                  onChange={e => setCfg(c => ({ ...c, [key]: Number(e.target.value) }))}
-                  className="w-24" style={{ accentColor: accent }} />
-                <span className="text-[11px] w-8 text-right tabular-nums" style={{ color: accent }}>{(cfg as any)[key]}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* IDLE */}
-      {phase === "idle" && (
-        <div className="mb-5 p-4 rounded-xl border text-[11px] leading-relaxed space-y-2" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(var(--accent-h) 15% 12%)", color: "hsl(214 20% 50%)" }}>
-          {type === "verbal"
-            ? <p>Each round: decide if a word is <strong style={{ color: accent }}>spelled correctly</strong>, then remember the <strong style={{ color: accent }}>letter</strong> shown. After all rounds, recall all letters in order.</p>
-            : <p>Each round: decide if a shape is <strong style={{ color: accent }}>Y-axis symmetric</strong>, then remember the <strong style={{ color: accent }}>highlighted grid cell</strong>. After all rounds, tap all cells in order.</p>}
-        </div>
-      )}
-
-      {/* DECISION */}
-      {phase === "decision" && (
-        <div className="text-center space-y-6">
-          <p className="text-[10px] tracking-widest uppercase" style={{ color: "hsl(214 20% 36%)", fontFamily: "DM Mono, monospace" }}>
-            Round {currentRound + 1}/{cfg.level} · Decision {currentDecision + 1}/{cfg.decisionsPerRound}
+      }
+      instructions={
+        <div style={{ display: "grid", gap: px(6) }}>
+          {cfg.type === "verbal"
+            ? <p>Decide whether each word is <strong style={{ color: accent }}>spelled correctly</strong>, then hold the <strong style={{ color: accent }}>letter</strong> that follows. Recall every letter in order at the end.</p>
+            : <p>Decide whether each shape is <strong style={{ color: accent }}>symmetric about the vertical axis</strong>, then hold the <strong style={{ color: accent }}>highlighted cell</strong>. Tap every cell in order at the end.</p>}
+          <p>
+            <kbd style={{ padding: `${px(2)}px ${px(6)}px`, borderRadius: px(4), background: "hsl(222 20% 9%)", border: "1px solid hsl(var(--accent-h) 15% 18%)", color: accent }}>{keyLabel(cfg.keyYes)}</kbd> yes
+            {"  ·  "}
+            <kbd style={{ padding: `${px(2)}px ${px(6)}px`, borderRadius: px(4), background: "hsl(222 20% 9%)", border: "1px solid hsl(var(--accent-h) 15% 18%)", color: accent }}>{keyLabel(cfg.keyNo)}</kbd> no
           </p>
-          {type === "verbal" ? (
-            <p className="text-4xl font-bold" style={{ fontFamily: "'Cinzel', serif", color: accent, letterSpacing: "0.08em" }}>{currentWord}</p>
+        </div>
+      }
+    >
+      {phase === "decision" && (
+        <div className="text-center w-full flex flex-col items-center" style={{ gap: px(22) }}>
+          <p style={{ color: "hsl(214 20% 36%)", fontFamily: MONO, fontSize: px(10), letterSpacing: "0.15em", textTransform: "uppercase" }}>
+            Item {roundIdx + 1}/{cfg.level} · Decision {decisionIdx + 1}/{cfg.decisionsPerRound}
+          </p>
+          {cfg.type === "verbal" ? (
+            <p style={{ fontFamily: SERIF, color: accent, fontSize: px(42), fontWeight: 700, letterSpacing: "0.08em" }}>{stimulus}</p>
           ) : (
-            <svg viewBox="0 0 20 20" className="w-40 h-40 mx-auto" style={{ filter: `drop-shadow(0 0 8px ${accent}60)` }}>
-              <path d={currentShape} fill={accent} fillOpacity={0.8} />
+            <svg viewBox="0 0 20 20" style={{ width: px(170), height: px(170), filter: `drop-shadow(0 0 ${px(10)}px ${alpha(accent, 0.5)})` }}>
+              <path d={stimulus} fill={accent} fillOpacity={0.82} />
             </svg>
           )}
-          <div className="flex gap-3">
-            {["Yes", "No"].map(ans => (
-              <button key={ans} onClick={() => handleDecision(ans === "Yes")}
-                className="flex-1 py-3 rounded-xl text-[12px] font-semibold tracking-widest uppercase transition-all active:scale-95"
-                style={{ background: `${accent}12`, border: `1px solid ${accent}35`, color: accent, fontFamily: "'Cinzel', serif" }}>
-                {ans}
+          <div className="flex w-full" style={{ gap: px(10), maxWidth: px(400) }}>
+            {([[true, "Yes", cfg.keyYes], [false, "No", cfg.keyNo]] as const).map(([val, label, key]) => (
+              <button key={label} onClick={() => answer(val)}
+                className="flex-1 rounded-xl font-semibold tracking-widest uppercase transition-all active:scale-95"
+                style={{
+                  padding: `${px(12)}px 0`, fontSize: px(12), fontFamily: SERIF,
+                  background: flash === (val ? "yes" : "no") ? alpha(accent, 0.4) : alpha(accent, 0.12),
+                  border: `1px solid ${alpha(accent, 0.35)}`, color: accent,
+                }}>
+                {label} ({keyLabel(key)})
               </button>
             ))}
           </div>
         </div>
       )}
 
-      {/* MEMORIZE */}
-      {phase === "memorize" && currentMemItem !== null && (
-        <div className="text-center space-y-4 py-8">
-          <p className="text-[10px] tracking-widest uppercase" style={{ color: "hsl(214 20% 36%)", fontFamily: "DM Mono, monospace" }}>Remember this</p>
-          {type === "verbal" ? (
-            <p className="text-7xl font-bold" style={{ fontFamily: "'Cinzel', serif", color: accent, filter: `drop-shadow(0 0 20px ${accent})` }}>{currentMemItem}</p>
+      {phase === "memorize" && (
+        <div className="text-center flex flex-col items-center" style={{ gap: px(14) }}>
+          <p style={{ color: "hsl(214 20% 36%)", fontFamily: MONO, fontSize: px(10), letterSpacing: "0.15em", textTransform: "uppercase" }}>
+            {memItem === null ? "…" : "Remember this"}
+          </p>
+          {memItem !== null && (cfg.type === "verbal" ? (
+            <p style={{ fontFamily: SERIF, color: accent, fontSize: px(84), fontWeight: 700, filter: `drop-shadow(0 0 ${px(22)}px ${accent})` }}>{memItem}</p>
           ) : (
-            <div className="grid mx-auto" style={{ display: "grid", gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`, width: 200, height: 200, gap: 4 }}>
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`, width: gridPx, height: gridPx, gap: px(5) }}>
               {Array.from({ length: GRID_CELLS }).map((_, i) => (
-                <div key={i} className="rounded" style={{ background: i === currentMemItem ? accent : "hsl(222 20% 10%)", border: `1px solid ${i === currentMemItem ? accent : "hsl(var(--accent-h) 15% 14%)"}`, boxShadow: i === currentMemItem ? `0 0 12px ${accent}` : "none" }} />
+                <div key={i} style={{
+                  borderRadius: px(5),
+                  background: i === memItem ? accent : "hsl(222 20% 10%)",
+                  border: `1px solid ${i === memItem ? accent : "hsl(var(--accent-h) 15% 14%)"}`,
+                  boxShadow: i === memItem ? `0 0 ${px(14)}px ${accent}` : "none",
+                }} />
               ))}
             </div>
-          )}
+          ))}
         </div>
       )}
 
-      {/* MEMORIZE — blank transition */}
-      {phase === "memorize" && currentMemItem === null && (
-        <div className="text-center py-16">
-          <div className="text-[10px] tracking-widest uppercase animate-pulse" style={{ color: "hsl(214 20% 30%)", fontFamily: "DM Mono, monospace" }}>…</div>
-        </div>
-      )}
-
-      {/* RECALL */}
       {phase === "recall" && (
-        <div className="space-y-4">
-          <p className="text-[10px] tracking-widest uppercase text-center" style={{ color: "hsl(214 20% 40%)", fontFamily: "DM Mono, monospace" }}>
+        <div className="flex flex-col items-center w-full" style={{ gap: px(14) }}>
+          <p style={{ color: "hsl(214 20% 40%)", fontFamily: MONO, fontSize: px(10), letterSpacing: "0.15em", textTransform: "uppercase" }}>
             Recall item {recallIdx + 1} of {cfg.level}
           </p>
-          {/* Show what's been recalled */}
-          <div className="flex gap-2 flex-wrap justify-center mb-2">
+          <div className="flex flex-wrap justify-center" style={{ gap: px(6) }}>
             {recallInput.map((item, i) => (
-              <span key={i} className="px-2 py-1 rounded text-[11px]" style={{ background: i < recallIdx ? `${accent}20` : "hsl(222 20% 8%)", border: `1px solid ${i < recallIdx ? accent : "hsl(var(--accent-h) 15% 14%)"}`, color: i < recallIdx ? accent : "hsl(214 20% 35%)" }}>
-                {item !== null ? (type === "verbal" ? item : `Cell ${item}`) : "?"}
+              <span key={i} style={{
+                padding: `${px(4)}px ${px(8)}px`, borderRadius: px(5), fontSize: px(11), fontFamily: MONO,
+                background: i < recallIdx ? alpha(accent, 0.2) : "hsl(222 20% 8%)",
+                border: `1px solid ${i < recallIdx ? accent : "hsl(var(--accent-h) 15% 14%)"}`,
+                color: i < recallIdx ? accent : "hsl(214 20% 35%)",
+              }}>
+                {item !== null ? (cfg.type === "verbal" ? item : `#${item}`) : "?"}
               </span>
             ))}
           </div>
-          {type === "verbal" ? (
-            <div className="flex flex-wrap gap-2 justify-center">
+          {cfg.type === "verbal" ? (
+            <div className="flex flex-wrap justify-center" style={{ gap: px(6), maxWidth: px(440) }}>
               {LETTERS_POOL.map(l => (
-                <button key={l} onClick={() => handleRecall(l)}
-                  className="w-10 h-10 rounded-lg text-sm font-bold transition-all active:scale-90"
-                  style={{ background: "hsl(222 20% 8%)", border: `1px solid hsl(var(--accent-h) 15% 14%)`, color: "hsl(46 45% 70%)", fontFamily: "'Cinzel', serif" }}>
-                  {l}
-                </button>
+                <button key={l} onClick={() => recall(l)}
+                  className="rounded-lg font-bold transition-all active:scale-90"
+                  style={{
+                    width: px(40), height: px(40), fontSize: px(14), fontFamily: SERIF,
+                    background: "hsl(222 20% 8%)", border: "1px solid hsl(var(--accent-h) 15% 14%)",
+                    color: "hsl(46 45% 70%)",
+                  }}>{l}</button>
               ))}
             </div>
           ) : (
-            <div className="grid mx-auto" style={{ display: "grid", gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`, width: 220, height: 220, gap: 5 }}>
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`, width: gridPx, height: gridPx, gap: px(5) }}>
               {Array.from({ length: GRID_CELLS }).map((_, i) => (
-                <button key={i} onClick={() => handleRecall(i)}
-                  className="rounded transition-all active:scale-90"
-                  style={{ background: "hsl(222 20% 9%)", border: `1px solid hsl(var(--accent-h) 15% 16%)` }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = `${accent}30`; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "hsl(222 20% 9%)"; }}
+                <button key={i} onClick={() => recall(i)}
+                  className="transition-all active:scale-90"
+                  style={{ borderRadius: px(5), background: "hsl(222 20% 9%)", border: "1px solid hsl(var(--accent-h) 15% 16%)" }}
+                  onMouseEnter={e => { e.currentTarget.style.background = alpha(accent, 0.3); }}
+                  onMouseLeave={e => { e.currentTarget.style.background = "hsl(222 20% 9%)"; }}
                 />
               ))}
             </div>
@@ -320,25 +325,16 @@ export default function CWM() {
         </div>
       )}
 
-      {/* RESULT */}
       {phase === "result" && (
-        <div className="mb-6 p-5 rounded-xl border text-center space-y-4" style={{ background: "hsl(222 20% 5%)", borderColor: `${accent}30` }}>
-          <p className="text-[11px] tracking-widest uppercase" style={{ fontFamily: "'Cinzel', serif", color: "hsl(214 20% 45%)" }}>Recall Complete</p>
-          <p className="text-4xl font-bold" style={{ color: accent, fontFamily: "'Cinzel', serif" }}>{score.correct}/{score.total}</p>
-          <p className="text-[11px]" style={{ color: "hsl(214 20% 45%)", fontFamily: "DM Mono, monospace" }}>
-            Next level: <span style={{ color: accent }}>{cfg.level}</span>
+        <div className="rounded-xl border text-center w-full"
+          style={{ background: "hsl(222 20% 5%)", borderColor: alpha(accent, 0.3), padding: px(18), maxWidth: px(400) }}>
+          <p style={{ fontFamily: SERIF, color: "hsl(214 20% 45%)", fontSize: px(11), letterSpacing: "0.15em", textTransform: "uppercase" }}>Recall Complete</p>
+          <p style={{ color: accent, fontFamily: SERIF, fontSize: px(38), fontWeight: 700, marginTop: px(10) }}>{score.correct}/{score.total}</p>
+          <p style={{ color: "hsl(214 20% 45%)", fontFamily: MONO, fontSize: px(11), marginTop: px(8) }}>
+            processing {score.procTotal ? Math.round((score.proc / score.procTotal) * 100) : 0}% · next level <span style={{ color: accent }}>{cfg.level}</span>
           </p>
         </div>
       )}
-
-      {phase === "idle" || phase === "result" ? (
-        <button onClick={startSession}
-          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-[12px] font-semibold tracking-widest uppercase transition-all"
-          style={{ background: `${accent}15`, border: `1px solid ${accent}40`, color: accent, fontFamily: "'Cinzel', serif" }}>
-          {phase === "result" ? <RotateCcw className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-          {phase === "result" ? "Run Again" : "Begin Trial"}
-        </button>
-      ) : null}
-    </div>
+    </GameShell>
   );
 }

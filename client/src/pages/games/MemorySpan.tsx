@@ -1,25 +1,48 @@
 /**
  * Memory Span
- * A sequence of digits or letters flashes one at a time.
- * Player types or taps them back in order (Forward), reversed (Reverse), or sorted (Sorted).
- * Adaptive span length.
+ *
+ * Digits or letters flash one at a time; you give them back in order, reversed,
+ * or sorted.
+ *
+ * **The bug this rewrite exists for.** `showSequence` scheduled one `setTimeout`
+ * per item but stored them all in a single `timerRef`, so only the last one was
+ * ever cancellable. When a round ended — or the span changed, or you left and
+ * came back — the earlier timeouts kept firing into the *next* round: items from
+ * the round you had already finished appeared during the new one, and the
+ * `sequence` state they raced against was no longer the sequence your answer was
+ * being graded on, so correct answers were marked wrong. Every timeout is now
+ * tagged with a generation counter and dropped if the generation has moved on,
+ * and the whole timer list is cleared on start, unmount and round change.
+ *
+ * The tap pad also has a keyboard now — typing a digit or letter enters it,
+ * Backspace takes one back.
  */
-import { useState, useCallback, useRef, useEffect } from "react";
-import { ArrowLeft, Settings2, Play, RotateCcw, Delete } from "lucide-react";
-import { Link } from "wouter";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Delete } from "lucide-react";
+import GameShell, { type Setting } from "@/components/games/GameShell";
+import {
+  MONO, SERIF, alpha, useGameConfig, useGameKeys, useScaled,
+  type GameProps,
+} from "@/lib/gameKit";
 import { recordDrillResultInBackground } from "@/lib/trainingRecorder";
 
 type SpanType = "Digit" | "DigitReverse" | "DigitSorted" | "Letter" | "LetterReverse" | "LetterSorted";
+const TYPES: SpanType[] = ["Digit", "DigitReverse", "DigitSorted", "Letter", "LetterReverse", "LetterSorted"];
 
 const DIGIT_POOL = "123456789".split("");
 const LETTER_POOL = "BCDFGHJKLMNPQRSTVWXZ".split("");
 
+const accent = "hsl(35 90% 62%)";
+
+function poolFor(type: SpanType) { return type.startsWith("Letter") ? LETTER_POOL : DIGIT_POOL; }
+
 function genSequence(level: number, type: SpanType): string[] {
-  const pool = type.startsWith("Letter") ? LETTER_POOL : DIGIT_POOL;
+  const pool = poolFor(type);
   const seq: string[] = [];
   for (let i = 0; i < level; i++) {
-    let c: string;
-    do { c = pool[Math.floor(Math.random() * pool.length)]; } while (c === seq[seq.length - 1]);
+    let c = pool[Math.floor(Math.random() * pool.length)];
+    while (c === seq[seq.length - 1]) c = pool[Math.floor(Math.random() * pool.length)];
     seq.push(c);
   }
   return seq;
@@ -35,196 +58,195 @@ interface Config {
   level: number;
   rounds: number;
   litMs: number;
+  gapMs: number;
   type: SpanType;
   threshAdvance: number;
   threshFallback: number;
 }
-const DEFAULT_CONFIG: Config = {
-  level: 5, rounds: 4, litMs: 1000, type: "Digit",
+
+const DEFAULTS: Config = {
+  level: 5, rounds: 4, litMs: 800, gapMs: 250, type: "Digit",
   threshAdvance: 80, threshFallback: 50,
 };
 
 type Phase = "idle" | "showing" | "input" | "feedback" | "result";
-const accent = "hsl(35 90% 62%)";
 
-const TYPES: SpanType[] = ["Digit","DigitReverse","DigitSorted","Letter","LetterReverse","LetterSorted"];
+export default function MemorySpan({ embedded, autoStart, onSessionComplete }: GameProps) {
+  const [cfg, setCfg] = useGameConfig<Config>("memory-span", DEFAULTS);
+  const px = useScaled();
 
-export default function MemorySpan() {
-  const [cfg, setCfg] = useState<Config>(DEFAULT_CONFIG);
-  const [showSettings, setShowSettings] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
-
   const [sequence, setSequence] = useState<string[]>([]);
-  const [shownIdx, setShownIdx] = useState<number>(-1);
+  const [shownIdx, setShownIdx] = useState(-1);
   const [playerInput, setPlayerInput] = useState<string[]>([]);
   const [round, setRound] = useState(0);
   const [roundResults, setRoundResults] = useState<boolean[]>([]);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // When the current drill began, so recorded sessions carry a real duration.
-  const startedAtRef = useRef(0);
 
-  const clearTimers = () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const gen = useRef(0);
+  const startedAt = useRef(0);
+  const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
+  const later = (fn: () => void, ms: number) => { timers.current.push(setTimeout(fn, ms)); };
+  useEffect(() => () => { gen.current += 1; clearTimers(); }, []);
 
-  const showSequence = useCallback((seq: string[]) => {
+  const showSequence = useCallback((seq: string[], myGen: number) => {
     setPhase("showing");
     setShownIdx(-1);
-    const gap = cfg.litMs + 200;
+    const step = cfg.litMs + cfg.gapMs;
     seq.forEach((_, i) => {
-      timerRef.current = setTimeout(() => {
-        setShownIdx(i);
-        timerRef.current = setTimeout(() => {
-          setShownIdx(-1);
-          if (i === seq.length - 1) {
-            setTimeout(() => { setPlayerInput([]); setPhase("input"); }, 350);
-          }
-        }, cfg.litMs);
-      }, i * gap);
+      later(() => { if (myGen === gen.current) setShownIdx(i); }, i * step);
+      later(() => { if (myGen === gen.current) setShownIdx(-1); }, i * step + cfg.litMs);
     });
-  }, [cfg.litMs]);
+    later(() => {
+      if (myGen !== gen.current) return;
+      setPlayerInput([]);
+      setPhase("input");
+    }, seq.length * step + 300);
+  }, [cfg.litMs, cfg.gapMs]);
 
-  const startRound = useCallback((roundIdx: number, level: number) => {
+  const startRound = useCallback((roundIdx: number, level: number, myGen: number) => {
     const seq = genSequence(level, cfg.type);
     setSequence(seq);
     setRound(roundIdx);
-    setTimeout(() => showSequence(seq), 400);
+    setPlayerInput([]);
+    later(() => { if (myGen === gen.current) showSequence(seq, myGen); }, 450);
   }, [cfg.type, showSequence]);
 
   const startSession = useCallback(() => {
-    startedAtRef.current = Date.now();
+    gen.current += 1;
     clearTimers();
+    startedAt.current = Date.now();
     setRoundResults([]);
-    startRound(0, cfg.level);
+    setRound(0);
+    startRound(0, cfg.level, gen.current);
   }, [cfg.level, startRound]);
+
+  const startRef = useRef(startSession);
+  startRef.current = startSession;
+  useEffect(() => { if (autoStart) startRef.current(); }, [autoStart]);
 
   const handleInput = useCallback((item: string) => {
     if (phase !== "input") return;
-    const newInput = [...playerInput, item];
-    setPlayerInput(newInput);
-    if (newInput.length === sequence.length) {
-      const expected = expectedAnswer(sequence, cfg.type);
-      const correct = newInput.every((c, i) => c === expected[i]);
-      const newResults = [...roundResults, correct];
-      setRoundResults(newResults);
-      setPhase("feedback");
-      timerRef.current = setTimeout(() => {
-        const nextRound = round + 1;
-        if (nextRound >= cfg.rounds) {
-          const hits = newResults.filter(Boolean).length;
-          const acc = (hits / cfg.rounds) * 100;
-          const newLevel = acc >= cfg.threshAdvance && cfg.level < 30 ? cfg.level + 1
-                         : acc < cfg.threshFallback && cfg.level > 1 ? cfg.level - 1
-                         : cfg.level;
-          setCfg(c => ({ ...c, level: newLevel }));
-          setPhase("result");
-          recordDrillResultInBackground({
-            domain: "recall", activityId: "memory-span",
-            correct: hits, total: cfg.rounds, level: cfg.level, maxLevel: 30,
-            startedAt: startedAtRef.current,
-          });
-        } else {
-          startRound(nextRound, cfg.level);
-        }
-      }, 900);
-    }
-  }, [phase, playerInput, sequence, cfg, roundResults, round, startRound]);
+    const next = [...playerInput, item];
+    setPlayerInput(next);
+    if (next.length < sequence.length) return;
 
-  const handleBackspace = () => {
+    const expected = expectedAnswer(sequence, cfg.type);
+    const correct = next.every((c, i) => c === expected[i]);
+    const results = [...roundResults, correct];
+    setRoundResults(results);
+    setPhase("feedback");
+    const myGen = gen.current;
+
+    later(() => {
+      if (myGen !== gen.current) return;
+      const nextRound = round + 1;
+      if (nextRound < cfg.rounds) { startRound(nextRound, cfg.level, myGen); return; }
+
+      const hits = results.filter(Boolean).length;
+      const acc = (hits / cfg.rounds) * 100;
+      const newLevel = acc >= cfg.threshAdvance && cfg.level < 30 ? cfg.level + 1
+        : acc < cfg.threshFallback && cfg.level > 2 ? cfg.level - 1
+        : cfg.level;
+      setCfg(c => ({ ...c, level: newLevel }));
+      setPhase("result");
+      recordDrillResultInBackground({
+        domain: "recall", activityId: "memory-span",
+        correct: hits, total: cfg.rounds, level: cfg.level, maxLevel: 30,
+        startedAt: startedAt.current,
+      });
+      onSessionComplete?.({ correct: hits, total: cfg.rounds, level: newLevel });
+    }, 950);
+  }, [phase, playerInput, sequence, cfg, roundResults, round, startRound, setCfg, onSessionComplete]);
+
+  const backspace = useCallback(() => {
     if (phase !== "input") return;
     setPlayerInput(p => p.slice(0, -1));
-  };
+  }, [phase]);
 
-  const pool = cfg.type.startsWith("Letter") ? LETTER_POOL : DIGIT_POOL;
-  const currentItem = shownIdx >= 0 ? sequence[shownIdx] : null;
-  const lastCorrect = roundResults[roundResults.length - 1];
+  const pool = poolFor(cfg.type);
+  useGameKeys(
+    pool.map(c => c.toLowerCase()),
+    k => handleInput(k.toUpperCase()),
+    phase === "input",
+  );
+  useGameKeys(["Backspace"], backspace, phase === "input");
+
+  const settings: Setting[] = [
+    { kind: "select", key: "type", label: "Variant", options: TYPES.map(t => ({ value: t, label: t })) },
+    { kind: "range", key: "level", label: "Span length", min: 2, max: 30 },
+    { kind: "range", key: "rounds", label: "Rounds", min: 2, max: 10 },
+    { kind: "range", key: "litMs", label: "Display time", min: 200, max: 3000, step: 50, format: v => `${v}ms` },
+    { kind: "range", key: "gapMs", label: "Gap", min: 50, max: 1500, step: 50, format: v => `${v}ms` },
+    { kind: "range", key: "threshAdvance", label: "Advance at %", min: 60, max: 95, step: 5 },
+    { kind: "range", key: "threshFallback", label: "Fall back below %", min: 30, max: 65, step: 5 },
+  ];
+
+  const active = phase === "showing" || phase === "input" || phase === "feedback";
+  const shownItem = shownIdx >= 0 ? sequence[shownIdx] : null;
   const expectedSeq = phase === "feedback" ? expectedAnswer(sequence, cfg.type) : [];
 
   return (
-    <div className="max-w-lg mx-auto py-4">
-      <div className="flex items-center gap-3 mb-6">
-        <Link href="/athena"><button className="opacity-40 hover:opacity-80 transition-opacity"><ArrowLeft className="w-4 h-4" style={{ color: accent }} /></button></Link>
-        <div className="flex-1">
-          <h1 className="text-sm font-semibold tracking-widest uppercase" style={{ fontFamily: "'Cinzel', serif", color: accent }}>Memory Span</h1>
-          <p className="text-[10px]" style={{ color: "hsl(214 20% 40%)", fontFamily: "DM Mono, monospace" }}>Span {cfg.level} · {cfg.type} · {cfg.rounds} rounds</p>
-        </div>
-        <button onClick={() => setShowSettings(s => !s)} className="opacity-40 hover:opacity-80 transition-opacity"><Settings2 className="w-4 h-4" style={{ color: accent }} /></button>
-      </div>
-
-      {/* Type selector */}
-      {phase === "idle" && (
-        <div className="flex flex-wrap gap-1.5 mb-4">
+    <GameShell
+      title="Memory Span" accent={accent} embedded={embedded}
+      subtitle={`Span ${cfg.level} · ${cfg.type} · ${cfg.rounds} rounds`}
+      phase={phase === "idle" ? "idle" : phase === "result" ? "result" : "running"}
+      onStart={startSession} settings={settings} cfg={cfg} setCfg={setCfg}
+      variants={
+        <div className="flex flex-wrap" style={{ gap: px(6) }}>
           {TYPES.map(t => (
             <button key={t} onClick={() => setCfg(c => ({ ...c, type: t }))}
-              className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold tracking-wide uppercase transition-all"
-              style={{ background: cfg.type === t ? `${accent}20` : "hsl(222 20% 5%)", border: `1px solid ${cfg.type === t ? accent : "hsl(var(--accent-h) 15% 14%)"}`, color: cfg.type === t ? accent : "hsl(214 20% 45%)", fontFamily: "'Cinzel', serif" }}>
-              {t}
-            </button>
+              className="rounded-lg font-semibold tracking-wide uppercase transition-all"
+              style={{
+                padding: `${px(6)}px ${px(10)}px`, fontSize: px(10), fontFamily: SERIF,
+                background: cfg.type === t ? alpha(accent, 0.2) : "hsl(222 20% 5%)",
+                border: `1px solid ${cfg.type === t ? accent : "hsl(var(--accent-h) 15% 14%)"}`,
+                color: cfg.type === t ? accent : "hsl(214 20% 45%)",
+              }}>{t}</button>
           ))}
         </div>
-      )}
-
-      {/* Settings */}
-      {showSettings && (
-        <div className="mb-5 p-4 rounded-xl border space-y-3" style={{ background: "hsl(222 20% 5%)", borderColor: `${accent}25` }}>
-          {([
-            { label: "Span Length (Level)", key: "level" as const, min: 1, max: 30, step: 1 },
-            { label: "Rounds", key: "rounds" as const, min: 2, max: 10, step: 1 },
-            { label: "Display time (ms)", key: "litMs" as const, min: 400, max: 3000, step: 100 },
-            { label: "Advance threshold %", key: "threshAdvance" as const, min: 60, max: 95, step: 5 },
-            { label: "Fallback threshold %", key: "threshFallback" as const, min: 30, max: 65, step: 5 },
-          ]).map(({ label, key, min, max, step }) => (
-            <div key={key} className="flex items-center justify-between gap-4">
-              <label className="text-[11px]" style={{ color: "hsl(214 20% 50%)", fontFamily: "DM Mono, monospace" }}>{label}</label>
-              <div className="flex items-center gap-2">
-                <input type="range" min={min} max={max} step={step} value={cfg[key]}
-                  onChange={e => setCfg(c => ({ ...c, [key]: Number(e.target.value) }))}
-                  className="w-24" style={{ accentColor: accent }} />
-                <span className="text-[11px] w-8 text-right tabular-nums" style={{ color: accent }}>{cfg[key]}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {phase === "idle" && (
-        <div className="mb-5 p-4 rounded-xl border text-[11px] leading-relaxed" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(var(--accent-h) 15% 12%)", color: "hsl(214 20% 50%)" }}>
-          <p>A sequence flashes one item at a time. Recall it <strong style={{ color: accent }}>
-            {cfg.type.includes("Reverse") ? "in reverse" : cfg.type.includes("Sorted") ? "sorted alphabetically/numerically" : "in the same order"}
-          </strong>. Span grows as you improve.</p>
-        </div>
-      )}
-
-      {/* Showing phase — big centered item */}
+      }
+      instructions={
+        <p>
+          A sequence flashes one item at a time. Give it back{" "}
+          <strong style={{ color: accent }}>
+            {cfg.type.includes("Reverse") ? "in reverse" : cfg.type.includes("Sorted") ? "sorted" : "in the same order"}
+          </strong>{" "}
+          — type it or tap the pad. Span grows as you improve.
+        </p>
+      }
+    >
       {phase === "showing" && (
-        <div className="text-center py-10">
-          <div className="text-8xl font-bold transition-all duration-150"
-            style={{ fontFamily: "'Cinzel', serif", color: currentItem ? accent : "transparent",
-              filter: currentItem ? `drop-shadow(0 0 24px ${accent})` : "none", minHeight: 120 }}>
-            {currentItem ?? "·"}
+        <div className="text-center">
+          <div style={{
+            fontFamily: SERIF, fontWeight: 700, fontSize: px(110), lineHeight: 1,
+            minHeight: px(120), transition: "all 0.12s ease",
+            color: shownItem ? accent : "transparent",
+            filter: shownItem ? `drop-shadow(0 0 ${px(26)}px ${accent})` : "none",
+          }}>
+            {shownItem ?? "·"}
           </div>
-          <p className="text-[10px] mt-4 tracking-widest uppercase" style={{ color: "hsl(214 20% 36%)", fontFamily: "DM Mono, monospace" }}>
-            {shownIdx + 1} / {sequence.length}
+          <p style={{ color: "hsl(214 20% 36%)", fontFamily: MONO, fontSize: px(10), marginTop: px(14), letterSpacing: "0.15em" }}>
+            {Math.max(shownIdx + 1, 0)} / {sequence.length}
           </p>
         </div>
       )}
 
-      {/* Input phase — tap-pad */}
       {(phase === "input" || phase === "feedback") && (
-        <div className="space-y-4">
-          {/* Answer preview */}
-          <div className="flex gap-1.5 flex-wrap justify-center min-h-8">
+        <div className="flex flex-col items-center w-full" style={{ gap: px(16) }}>
+          <div className="flex flex-wrap justify-center" style={{ gap: px(6) }}>
             {Array.from({ length: sequence.length }).map((_, i) => {
               const val = playerInput[i];
-              const expected = expectedSeq[i];
-              const isCorrect = phase === "feedback" && val !== undefined ? val === expected : null;
+              const ok = phase === "feedback" && val !== undefined ? val === expectedSeq[i] : null;
               return (
-                <span key={i} className="w-9 h-9 rounded-lg flex items-center justify-center text-base font-bold transition-all"
+                <span key={i} className="flex items-center justify-center rounded-lg font-bold"
                   style={{
+                    width: px(38), height: px(38), fontSize: px(17), fontFamily: SERIF,
                     background: phase === "feedback"
-                      ? isCorrect ? "hsl(130 40% 15%)" : "hsl(0 40% 15%)"
-                      : val ? `${accent}20` : "hsl(222 20% 8%)",
-                    border: `1px solid ${phase === "feedback" ? (isCorrect ? "hsl(130 60% 40%)" : "hsl(0 60% 40%)") : val ? accent : "hsl(var(--accent-h) 15% 16%)"}`,
-                    color: phase === "feedback" ? (isCorrect ? "hsl(130 60% 60%)" : "hsl(0 60% 60%)") : val ? accent : "hsl(214 20% 30%)",
-                    fontFamily: "'Cinzel', serif",
+                      ? (ok ? "hsl(130 40% 15%)" : "hsl(0 40% 15%)")
+                      : val ? alpha(accent, 0.2) : "hsl(222 20% 8%)",
+                    border: `1px solid ${phase === "feedback" ? (ok ? "hsl(130 60% 40%)" : "hsl(0 60% 40%)") : val ? accent : "hsl(var(--accent-h) 15% 16%)"}`,
+                    color: phase === "feedback" ? (ok ? "hsl(130 60% 60%)" : "hsl(0 60% 60%)") : val ? accent : "hsl(214 20% 30%)",
                   }}>
                   {phase === "feedback" ? (val ?? "—") : (val ?? "")}
                 </span>
@@ -233,67 +255,64 @@ export default function MemorySpan() {
           </div>
 
           {phase === "feedback" && (
-            <p className="text-center text-[10px]" style={{ color: "hsl(214 20% 40%)", fontFamily: "DM Mono, monospace" }}>
+            <p style={{ color: "hsl(214 20% 42%)", fontFamily: MONO, fontSize: px(11) }}>
               Expected: {expectedSeq.join(" ")}
             </p>
           )}
 
-          {/* Tap pad */}
           {phase === "input" && (
-            <div className="flex flex-wrap gap-2 justify-center">
+            <div className="flex flex-wrap justify-center" style={{ gap: px(7), maxWidth: px(460) }}>
               {pool.map(item => (
                 <button key={item} onClick={() => handleInput(item)}
-                  className="w-11 h-11 rounded-lg text-sm font-bold transition-all active:scale-90"
-                  style={{ background: "hsl(222 20% 8%)", border: `1px solid hsl(var(--accent-h) 15% 16%)`, color: "hsl(46 45% 70%)", fontFamily: "'Cinzel', serif" }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = accent; (e.currentTarget as HTMLButtonElement).style.color = accent; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "hsl(var(--accent-h) 15% 16%)"; (e.currentTarget as HTMLButtonElement).style.color = "hsl(46 45% 70%)"; }}>
+                  className="rounded-lg font-bold transition-all active:scale-90"
+                  style={{
+                    width: px(44), height: px(44), fontSize: px(15), fontFamily: SERIF,
+                    background: "hsl(222 20% 8%)", border: "1px solid hsl(var(--accent-h) 15% 16%)",
+                    color: "hsl(46 45% 70%)",
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = accent; e.currentTarget.style.color = accent; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = "hsl(var(--accent-h) 15% 16%)"; e.currentTarget.style.color = "hsl(46 45% 70%)"; }}>
                   {item}
                 </button>
               ))}
-              <button onClick={handleBackspace}
-                className="w-11 h-11 rounded-lg flex items-center justify-center transition-all active:scale-90"
-                style={{ background: "hsl(222 20% 8%)", border: "1px solid hsl(var(--accent-h) 15% 16%)", color: "hsl(214 20% 45%)" }}>
-                <Delete className="w-4 h-4" />
+              <button onClick={backspace}
+                className="rounded-lg flex items-center justify-center transition-all active:scale-90"
+                style={{
+                  width: px(44), height: px(44),
+                  background: "hsl(222 20% 8%)", border: "1px solid hsl(var(--accent-h) 15% 16%)", color: "hsl(214 20% 45%)",
+                }}>
+                <Delete style={{ width: px(16), height: px(16) }} />
               </button>
             </div>
           )}
         </div>
       )}
 
-      {/* Round dots */}
-      {(phase === "showing" || phase === "input" || phase === "feedback") && (
-        <div className="flex gap-1.5 justify-center mt-5">
+      {active && (
+        <div className="flex justify-center" style={{ gap: px(6), marginTop: px(18) }}>
           {Array.from({ length: cfg.rounds }).map((_, i) => (
-            <div key={i} className="w-2 h-2 rounded-full transition-all" style={{
+            <div key={i} className="rounded-full" style={{
+              width: px(8), height: px(8),
               background: i < roundResults.length
                 ? roundResults[i] ? "hsl(130 60% 50%)" : "hsl(0 60% 50%)"
-                : i === round ? accent : "hsl(222 20% 12%)",
+                : i === round ? accent : "hsl(222 20% 14%)",
             }} />
           ))}
         </div>
       )}
 
-      {/* Result */}
       {phase === "result" && (
-        <div className="mb-6 p-5 rounded-xl border text-center space-y-4" style={{ background: "hsl(222 20% 5%)", borderColor: `${accent}30` }}>
-          <p className="text-[11px] tracking-widest uppercase" style={{ fontFamily: "'Cinzel', serif", color: "hsl(214 20% 45%)" }}>Session Complete</p>
-          <p className="text-4xl font-bold" style={{ color: accent, fontFamily: "'Cinzel', serif" }}>
+        <div className="rounded-xl border text-center w-full"
+          style={{ background: "hsl(222 20% 5%)", borderColor: alpha(accent, 0.3), padding: px(18), maxWidth: px(400) }}>
+          <p style={{ fontFamily: SERIF, color: "hsl(214 20% 45%)", fontSize: px(11), letterSpacing: "0.15em", textTransform: "uppercase" }}>Session Complete</p>
+          <p style={{ color: accent, fontFamily: SERIF, fontSize: px(38), fontWeight: 700, marginTop: px(10) }}>
             {roundResults.filter(Boolean).length}/{cfg.rounds}
           </p>
-          <p className="text-[11px]" style={{ color: "hsl(214 20% 45%)", fontFamily: "DM Mono, monospace" }}>
+          <p style={{ color: "hsl(214 20% 45%)", fontFamily: MONO, fontSize: px(11), marginTop: px(8) }}>
             Next span: <span style={{ color: accent }}>{cfg.level}</span>
           </p>
         </div>
       )}
-
-      {(phase === "idle" || phase === "result") && (
-        <button onClick={startSession}
-          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-[12px] font-semibold tracking-widest uppercase transition-all"
-          style={{ background: `${accent}15`, border: `1px solid ${accent}40`, color: accent, fontFamily: "'Cinzel', serif" }}>
-          {phase === "result" ? <RotateCcw className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-          {phase === "result" ? "Run Again" : "Begin Trial"}
-        </button>
-      )}
-    </div>
+    </GameShell>
   );
 }

@@ -1,23 +1,54 @@
 /**
  * Dual N-Back
- * Audio channel: letters A–H spoken via Web Speech API
- * Visual channel: blue square flashing in one of 9 grid positions
- * Player presses A (audio match) or L (position match)
- * Adaptive: auto-advance N when accuracy ≥ 80%, drop when < 50%
+ *
+ * Audio channel: a letter is spoken. Visual channel: a square lights in one of
+ * nine cells. You press one key when the letter matches the one N steps back
+ * and another when the position does.
+ *
+ * Three things changed from the first version:
+ *
+ * - **The speech said "Capital C".** `SpeechSynthesisUtterance("C")` is a lone
+ *   uppercase character, and most macOS voices spell that out with its case.
+ *   Feeding the voice a pronunciation ("see", "aitch", "kay") sidesteps the
+ *   whole question — it also removes the letter-name ambiguity that made C/K
+ *   and S/X hard to tell apart at speed.
+ *
+ * - **Match rate is yours to set.** The sequence is now generated up front with
+ *   a target proportion of matches per channel rather than left to chance, so a
+ *   21-trial run cannot come out with two matches or with fourteen.
+ *
+ * - **The response keys are rebindable**, which matters in the Arena: Complex
+ *   Working Memory wants a yes/no pair too, and two drills fighting over A and
+ *   L is a worse experience than moving one of them.
  */
-import { useState, useEffect, useRef, useCallback } from "react";
-import { ArrowLeft, Settings2, Play, RotateCcw } from "lucide-react";
-import { Link } from "wouter";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import GameShell, { type Setting } from "@/components/games/GameShell";
+import {
+  MONO, SERIF, alpha, keyLabel, randInt, useGameConfig, useGameKeys, useScaled,
+  type GameProps,
+} from "@/lib/gameKit";
 import { recordDrillResultInBackground } from "@/lib/trainingRecorder";
 
 const LETTERS = ["C", "H", "K", "L", "Q", "R", "S", "T"];
-const GRID_SIZE = 9; // 3×3
+
+/** Pronunciations, not names — see the header note about "Capital C". */
+const SPOKEN: Record<string, string> = {
+  C: "see", H: "aitch", K: "kay", L: "el", Q: "cue", R: "are", S: "ess", T: "tee",
+};
+
+const GRID = 9;
+const accent = "hsl(210 80% 62%)";
 
 function speak(letter: string, volume: number) {
-  if (!window.speechSynthesis) return;
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
+  if (volume <= 0) return;
   window.speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(letter);
-  u.rate = 0.9; u.pitch = 1; u.volume = volume / 100;
+  const u = new SpeechSynthesisUtterance(SPOKEN[letter] ?? letter.toLowerCase());
+  u.rate = 0.95;
+  u.pitch = 1;
+  u.volume = volume / 100;
+  u.lang = "en-US";
   window.speechSynthesis.speak(u);
 }
 
@@ -25,297 +56,290 @@ interface Config {
   n: number;
   trials: number;
   trialMs: number;
+  matchRate: number;
   threshAdvance: number;
   threshFallback: number;
   volume: number;
+  keyAudio: string;
+  keyPos: string;
 }
 
-const DEFAULT_CONFIG: Config = {
-  n: 1,
-  trials: 21,
-  trialMs: 3000,
-  threshAdvance: 80,
-  threshFallback: 50,
-  volume: 60,
+const DEFAULTS: Config = {
+  n: 1, trials: 21, trialMs: 3000, matchRate: 30,
+  threshAdvance: 80, threshFallback: 50, volume: 60,
+  keyAudio: "a", keyPos: "l",
 };
 
-type Phase = "idle" | "running" | "result";
-interface Result { nLevel: number; audioHits: number; posHits: number; audioMisses: number; posMisses: number; total: number; }
+/**
+ * Build both channels so that roughly `matchRate` percent of the scorable
+ * trials are matches, independently per channel. Non-match trials are forced
+ * to differ from the N-back item rather than merely drawn at random, or the
+ * effective rate would drift above the setting.
+ */
+function buildSequences(trials: number, n: number, matchRate: number) {
+  const pos: number[] = [];
+  const letters: string[] = [];
+  for (let i = 0; i < trials; i++) {
+    if (i >= n && Math.random() * 100 < matchRate) {
+      pos.push(pos[i - n]);
+    } else {
+      let p = randInt(GRID);
+      if (i >= n) while (p === pos[i - n]) p = randInt(GRID);
+      pos.push(p);
+    }
+    if (i >= n && Math.random() * 100 < matchRate) {
+      letters.push(letters[i - n]);
+    } else {
+      let l = LETTERS[randInt(LETTERS.length)];
+      if (i >= n) while (l === letters[i - n]) l = LETTERS[randInt(LETTERS.length)];
+      letters.push(l);
+    }
+  }
+  return { pos, letters };
+}
 
-export default function DualNBack() {
-  const [cfg, setCfg] = useState<Config>(DEFAULT_CONFIG);
-  const [showSettings, setShowSettings] = useState(false);
+type Phase = "idle" | "running" | "result";
+interface Result {
+  nLevel: number;
+  audioCorrect: number; posCorrect: number; scorable: number;
+  audioHits: number; audioTargets: number;
+  posHits: number; posTargets: number;
+}
+
+export default function DualNBack({ embedded, autoStart, onSessionComplete }: GameProps) {
+  const [cfg, setCfg] = useGameConfig<Config>("dual-n-back", DEFAULTS);
+  const px = useScaled();
+
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<Result | null>(null);
-
-  // Running state
   const [step, setStep] = useState(0);
   const [activePos, setActivePos] = useState<number | null>(null);
-  const [activeLetter, setActiveLetter] = useState<string | null>(null);
-  const [audioMatch, setAudioMatch] = useState(false);
-  const [posMatch, setPosMatch] = useState(false);
+  const [flash, setFlash] = useState<{ audio: boolean; pos: boolean }>({ audio: false, pos: false });
   const [feedback, setFeedback] = useState<{ audio: "hit" | "miss" | null; pos: "hit" | "miss" | null }>({ audio: null, pos: null });
 
-  const seqPos    = useRef<number[]>([]);
-  const seqLetter = useRef<string[]>([]);
+  const seq = useRef<{ pos: number[]; letters: string[] }>({ pos: [], letters: [] });
   const pressedAudio = useRef(false);
-  const pressedPos   = useRef(false);
-  const statsRef = useRef({ audioHits: 0, posHits: 0, audioMisses: 0, posMisses: 0 });
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stepRef  = useRef(0);
-  const runningRef = useRef(false);
-  // When the current drill began, so recorded sessions carry a real duration.
-  const startedAtRef = useRef(0);
+  const pressedPos = useRef(false);
+  const stats = useRef({ audioCorrect: 0, posCorrect: 0, scorable: 0, audioHits: 0, audioTargets: 0, posHits: 0, posTargets: 0 });
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const gen = useRef(0);
+  const startedAt = useRef(0);
 
-  const clearTimer = () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
+  const later = (fn: () => void, ms: number) => { timers.current.push(setTimeout(fn, ms)); };
 
   const endSession = useCallback((n: number) => {
-    runningRef.current = false;
-    clearTimer();
-    const s = statsRef.current;
-    const total = Math.max(1, cfg.trials - n);
-    const audioAcc = total > 0 ? ((s.audioHits / (s.audioHits + s.audioMisses || 1)) * 100) : 0;
-    const newN = audioAcc >= cfg.threshAdvance ? n + 1
-               : audioAcc < cfg.threshFallback && n > 1 ? n - 1 : n;
-    setResult({ nLevel: newN, ...s, total });
+    clearTimers();
+    const s = { ...stats.current };
+    const acc = s.scorable > 0 ? ((s.audioCorrect + s.posCorrect) / (s.scorable * 2)) * 100 : 0;
+    const newN = acc >= cfg.threshAdvance ? n + 1
+      : acc < cfg.threshFallback && n > 1 ? n - 1
+      : n;
+    setResult({ nLevel: newN, ...s });
     setCfg(c => ({ ...c, n: newN }));
     setPhase("result");
+    setActivePos(null);
     recordDrillResultInBackground({
       domain: "working_memory", activityId: "dual-n-back",
-      correct: s.audioHits + s.posHits,
-      total: s.audioHits + s.posHits + s.audioMisses + s.posMisses,
-      level: n, maxLevel: 6, startedAt: startedAtRef.current,
+      correct: s.audioCorrect + s.posCorrect, total: s.scorable * 2,
+      level: n, maxLevel: 8, startedAt: startedAt.current,
     });
-    setActivePos(null); setActiveLetter(null);
-  }, [cfg]);
+    onSessionComplete?.({ correct: s.audioCorrect + s.posCorrect, total: s.scorable * 2, level: newN });
+  }, [cfg.threshAdvance, cfg.threshFallback, setCfg, onSessionComplete]);
 
-  const runStep = useCallback((i: number, n: number, trials: number) => {
-    if (!runningRef.current) return;
+  const runStep = useCallback((i: number, n: number, trials: number, myGen: number) => {
+    if (myGen !== gen.current) return;
+
+    // Score the trial that just finished, both channels, hits and correct
+    // rejections alike — pressing nothing on a non-match is a right answer.
+    if (i > 0 && i - 1 >= n) {
+      const j = i - 1;
+      const audioMatch = seq.current.letters[j] === seq.current.letters[j - n];
+      const posMatch = seq.current.pos[j] === seq.current.pos[j - n];
+      stats.current.scorable++;
+      if (audioMatch) {
+        stats.current.audioTargets++;
+        if (pressedAudio.current) { stats.current.audioHits++; stats.current.audioCorrect++; }
+      } else if (!pressedAudio.current) stats.current.audioCorrect++;
+      if (posMatch) {
+        stats.current.posTargets++;
+        if (pressedPos.current) { stats.current.posHits++; stats.current.posCorrect++; }
+      } else if (!pressedPos.current) stats.current.posCorrect++;
+
+      setFeedback({
+        audio: audioMatch ? (pressedAudio.current ? "hit" : "miss") : (pressedAudio.current ? "miss" : null),
+        pos: posMatch ? (pressedPos.current ? "hit" : "miss") : (pressedPos.current ? "miss" : null),
+      });
+      later(() => setFeedback({ audio: null, pos: null }), Math.min(500, cfg.trialMs / 3));
+    }
+
     if (i >= trials) { endSession(n); return; }
 
-    // Score previous step
-    if (i > 0 && i > n) {
-      const prevAudioMatch = seqLetter.current[i - 1] === seqLetter.current[i - 1 - n];
-      const prevPosMatch   = seqPos.current[i - 1]    === seqPos.current[i - 1 - n];
-      if (prevAudioMatch) {
-        if (pressedAudio.current) statsRef.current.audioHits++;
-        else statsRef.current.audioMisses++;
-      }
-      if (prevPosMatch) {
-        if (pressedPos.current) statsRef.current.posHits++;
-        else statsRef.current.posMisses++;
-      }
-      setFeedback({
-        audio: prevAudioMatch ? (pressedAudio.current ? "hit" : "miss") : null,
-        pos:   prevPosMatch   ? (pressedPos.current   ? "hit" : "miss") : null,
-      });
-      setTimeout(() => setFeedback({ audio: null, pos: null }), 400);
-    }
-
     pressedAudio.current = false;
-    pressedPos.current   = false;
-
-    const pos = Math.floor(Math.random() * GRID_SIZE);
-    const letter = LETTERS[Math.floor(Math.random() * LETTERS.length)];
-    seqPos.current.push(pos);
-    seqLetter.current.push(letter);
-
+    pressedPos.current = false;
     setStep(i);
-    setActivePos(pos);
-    setActiveLetter(letter);
-    speak(letter, cfg.volume);
-
-    if (i >= n) {
-      setAudioMatch(seqLetter.current[i] === seqLetter.current[i - n]);
-      setPosMatch(seqPos.current[i] === seqPos.current[i - n]);
-    } else {
-      setAudioMatch(false); setPosMatch(false);
-    }
-
-    stepRef.current = i;
-    timerRef.current = setTimeout(() => runStep(i + 1, n, trials), cfg.trialMs);
-  }, [cfg, endSession]);
+    setActivePos(seq.current.pos[i]);
+    speak(seq.current.letters[i], cfg.volume);
+    later(() => { if (myGen === gen.current) setActivePos(null); }, Math.max(300, cfg.trialMs * 0.55));
+    later(() => runStep(i + 1, n, trials, myGen), cfg.trialMs);
+  }, [cfg.trialMs, cfg.volume, endSession]);
 
   const startSession = useCallback(() => {
-    startedAtRef.current = Date.now();
-    clearTimer();
-    seqPos.current = []; seqLetter.current = [];
-    pressedAudio.current = false; pressedPos.current = false;
-    statsRef.current = { audioHits: 0, posHits: 0, audioMisses: 0, posMisses: 0 };
-    setResult(null); setPhase("running"); setStep(0);
-    setActivePos(null); setActiveLetter(null);
-    runningRef.current = true;
-    runStep(0, cfg.n, cfg.trials);
-  }, [cfg, runStep]);
+    gen.current += 1;
+    const myGen = gen.current;
+    clearTimers();
+    startedAt.current = Date.now();
+    seq.current = buildSequences(cfg.trials, cfg.n, cfg.matchRate);
+    pressedAudio.current = false;
+    pressedPos.current = false;
+    stats.current = { audioCorrect: 0, posCorrect: 0, scorable: 0, audioHits: 0, audioTargets: 0, posHits: 0, posTargets: 0 };
+    setResult(null);
+    setFeedback({ audio: null, pos: null });
+    setStep(0);
+    setPhase("running");
+    runStep(0, cfg.n, cfg.trials, myGen);
+  }, [cfg.trials, cfg.n, cfg.matchRate, runStep]);
 
-  // Keyboard handler
-  useEffect(() => {
-    if (phase !== "running") return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key.toLowerCase() === "a") { pressedAudio.current = true; }
-      if (e.key.toLowerCase() === "l") { pressedPos.current = true; }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [phase]);
+  // Blitz mounts a panel and expects it to be playing; nothing else auto-starts.
+  const startRef = useRef(startSession);
+  startRef.current = startSession;
+  useEffect(() => { if (autoStart) startRef.current(); }, [autoStart]);
 
-  useEffect(() => () => { clearTimer(); runningRef.current = false; }, []);
+  useEffect(() => () => {
+    gen.current += 1;
+    clearTimers();
+    // Blitz can rotate this panel away mid-utterance; the voice is global and
+    // would otherwise keep reading letters for a drill that no longer exists.
+    if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
+  }, []);
 
-  const accentColor = "hsl(210 80% 62%)";
+  const hitAudio = useCallback(() => {
+    pressedAudio.current = true;
+    setFlash(f => ({ ...f, audio: true }));
+    setTimeout(() => setFlash(f => ({ ...f, audio: false })), 120);
+  }, []);
+  const hitPos = useCallback(() => {
+    pressedPos.current = true;
+    setFlash(f => ({ ...f, pos: true }));
+    setTimeout(() => setFlash(f => ({ ...f, pos: false })), 120);
+  }, []);
+
+  useGameKeys([cfg.keyAudio], hitAudio, phase === "running");
+  useGameKeys([cfg.keyPos], hitPos, phase === "running");
+
+  const settings: Setting[] = [
+    { kind: "range", key: "n", label: "N-Back level", min: 1, max: 10 },
+    { kind: "range", key: "matchRate", label: "Match rate %", min: 5, max: 60, step: 5, format: v => `${v}%` },
+    { kind: "range", key: "trials", label: "Trials", min: 10, max: 60 },
+    { kind: "range", key: "trialMs", label: "Trial time", min: 1000, max: 6000, step: 250, format: v => `${(v / 1000).toFixed(2)}s` },
+    { kind: "range", key: "threshAdvance", label: "Advance at %", min: 60, max: 95, step: 5 },
+    { kind: "range", key: "threshFallback", label: "Fall back below %", min: 30, max: 70, step: 5 },
+    { kind: "range", key: "volume", label: "Voice volume", min: 0, max: 100, step: 10 },
+    { kind: "key", key: "keyAudio", label: "Audio match key" },
+    { kind: "key", key: "keyPos", label: "Position match key" },
+  ];
+
+  const cell = px(84);
+  const gap = px(8);
 
   return (
-    <div className="max-w-lg mx-auto py-4">
-      {/* Back + title */}
-      <div className="flex items-center gap-3 mb-6">
-        <Link href="/athena">
-          <button className="opacity-40 hover:opacity-80 transition-opacity">
-            <ArrowLeft className="w-4 h-4" style={{ color: accentColor }} />
-          </button>
-        </Link>
-        <div className="flex-1">
-          <h1 className="text-sm font-semibold tracking-widest uppercase" style={{ fontFamily: "'Cinzel', serif", color: accentColor }}>
-            Dual N-Back
-          </h1>
-          <p className="text-[10px]" style={{ color: "hsl(214 20% 40%)", fontFamily: "DM Mono, monospace" }}>
-            N = {cfg.n} · {cfg.trials} trials · {(cfg.trialMs / 1000).toFixed(1)}s each
+    <GameShell
+      title="Dual N-Back" accent={accent} embedded={embedded}
+      subtitle={`N = ${cfg.n} · ${cfg.trials} trials · ${(cfg.trialMs / 1000).toFixed(1)}s · ${cfg.matchRate}% matches`}
+      phase={phase} onStart={startSession} settings={settings} cfg={cfg} setCfg={setCfg}
+      instructions={
+        <div style={{ display: "grid", gap: px(6) }}>
+          <p>A letter is spoken and a square lights up. Respond when either matches what happened <strong style={{ color: accent }}>{cfg.n} step{cfg.n === 1 ? "" : "s"} back</strong>.</p>
+          <p>
+            <kbd style={{ padding: `${px(2)}px ${px(6)}px`, borderRadius: px(4), background: "hsl(222 20% 9%)", border: "1px solid hsl(var(--accent-h) 15% 18%)", color: accent }}>{keyLabel(cfg.keyAudio)}</kbd> audio match
+            {"  ·  "}
+            <kbd style={{ padding: `${px(2)}px ${px(6)}px`, borderRadius: px(4), background: "hsl(222 20% 9%)", border: "1px solid hsl(var(--accent-h) 15% 18%)", color: accent }}>{keyLabel(cfg.keyPos)}</kbd> position match
           </p>
+          <p>Staying silent on a non-match counts as a correct answer. N rises past {cfg.threshAdvance}% and falls below {cfg.threshFallback}%.</p>
         </div>
-        <button onClick={() => setShowSettings(s => !s)} className="opacity-40 hover:opacity-80 transition-opacity">
-          <Settings2 className="w-4 h-4" style={{ color: accentColor }} />
-        </button>
-      </div>
-
-      {/* Settings panel */}
-      {showSettings && (
-        <div className="mb-6 p-4 rounded-xl border space-y-3" style={{ background: "hsl(222 20% 5%)", borderColor: `${accentColor}25` }}>
-          {[
-            { label: "N-Back Level", key: "n" as keyof Config, min: 1, max: 10, step: 1 },
-            { label: "Trials", key: "trials" as keyof Config, min: 10, max: 60, step: 1 },
-            { label: "Trial Time (ms)", key: "trialMs" as keyof Config, min: 1500, max: 5000, step: 500 },
-            { label: "Advance Threshold %", key: "threshAdvance" as keyof Config, min: 60, max: 95, step: 5 },
-            { label: "Fallback Threshold %", key: "threshFallback" as keyof Config, min: 30, max: 70, step: 5 },
-            { label: "Volume", key: "volume" as keyof Config, min: 0, max: 100, step: 10 },
-          ].map(({ label, key, min, max, step: s }) => (
-            <div key={key} className="flex items-center justify-between gap-4">
-              <label className="text-[11px]" style={{ color: "hsl(214 20% 50%)", fontFamily: "DM Mono, monospace" }}>{label}</label>
-              <div className="flex items-center gap-2">
-                <input type="range" min={min} max={max} step={s} value={cfg[key]}
-                  onChange={e => setCfg(c => ({ ...c, [key]: Number(e.target.value) }))}
-                  className="w-28 accent-blue-400" />
-                <span className="text-[11px] w-10 text-right tabular-nums" style={{ color: accentColor }}>{cfg[key]}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Instructions */}
-      {phase === "idle" && (
-        <div className="mb-6 p-4 rounded-xl border text-[11px] space-y-1.5 leading-relaxed" style={{ background: "hsl(222 20% 4%)", borderColor: "hsl(var(--accent-h) 15% 12%)", color: "hsl(214 20% 50%)" }}>
-          <p>A sequence of signals plays one at a time. Match each signal to what appeared <strong style={{ color: accentColor }}>N steps back</strong>.</p>
-          <p><kbd className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "hsl(222 20% 9%)", border: "1px solid hsl(var(--accent-h) 15% 18%)", color: accentColor }}>A</kbd> — audio letter match &nbsp;&nbsp; <kbd className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "hsl(222 20% 9%)", border: "1px solid hsl(var(--accent-h) 15% 18%)", color: accentColor }}>L</kbd> — position match</p>
-          <p>Auto-advances to N+1 when accuracy ≥ {cfg.threshAdvance}%, drops to N-1 when &lt; {cfg.threshFallback}%.</p>
-        </div>
-      )}
-
-      {/* 3×3 Grid */}
-      {(phase === "running") && (
-        <div className="mb-6">
-          <div
-            className="grid gap-2 mx-auto"
-            style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", width: 240, height: 240 }}
-          >
-            {Array.from({ length: 9 }).map((_, i) => {
-              const isActive = activePos === i;
+      }
+    >
+      {phase === "running" && (
+        <div className="flex flex-col items-center" style={{ gap: px(16) }}>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(3, ${cell}px)`, gap }}>
+            {Array.from({ length: GRID }).map((_, i) => {
+              const on = activePos === i;
               return (
                 <div
                   key={i}
-                  className="rounded-lg transition-all duration-150"
                   style={{
-                    background: isActive ? accentColor : "hsl(222 20% 8%)",
-                    border: `1px solid ${isActive ? accentColor : "hsl(var(--accent-h) 15% 14%)"}`,
-                    boxShadow: isActive ? `0 0 24px ${accentColor}80, 0 0 8px ${accentColor}` : "none",
+                    width: cell, height: cell, borderRadius: px(10),
+                    background: on ? accent : "hsl(222 20% 8%)",
+                    border: `1px solid ${on ? accent : "hsl(var(--accent-h) 15% 14%)"}`,
+                    boxShadow: on ? `0 0 ${px(30)}px ${alpha(accent, 0.80)}` : "none",
+                    transition: "all 0.12s ease",
                   }}
                 />
               );
             })}
           </div>
 
-          {/* Letter display */}
-          <div className="text-center mt-4">
-            <span className="text-5xl font-bold" style={{ fontFamily: "'Cinzel', serif", color: "transparent", transition: "all 0.15s ease" }}>
-              {"—"}
-            </span>
-          </div>
-
-          {/* Progress + feedback */}
-          <div className="flex items-center justify-between mt-4 px-1">
-            <span className="text-[10px]" style={{ color: "hsl(214 20% 36%)", fontFamily: "DM Mono, monospace" }}>
+          <div className="flex items-center justify-between w-full" style={{ maxWidth: cell * 3 + gap * 2 }}>
+            <span style={{ color: "hsl(214 20% 38%)", fontFamily: MONO, fontSize: px(10) }}>
               {step + 1} / {cfg.trials}
             </span>
-            <div className="flex gap-4">
-              <span className="text-[10px]" style={{ color: feedback.audio === "hit" ? "hsl(130 60% 55%)" : feedback.audio === "miss" ? "hsl(0 60% 55%)" : "hsl(214 20% 30%)", fontFamily: "DM Mono, monospace", transition: "color 0.2s" }}>
-                AUDIO {feedback.audio === "hit" ? "✓" : feedback.audio === "miss" ? "✗" : "·"}
-              </span>
-              <span className="text-[10px]" style={{ color: feedback.pos === "hit" ? "hsl(130 60% 55%)" : feedback.pos === "miss" ? "hsl(0 60% 55%)" : "hsl(214 20% 30%)", fontFamily: "DM Mono, monospace", transition: "color 0.2s" }}>
-                POS {feedback.pos === "hit" ? "✓" : feedback.pos === "miss" ? "✗" : "·"}
-              </span>
+            <div className="flex" style={{ gap: px(14) }}>
+              {([["AUDIO", feedback.audio], ["POS", feedback.pos]] as const).map(([label, fb]) => (
+                <span key={label} style={{
+                  fontFamily: MONO, fontSize: px(10), transition: "color 0.2s",
+                  color: fb === "hit" ? "hsl(130 60% 55%)" : fb === "miss" ? "hsl(0 60% 55%)" : "hsl(214 20% 30%)",
+                }}>
+                  {label} {fb === "hit" ? "✓" : fb === "miss" ? "✗" : "·"}
+                </span>
+              ))}
             </div>
           </div>
 
-          {/* Mobile tap buttons */}
-          <div className="flex gap-3 mt-5">
-            <button
-              onPointerDown={() => { pressedAudio.current = true; }}
-              className="flex-1 py-3 rounded-xl text-[11px] font-semibold tracking-widest uppercase transition-all active:scale-95"
-              style={{ background: `${accentColor}15`, border: `1px solid ${accentColor}35`, color: accentColor, fontFamily: "'Cinzel', serif" }}
-            >
-              Audio (A)
-            </button>
-            <button
-              onPointerDown={() => { pressedPos.current = true; }}
-              className="flex-1 py-3 rounded-xl text-[11px] font-semibold tracking-widest uppercase transition-all active:scale-95"
-              style={{ background: `${accentColor}15`, border: `1px solid ${accentColor}35`, color: accentColor, fontFamily: "'Cinzel', serif" }}
-            >
-              Position (L)
-            </button>
+          <div className="flex w-full" style={{ gap: px(10), maxWidth: cell * 3 + gap * 2 }}>
+            {([[cfg.keyAudio, "Audio", hitAudio, flash.audio], [cfg.keyPos, "Position", hitPos, flash.pos]] as const).map(([k, label, fn, lit]) => (
+              <button
+                key={label}
+                onPointerDown={fn}
+                className="flex-1 rounded-xl font-semibold tracking-widest uppercase transition-all active:scale-95"
+                style={{
+                  padding: `${px(12)}px 0`, fontSize: px(11), fontFamily: SERIF,
+                  background: lit ? `${alpha(accent, 0.45)}` : `${alpha(accent, 0.15)}`,
+                  border: `1px solid ${alpha(accent, lit ? 1 : 0.35)}`,
+                  color: accent,
+                }}
+              >
+                {label} ({keyLabel(k)})
+              </button>
+            ))}
           </div>
         </div>
       )}
 
-      {/* Result */}
       {phase === "result" && result && (
-        <div className="mb-6 p-5 rounded-xl border text-center space-y-4" style={{ background: "hsl(222 20% 5%)", borderColor: `${accentColor}30` }}>
-          <p className="text-[11px] tracking-widest uppercase" style={{ fontFamily: "'Cinzel', serif", color: "hsl(214 20% 45%)" }}>Session Complete</p>
-          <div className="flex justify-center gap-8">
+        <div
+          className="rounded-xl border text-center w-full"
+          style={{ background: "hsl(222 20% 5%)", borderColor: `${alpha(accent, 0.30)}`, padding: px(18), maxWidth: px(420) }}
+        >
+          <p style={{ fontFamily: SERIF, color: "hsl(214 20% 45%)", fontSize: px(11), letterSpacing: "0.15em", textTransform: "uppercase" }}>
+            Session Complete
+          </p>
+          <div className="flex justify-center" style={{ gap: px(34), marginTop: px(14) }}>
             <div>
-              <p className="text-3xl font-bold" style={{ color: accentColor, fontFamily: "'Cinzel', serif" }}>{result.audioHits + result.posHits}</p>
-              <p className="text-[10px] mt-0.5" style={{ color: "hsl(214 20% 40%)", fontFamily: "DM Mono, monospace" }}>correct responses</p>
+              <p style={{ color: accent, fontFamily: SERIF, fontSize: px(30), fontWeight: 700 }}>
+                {result.scorable ? Math.round(((result.audioCorrect + result.posCorrect) / (result.scorable * 2)) * 100) : 0}%
+              </p>
+              <p style={{ color: "hsl(214 20% 40%)", fontFamily: MONO, fontSize: px(10) }}>accuracy</p>
             </div>
             <div>
-              <p className="text-3xl font-bold" style={{ color: accentColor, fontFamily: "'Cinzel', serif" }}>{result.nLevel}</p>
-              <p className="text-[10px] mt-0.5" style={{ color: "hsl(214 20% 40%)", fontFamily: "DM Mono, monospace" }}>next N level</p>
+              <p style={{ color: accent, fontFamily: SERIF, fontSize: px(30), fontWeight: 700 }}>{result.nLevel}</p>
+              <p style={{ color: "hsl(214 20% 40%)", fontFamily: MONO, fontSize: px(10) }}>next N</p>
             </div>
           </div>
-          {result.nLevel !== cfg.n && (
-            <p className="text-[11px]" style={{ color: result.nLevel > cfg.n ? "hsl(130 60% 55%)" : "hsl(35 90% 62%)", fontFamily: "DM Mono, monospace" }}>
-              {result.nLevel > cfg.n ? `↑ Advancing to N-${result.nLevel}` : `↓ Stepping back to N-${result.nLevel}`}
-            </p>
-          )}
+          <p style={{ color: "hsl(214 20% 42%)", fontFamily: MONO, fontSize: px(10), marginTop: px(12) }}>
+            audio {result.audioHits}/{result.audioTargets} targets · position {result.posHits}/{result.posTargets} targets
+          </p>
         </div>
       )}
-
-      {/* Start / Restart */}
-      {phase !== "running" && (
-        <button
-          onClick={startSession}
-          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-[12px] font-semibold tracking-widest uppercase transition-all active:scale-98"
-          style={{ background: `${accentColor}15`, border: `1px solid ${accentColor}40`, color: accentColor, fontFamily: "'Cinzel', serif" }}
-        >
-          {phase === "result" ? <RotateCcw className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-          {phase === "result" ? "Run Again" : "Begin Trial"}
-        </button>
-      )}
-    </div>
+    </GameShell>
   );
 }

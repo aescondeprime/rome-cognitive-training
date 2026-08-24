@@ -30,12 +30,9 @@ import NotFound from "@/pages/not-found";
 
 // Athena Trials
 import MidasDashboard from "@/pages/MidasDashboard";
-import DualNBack from "@/pages/games/DualNBack";
-import CWM from "@/pages/games/CWM";
-import MentalMath from "@/pages/games/MentalMath";
-import CorsiBlocks from "@/pages/games/CorsiBlocks";
-import MemorySpan from "@/pages/games/MemorySpan";
-import PASAT from "@/pages/games/PASAT";
+import Arena from "@/pages/Arena";
+import SoloGame from "@/components/games/SoloGame";
+import { GAMES } from "@/lib/gamesRegistry";
 
 // Placeholder nodes
 import PlaceholderNode from "@/pages/PlaceholderNode";
@@ -142,13 +139,15 @@ export default function App() {
                 <AppShell>
                   <Switch>
                     {/* Athena Trials */}
-                    <Route path="/athena"             component={MidasDashboard} />
-                    <Route path="/athena/dual-n-back"  component={DualNBack} />
-                    <Route path="/athena/cwm"          component={CWM} />
-                    <Route path="/athena/mental-math"  component={MentalMath} />
-                    <Route path="/athena/corsi"        component={CorsiBlocks} />
-                    <Route path="/athena/memory-span"  component={MemorySpan} />
-                    <Route path="/athena/pasat"        component={PASAT} />
+                    <Route path="/athena"       component={MidasDashboard} />
+                    <Route path="/athena/arena" component={Arena} />
+                    {/* One route per drill, generated from the catalogue, so
+                        adding a drill is a single edit in `gamesRegistry`. */}
+                    {GAMES.map(g => (
+                      <Route key={g.id} path={g.path}>
+                        <SoloGame gameId={g.id} />
+                      </Route>
+                    ))}
 
                     {/* Philosophy */}
                     <Route path="/philosophy" component={PhilosophyChambers} />
