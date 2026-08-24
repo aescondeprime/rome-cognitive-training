@@ -117,7 +117,18 @@ export async function recordDrillResult(result: DrillResult): Promise<void> {
   }
 }
 
+/**
+ * Serialises every recorded drill through one queue.
+ *
+ * A single drill already posts its trials one at a time, but the Arena can have
+ * four drills finishing independently — and blitz mode finishes them over and
+ * over — so without this, four forty-trial replays would go out at once and
+ * each POST costs three round trips server-side. One chain keeps the burst flat
+ * without making any drill wait for the network.
+ */
+let queue: Promise<void> = Promise.resolve();
+
 /** Fire-and-forget wrapper, so a drill's result screen never waits on the network. */
 export function recordDrillResultInBackground(result: DrillResult): void {
-  void recordDrillResult(result).catch(() => undefined);
+  queue = queue.then(() => recordDrillResult(result)).catch(() => undefined);
 }

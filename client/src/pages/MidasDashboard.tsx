@@ -49,6 +49,7 @@ const TRIALS = [
   { href: "/athena/corsi",       name: "Corsi Blocks", glyph: "⊞", accent: "hsl(165 55% 48%)", scale: "working_memory" },
   { href: "/athena/memory-span", name: "Memory Span",  glyph: "◎", accent: "hsl(35 90% 62%)",  scale: "recall" },
   { href: "/athena/pasat",       name: "PASAT",        glyph: "⊕", accent: "hsl(345 60% 62%)", scale: "focus" },
+  { href: "/athena/flux",        name: "Flux",         glyph: "⧉", accent: "hsl(190 75% 55%)", scale: "flexibility" },
 ];
 
 const SOURCE_LABEL: Record<ScaleScore["source"], string> = {
@@ -210,8 +211,28 @@ export default function MidasDashboard() {
       {/* ── Trials ─────────────────────────────────────────────────────── */}
       <div className="mt-8">
         <p className="text-[8px] tracking-[0.18em] uppercase mb-3" style={{ fontFamily: mono, color: "hsl(var(--accent-h) 40% 42%)" }}>
-          Trials — six adaptive drills, feeding the measured scales
+          Trials — seven adaptive drills, feeding the measured scales
         </p>
+
+        {/* The Arena runs up to four of them at once, and rotates them in
+            blitz mode; each drill keeps its own level wherever it is played. */}
+        <Link href="/athena/arena">
+          <div
+            className="group flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all mb-2"
+            style={{ background: "hsl(var(--accent-h) 40% 12% / 0.35)", borderColor: "hsl(var(--accent-h) 40% 30% / 0.5)" }}
+          >
+            <span className="text-lg w-6 text-center shrink-0" style={{ color: "hsl(var(--accent-h) 70% 62%)" }}>⧈</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-[11px] font-semibold tracking-wide" style={{ fontFamily: serif, color: "hsl(var(--accent-h) 70% 62%)" }}>
+                Arena
+              </p>
+              <p className="text-[9px] mt-0.5" style={{ fontFamily: mono, color: "hsl(var(--accent-h) 35% 46%)" }}>
+                split screen up to four · blitz mode
+              </p>
+            </div>
+            <ChevronRight className="w-3.5 h-3.5 shrink-0 opacity-40 group-hover:opacity-80 transition-opacity" style={{ color: "hsl(var(--accent-h) 70% 62%)" }} />
+          </div>
+        </Link>
         <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
           {TRIALS.map(t => {
             const active = state.scales.includes(t.scale);
