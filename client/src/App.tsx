@@ -14,6 +14,8 @@ import { applyLayout } from "@/lib/applyLayout";
 import { playCue, primeAudio } from "@/lib/sound";
 import Login from "@/pages/Login";
 import { AkiraProvider } from "@/akira/AkiraProvider";
+import { ForgeJobProvider } from "@/lib/forgeJobs";
+import { RecallSessionProvider } from "@/lib/recallSession";
 import AkiraAmbience from "@/akira/AkiraAmbience";
 import AkiraConsole from "@/akira/AkiraConsole";
 import RomeCursor from "@/components/RomeCursor";
@@ -40,6 +42,7 @@ import WorldBrowser from "@/pages/WorldBrowser";
 import FundingDashboard from "@/pages/FundingDashboard";
 
 const Academia = lazy(() => import("@/pages/Academia"));
+const RecallState = lazy(() => import("@/pages/RecallState"));
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -126,6 +129,9 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthGate>
+          <ForgeJobProvider>
+          {/* Above the router on purpose: a run outlives the page that shows it. */}
+          <RecallSessionProvider>
           <AkiraProvider>
             {/* Akira's only always-mounted surface. Renders nothing while dormant. */}
             <AkiraAmbience />
@@ -202,6 +208,13 @@ export default function App() {
                         <Academia />
                       </Suspense>
                     </Route>
+                    {/* Its own route rather than a sub-state: linkable, survives a
+                        reload, and gives Akira somewhere to navigate to. */}
+                    <Route path="/academia/recall">
+                      <Suspense fallback={<div className="flex h-64 items-center justify-center font-mono text-[9px] tracking-[.18em] text-muted-foreground/40">ENTERING RECALL STATE…</div>}>
+                        <RecallState />
+                      </Suspense>
+                    </Route>
 
                     {/* Profiles + Settings */}
                     <Route path="/settings"  component={Settings} />
@@ -219,6 +232,8 @@ export default function App() {
             <RomeCursor />
             <Toaster />
           </AkiraProvider>
+          </RecallSessionProvider>
+          </ForgeJobProvider>
         </AuthGate>
       </ThemeProvider>
     </QueryClientProvider>

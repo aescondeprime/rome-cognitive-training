@@ -8,6 +8,8 @@ import { Settings, LogOut } from "lucide-react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import { ConstellationTrigger } from "./ConstellationOverlay";
+import ForgeJobBar from "./ForgeJobBar";
+import RecallStatusBar from "./RecallStatusBar";
 import { clearToken } from "@/lib/auth";
 import { queryClient } from "@/lib/queryClient";
 import { apiRequest } from "@/lib/queryClient";
@@ -27,7 +29,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex flex-col h-full">
       {/* ── Compact utility rail ───────────────────────────────────── */}
       <header
-        className="shrink-0 flex items-center justify-end px-6 py-1.5"
+        className="shrink-0 flex items-center justify-between gap-4 px-6 py-1.5"
         style={{
           background: "hsl(222 20% 5% / 0.7)",
           backdropFilter: "blur(16px)",
@@ -35,6 +37,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           zIndex: 10,
         }}
       >
+        {/* Background Forge work and any live run, visible from every node.
+            Both render nothing when there is nothing to say. */}
+        <div className="flex min-w-0 items-center gap-4">
+          <ForgeJobBar />
+          <RecallStatusBar />
+        </div>
+
         {/* Profile and account controls remain globally accessible. */}
         <div className="flex items-center gap-3">
           {activeProfile && (
