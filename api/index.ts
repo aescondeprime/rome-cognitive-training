@@ -562,8 +562,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       const user = await getActiveUser(req, sb);
       const body = await readBody(req);
       const now  = Date.now();
-      const { type = "taskboard", title = "Untitled" } = body;
-      const { data: board } = await sb.from("boards").insert({ user_id: user.id, type, title, created_at: now, updated_at: now }).select().single();
+      const { type = "taskboard", title = "Untitled", folder_id = null } = body;
+      const { data: board } = await sb.from("boards").insert({ user_id: user.id, type, title, folder_id, created_at: now, updated_at: now }).select().single();
       return json(res, 200, board ?? {});
     }
 
@@ -575,11 +575,61 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
           if (body.title !== undefined) patch.title = body.title;
+          if (body.folder_id !== undefined) patch.folder_id = body.folder_id;
           await sb.from("boards").update(patch).eq("id", boardId);
           return json(res, 200, { ok: true });
         }
         if (method === "DELETE") {
           await sb.from("boards").delete().eq("id", boardId);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // BOARD FOLDERS — the renamable cores boards are filed into
+    // GET/POST /board-folders   ·   PATCH/DELETE /board-folders/:id
+    // ════════════════════════════════════════════════════════════════════
+
+    if (route === "/board-folders" && method === "GET") {
+      const user = await getActiveUser(req, sb);
+      const url  = new URL(req.url!, "http://localhost");
+      const type = url.searchParams.get("type");
+      let q = sb.from("board_folders").select("*").eq("user_id", user.id).order("created_at", { ascending: true });
+      if (type) q = q.eq("type", type);
+      const { data } = await q;
+      return json(res, 200, data ?? []);
+    }
+
+    if (route === "/board-folders" && method === "POST") {
+      const user = await getActiveUser(req, sb);
+      const body = await readBody(req);
+      const now  = Date.now();
+      const { type = "idea_workshop", name = "New Core", color = "cyan" } = body;
+      const { data: folder } = await sb.from("board_folders")
+        .insert({ user_id: user.id, type, name: String(name).trim() || "New Core", color, created_at: now, updated_at: now })
+        .select().single();
+      return json(res, 200, folder ?? {});
+    }
+
+    {
+      const m = route.match(/^\/board-folders\/(\d+)$/);
+      if (m) {
+        const user = await getActiveUser(req, sb);
+        const id = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          if (body.name  !== undefined) patch.name  = body.name;
+          if (body.color !== undefined) patch.color = body.color;
+          await sb.from("board_folders").update(patch).eq("id", id).eq("user_id", user.id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          // Unfile before deleting: an unfiled board still shows in the
+          // sidebar, a board pointing at a dead core would not.
+          await sb.from("boards").update({ folder_id: null }).eq("folder_id", id).eq("user_id", user.id);
+          await sb.from("board_folders").delete().eq("id", id).eq("user_id", user.id);
           return json(res, 200, { ok: true });
         }
       }
@@ -658,8 +708,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           const user = await getActiveUser(req, sb);
           const body = await readBody(req);
           const now  = Date.now();
-          const { content = "", color = "violet", pos_x = 100, pos_y = 100, width = 220, tags = "", energy = 3 } = body;
-          const { data: card } = await sb.from("idea_cards").insert({ board_id: boardId, user_id: user.id, content, color, pos_x, pos_y, width, tags, energy, created_at: now, updated_at: now }).select().single();
+          const { content = "", color = "violet", pos_x = 100, pos_y = 100, width = 0, height = 0, tags = "", energy = 3, kind = "text", parent_id = null, src = null } = body;
+          const { data: card } = await sb.from("idea_cards").insert({ board_id: boardId, user_id: user.id, content, color, pos_x, pos_y, width, height, tags, energy, kind: kind === "image" ? "image" : "text", parent_id, src, created_at: now, updated_at: now }).select().single();
           return json(res, 200, card ?? {});
         }
       }
@@ -672,11 +722,14 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
-          ["content","color","pos_x","pos_y","width","height","tags","energy"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          ["content","color","pos_x","pos_y","width","height","tags","energy","kind","parent_id","src"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
           await sb.from("idea_cards").update(patch).eq("id", id);
           return json(res, 200, { ok: true });
         }
         if (method === "DELETE") {
+          // A sub-idea is positioned as an offset from its parent, so an
+          // orphan would land on the canvas origin and be unfindable.
+          await sb.from("idea_cards").delete().eq("parent_id", id);
           await sb.from("idea_cards").delete().eq("id", id);
           return json(res, 200, { ok: true });
         }
@@ -1189,6 +1242,26 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         }
       }
     }
+    // ── Sync writeback ──
+    // Deliberately not a PATCH: this must not touch `updated_at`. "Locally
+    // dirty" is `updated_at > synced_at`, so stamping the clock here would
+    // mark the row as freshly edited at the same moment it is marked synced,
+    // and the engine would push it again on every cycle, forever.
+    {
+      const m = route.match(/^\/kronos\/sync\/(routines|assignments|events|generals)\/(\d+)$/);
+      if (m && method === "POST") {
+        const table = `kronos_${m[1]}`;
+        const id = parseInt(m[2]);
+        const user = await getActiveUser(req, sb);
+        const body = await readBody(req);
+        const patch: any = {};
+        ["ical_uid","ical_href","ical_etag","ical_raw","sync_state","synced_at"]
+          .forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+        await sb.from(table).update(patch).eq("id", id).eq("user_id", user.id);
+        return json(res, 200, { ok: true });
+      }
+    }
+
     {
       const m = route.match(/^\/kronos\/generals\/(\d+)$/);
       if (m) {

@@ -133,6 +133,79 @@ interface RomeBrowserBridge {
   onConstellationToggle: (listener: () => void) => () => void;
 }
 
+/** One calendar iCloud offers that can actually hold events. */
+interface RomeDavCalendar {
+  /** Path-only. Never an absolute URL — iCloud's partition host can move. */
+  href: string;
+  displayName: string;
+  color: string;
+  ctag: string;
+  components: string[];
+}
+
+interface RomeKronosConfig {
+  provider: "icloud";
+  appleId: string;
+  calendarHref: string;
+  calendarName: string;
+  enabled: boolean;
+  pollMinutes: number;
+  /** Derived. The password itself is never sent to the renderer. */
+  passwordConfigured: boolean;
+  secureStorageAvailable: boolean;
+}
+
+type RomeKronosVerifyResult =
+  | { ok: true; origin: string; principalPath: string; homePath: string; calendars: RomeDavCalendar[] }
+  | { ok: false; kind: string; message: string };
+
+interface RomeKronosSyncStatus {
+  state: "idle" | "syncing" | "error";
+  lastSyncAt: number | null;
+  lastError: string | null;
+  lastPushed: number;
+  /** Rows the last plan would send. */
+  pending: number;
+}
+
+interface RomeKronosPushAction {
+  kind: string;
+  op: "create" | "update" | "skip";
+  reason?: string;
+  row: { id: number; title?: string };
+}
+
+interface RomeKronosCycleReport {
+  ok: boolean;
+  dryRun: boolean;
+  plan: { actions: RomeKronosPushAction[]; creates: number; updates: number; skipped: number };
+  pushed: number;
+  failed: number;
+  /** Already translated for a person. */
+  problems: string[];
+  finishedAt: number;
+  summary: string;
+}
+
+interface RomeKronosBridge {
+  getConfig: () => Promise<RomeKronosConfig>;
+  updateConfig: (patch: Partial<RomeKronosConfig>) => Promise<RomeKronosConfig>;
+  /**
+   * Write-only. There is deliberately no counterpart that reads the password
+   * back — see `electron/kronos/kronos-settings.ts`.
+   */
+  setPassword: (value: string) => Promise<RomeKronosConfig>;
+  /** Logs in and lists calendars. Read-only against iCloud. */
+  verify: () => Promise<RomeKronosVerifyResult>;
+  createCalendar: (name: string) => Promise<RomeKronosVerifyResult>;
+  disconnect: () => Promise<RomeKronosConfig>;
+  openAppleIdPage: () => Promise<void>;
+  syncStatus: () => Promise<RomeKronosSyncStatus>;
+  /** `dryRun` computes the plan and writes nothing. */
+  syncNow: (dryRun: boolean) => Promise<RomeKronosCycleReport>;
+  onSyncStatus: (listener: (status: RomeKronosSyncStatus) => void) => () => void;
+}
+
 interface Window {
   romeDesktop?: {
     getDataDir: () => Promise<string>;
@@ -141,5 +214,6 @@ interface Window {
     isDesktop: true;
     akira: RomeAkiraBridge;
     browser: RomeBrowserBridge;
+    kronos: RomeKronosBridge;
   };
 }

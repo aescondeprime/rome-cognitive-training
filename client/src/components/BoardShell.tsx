@@ -9,7 +9,7 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { Plus, Trash2, ChevronLeft, PenLine, Check, Loader2, BookOpen } from "lucide-react";
+import { Plus, Trash2, ChevronLeft, PenLine, Check, Loader2, BookOpen, FolderPlus, Folder as FolderIcon, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConstellationSidebar, type ConstellationNavNode } from "@/components/ConstellationNavigator";
 
@@ -17,9 +17,24 @@ export interface Board {
   id: number;
   type: string;
   title: string;
+  folder_id: number | null;
   created_at: number;
   updated_at: number;
 }
+
+/** A core: the renamable file boards are organised into. */
+export interface BoardFolder {
+  id: number;
+  type: string;
+  name: string;
+  color: string;
+  created_at: number;
+  updated_at: number;
+}
+
+// Boards with no core still have to be reachable, so they hang off a core that
+// is not a row. Zero is safe as its id: identity columns start at one.
+const UNFILED_ID = 0;
 
 interface Props {
   type: "taskboard" | "idea_workshop" | "component_board";
@@ -28,12 +43,29 @@ interface Props {
   children: (board: Board) => React.ReactNode;
 }
 
+function graphAccentFor(type: string) {
+  return type === "idea_workshop" ? "hsl(192 100% 62%)" : "hsl(38 78% 58%)";
+}
+
+// Cores are told apart by hue before they are read, so a new one takes the next
+// colour rather than the domain accent every time.
+const CORE_COLORS = [
+  "hsl(192 100% 62%)",
+  "hsl(270 70% 68%)",
+  "hsl(150 60% 55%)",
+  "hsl(38 85% 60%)",
+  "hsl(340 70% 65%)",
+  "hsl(210 80% 66%)",
+] as const;
+
 export default function BoardShell({ type, label, emptyIcon, children }: Props) {
   const qc = useQueryClient();
-  const [activeBoardId, setActiveBoardId] = useState<number | null>(null);
-  const [editingId,     setEditingId]     = useState<number | null>(null);
-  const [editTitle,     setEditTitle]     = useState("");
-  const [collapsed,     setCollapsed]     = useState(false);
+  const [activeBoardId,    setActiveBoardId]    = useState<number | null>(null);
+  const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null);
+  // Keyed rather than numeric: a core and a board can share an id.
+  const [editingKey,       setEditingKey]       = useState<string | null>(null);
+  const [editTitle,        setEditTitle]        = useState("");
+  const [collapsed,        setCollapsed]        = useState(false);
 
   const { data: boards = [], isLoading } = useQuery<Board[]>({
     queryKey: ["/boards", type],
@@ -53,11 +85,53 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
     }
   }, [boards]);
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["/boards", type] });
+  const { data: folders = [] } = useQuery<BoardFolder[]>({
+    queryKey: ["/board-folders", type],
+    queryFn:  () => apiRequest("GET", `/api/board-folders?type=${type}`).then(r => r.json()),
+  });
 
+  const invalidate       = () => qc.invalidateQueries({ queryKey: ["/boards", type] });
+  const invalidateCores  = () => qc.invalidateQueries({ queryKey: ["/board-folders", type] });
+
+  // A board created while a core is selected lands in it. Anything else is
+  // unfiled, which is a place, not an error state.
   const createBoard = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/boards", { type, title: `New ${label}` }).then(r => r.json()),
-    onSuccess: (board: Board) => { invalidate(); setActiveBoardId(board.id); },
+    mutationFn: () => apiRequest("POST", "/api/boards", {
+      type,
+      title: `New ${label}`,
+      folder_id: selectedFolderId && selectedFolderId !== UNFILED_ID ? selectedFolderId : null,
+    }).then(r => r.json()),
+    onSuccess: (board: Board) => { invalidate(); setActiveBoardId(board.id); setSelectedFolderId(null); },
+  });
+
+  const createFolder = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/board-folders", { type, name: "New Core", color: CORE_COLORS[folders.length % CORE_COLORS.length] }).then(r => r.json()),
+    onSuccess: (folder: BoardFolder) => {
+      invalidateCores();
+      setSelectedFolderId(folder.id);
+      setEditingKey(`folder:${folder.id}`);
+      setEditTitle(folder.name);
+    },
+  });
+
+  const renameFolder = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) => apiRequest("PATCH", `/api/board-folders/${id}`, { name }),
+    onSuccess: invalidateCores,
+  });
+
+  const deleteFolder = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/board-folders/${id}`),
+    onSuccess: (_, id) => {
+      invalidateCores();
+      invalidate();               // its boards just became unfiled
+      if (selectedFolderId === id) setSelectedFolderId(null);
+    },
+  });
+
+  const moveBoard = useMutation({
+    mutationFn: ({ id, folderId }: { id: number; folderId: number | null }) =>
+      apiRequest("PATCH", `/api/boards/${id}`, { folder_id: folderId }),
+    onSuccess: invalidate,
   });
 
   const renameBoard = useMutation({
@@ -75,44 +149,86 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
   });
 
   const startRename = useCallback((board: Board) => {
-    setEditingId(board.id);
+    setEditingKey(`board:${board.id}`);
     setEditTitle(board.title);
   }, []);
 
   const commitRename = useCallback(() => {
-    if (editingId && editTitle.trim()) {
-      renameBoard.mutate({ id: editingId, title: editTitle.trim() });
-    }
-    setEditingId(null);
-  }, [editingId, editTitle, renameBoard]);
+    const key = editingKey;
+    const value = editTitle.trim();
+    setEditingKey(null);
+    if (!key || !value) return;
+    const [kind, rawId] = key.split(":");
+    const id = Number(rawId);
+    if (kind === "board")  renameBoard.mutate({ id, title: value });
+    if (kind === "folder") renameFolder.mutate({ id, name: value });
+  }, [editingKey, editTitle, renameBoard, renameFolder]);
 
-  const activeBoard = boards.find(b => b.id === activeBoardId) ?? null;
+  const activeBoard  = boards.find(b => b.id === activeBoardId) ?? null;
   const graphEnabled = type === "idea_workshop" || type === "component_board";
-  const graphAccent = type === "idea_workshop" ? "hsl(192 100% 62%)" : "hsl(38 78% 58%)";
-  const graphHubId = `hub:${type}`;
-  const graphNodes: ConstellationNavNode[] = useMemo(() => [
-      {
-        id: graphHubId,
-        label: type === "idea_workshop" ? "Creative Core" : "Investigative Core",
-        group: type,
-        color: graphAccent,
-        kind: "hub",
-        weight: 7,
-        subtitle: `${label} constellation`,
-      },
-      ...boards.map(board => ({
-        id: `board:${board.id}`,
-        label: board.title,
-        group: type,
-        color: graphAccent,
-        kind: "item" as const,
-        subtitle: `Updated ${new Date(board.updated_at).toLocaleDateString()}`,
-        weight: activeBoardId === board.id ? 5 : Math.max(1, 4 - Math.floor((Date.now() - board.updated_at) / 86_400_000)),
-      })),
-    ], [activeBoardId, boards, graphAccent, graphHubId, label, type]);
+  const graphAccent  = graphAccentFor(type);
+
+  const folderById = useMemo(() => new Map(folders.map(f => [f.id, f])), [folders]);
+  const selectedFolder = selectedFolderId !== null && selectedFolderId !== UNFILED_ID
+    ? folderById.get(selectedFolderId) ?? null
+    : null;
+
+  // A board whose folder_id points at a core that no longer exists reads as
+  // unfiled rather than vanishing — the delete route unfiles, but a row written
+  // by an older build, or by the other API twin, must not be able to hide work.
+  const coreIdFor = useCallback((board: Board) => (
+    board.folder_id != null && folderById.has(board.folder_id) ? board.folder_id : UNFILED_ID
+  ), [folderById]);
+
+  const unfiledCount = useMemo(
+    () => boards.filter(board => coreIdFor(board) === UNFILED_ID).length,
+    [boards, coreIdFor],
+  );
+  // The Unfiled core earns its place only when something is in it, or when
+  // there is nothing else on the graph at all.
+  const showUnfiled = unfiledCount > 0 || folders.length === 0;
+
+  const graphNodes: ConstellationNavNode[] = useMemo(() => {
+    const coreNodes: ConstellationNavNode[] = folders.map(folder => ({
+      id: `folder:${folder.id}`,
+      label: folder.name,
+      group: `core:${folder.id}`,
+      color: folder.color || graphAccent,
+      kind: "folder" as const,
+      weight: 6,
+      subtitle: `${boards.filter(b => coreIdFor(b) === folder.id).length} ${label.toLowerCase()}s`,
+    }));
+    if (showUnfiled) {
+      coreNodes.push({
+        id: `folder:${UNFILED_ID}`,
+        label: "Unfiled",
+        group: `core:${UNFILED_ID}`,
+        color: "hsl(218 14% 52%)",
+        kind: "folder",
+        weight: 5,
+        subtitle: `${unfiledCount} ${label.toLowerCase()}s`,
+      });
+    }
+    return [
+      ...coreNodes,
+      ...boards.map(board => {
+        const coreId = coreIdFor(board);
+        return {
+          id: `board:${board.id}`,
+          label: board.title,
+          group: `core:${coreId}`,
+          color: folderById.get(coreId)?.color || (coreId === UNFILED_ID ? "hsl(218 14% 52%)" : graphAccent),
+          kind: "item" as const,
+          subtitle: `Updated ${new Date(board.updated_at).toLocaleDateString()}`,
+          weight: activeBoardId === board.id ? 5 : Math.max(1, 4 - Math.floor((Date.now() - board.updated_at) / 86_400_000)),
+        };
+      }),
+    ];
+  }, [activeBoardId, boards, coreIdFor, folderById, folders, graphAccent, label, showUnfiled, unfiledCount]);
+
   const graphLinks = useMemo(
-    () => boards.map(board => ({ source: graphHubId, target: `board:${board.id}` })),
-    [boards, graphHubId],
+    () => boards.map(board => ({ source: `folder:${coreIdFor(board)}`, target: `board:${board.id}` })),
+    [boards, coreIdFor],
   );
 
   return (
@@ -128,9 +244,21 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
           loading={isLoading}
           nodes={graphNodes}
           links={graphLinks}
-          activeId={activeBoardId ? `board:${activeBoardId}` : graphHubId}
+          activeId={
+            selectedFolderId !== null ? `folder:${selectedFolderId}`
+            : activeBoardId !== null  ? `board:${activeBoardId}`
+            : null
+          }
           onSelect={id => {
-            if (id.startsWith("board:")) setActiveBoardId(Number(id.slice(6)));
+            if (id.startsWith("board:")) {
+              setActiveBoardId(Number(id.slice(6)));
+              setSelectedFolderId(null);
+            } else if (id.startsWith("folder:")) {
+              // Selecting a core does not close the open board: it re-aims the
+              // footer controls at the core, which is what you want when you
+              // are filing rather than reading.
+              setSelectedFolderId(Number(id.slice(7)));
+            }
           }}
           emptyLabel={`No ${label.toLowerCase()}s yet`}
           collapsedAction={(
@@ -145,9 +273,11 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
           )}
           footer={(
             <div className="space-y-1.5">
-              {activeBoard && (
+              {/* A core is selected: rename or remove the file itself. */}
+              {selectedFolderId !== null && (
                 <div className="flex items-center gap-1 rounded-sm border border-[hsl(220_15%_14%)] bg-[hsl(220_15%_6%)] p-1">
-                  {editingId === activeBoard.id ? (
+                  <FolderIcon className="ml-1 h-3 w-3 shrink-0" style={{ color: selectedFolder?.color || "hsl(218 14% 52%)" }} />
+                  {selectedFolder && editingKey === `folder:${selectedFolder.id}` ? (
                     <input
                       autoFocus
                       value={editTitle}
@@ -155,38 +285,119 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
                       onBlur={commitRename}
                       onKeyDown={e => {
                         if (e.key === "Enter") commitRename();
-                        if (e.key === "Escape") setEditingId(null);
+                        if (e.key === "Escape") setEditingKey(null);
                       }}
                       className="min-w-0 flex-1 bg-transparent px-1 font-mono text-[9px] text-gold-300 outline-none"
                     />
                   ) : (
-                    <span className="min-w-0 flex-1 truncate px-1 font-mono text-[8px] text-muted-foreground/60">{activeBoard.title}</span>
+                    <span className="min-w-0 flex-1 truncate px-1 font-mono text-[8px] text-muted-foreground/60">
+                      {selectedFolder?.name ?? "Unfiled"}
+                    </span>
+                  )}
+                  {/* Unfiled is not a row, so it can be neither renamed nor deleted. */}
+                  {selectedFolder && (
+                    <>
+                      <button
+                        onClick={() => {
+                          if (editingKey === `folder:${selectedFolder.id}`) commitRename();
+                          else { setEditingKey(`folder:${selectedFolder.id}`); setEditTitle(selectedFolder.name); }
+                        }}
+                        className="rounded p-1 text-muted-foreground hover:text-gold-400"
+                        title="Rename core"
+                      >
+                        {editingKey === `folder:${selectedFolder.id}` ? <Check className="h-3 w-3" /> : <PenLine className="h-3 w-3" />}
+                      </button>
+                      <button
+                        onClick={() => deleteFolder.mutate(selectedFolder.id)}
+                        className="rounded p-1 text-muted-foreground hover:text-rose-400"
+                        title="Delete core — its boards become unfiled"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </>
                   )}
                   <button
-                    onClick={() => editingId === activeBoard.id ? commitRename() : startRename(activeBoard)}
-                    className="rounded p-1 text-muted-foreground hover:text-gold-400"
-                    title="Rename selected node"
+                    onClick={() => setSelectedFolderId(null)}
+                    className="rounded p-1 text-muted-foreground hover:text-foreground"
+                    title="Clear core selection"
                   >
-                    {editingId === activeBoard.id ? <Check className="h-3 w-3" /> : <PenLine className="h-3 w-3" />}
-                  </button>
-                  <button
-                    onClick={() => deleteBoard.mutate(activeBoard.id)}
-                    className="rounded p-1 text-muted-foreground hover:text-rose-400"
-                    title="Delete selected node"
-                  >
-                    <Trash2 className="h-3 w-3" />
+                    <X className="h-3 w-3" />
                   </button>
                 </div>
               )}
-              <button
-                onClick={() => createBoard.mutate()}
-                disabled={createBoard.isPending}
-                className="flex w-full items-center justify-center gap-1.5 rounded-sm border border-dashed px-3 py-2 font-mono text-[9px] uppercase tracking-[0.12em] text-gold-500 transition-all hover:border-gold-600 hover:bg-[hsl(43_30%_8%)] hover:text-gold-300"
-                style={{ borderColor: graphAccent, color: graphAccent }}
-              >
-                {createBoard.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-                New {label}
-              </button>
+
+              {/* A board is selected: rename, refile, or remove it. */}
+              {selectedFolderId === null && activeBoard && (
+                <>
+                  <div className="flex items-center gap-1 rounded-sm border border-[hsl(220_15%_14%)] bg-[hsl(220_15%_6%)] p-1">
+                    {editingKey === `board:${activeBoard.id}` ? (
+                      <input
+                        autoFocus
+                        value={editTitle}
+                        onChange={e => setEditTitle(e.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={e => {
+                          if (e.key === "Enter") commitRename();
+                          if (e.key === "Escape") setEditingKey(null);
+                        }}
+                        className="min-w-0 flex-1 bg-transparent px-1 font-mono text-[9px] text-gold-300 outline-none"
+                      />
+                    ) : (
+                      <span className="min-w-0 flex-1 truncate px-1 font-mono text-[8px] text-muted-foreground/60">{activeBoard.title}</span>
+                    )}
+                    <button
+                      onClick={() => editingKey === `board:${activeBoard.id}` ? commitRename() : startRename(activeBoard)}
+                      className="rounded p-1 text-muted-foreground hover:text-gold-400"
+                      title="Rename selected node"
+                    >
+                      {editingKey === `board:${activeBoard.id}` ? <Check className="h-3 w-3" /> : <PenLine className="h-3 w-3" />}
+                    </button>
+                    <button
+                      onClick={() => deleteBoard.mutate(activeBoard.id)}
+                      className="rounded p-1 text-muted-foreground hover:text-rose-400"
+                      title="Delete selected node"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <select
+                    value={coreIdFor(activeBoard)}
+                    onChange={e => {
+                      const next = Number(e.target.value);
+                      moveBoard.mutate({ id: activeBoard.id, folderId: next === UNFILED_ID ? null : next });
+                    }}
+                    className="w-full rounded-sm border border-[hsl(220_15%_14%)] bg-[hsl(220_15%_6%)] px-1.5 py-1 font-mono text-[8px] uppercase tracking-[0.1em] text-muted-foreground/80 outline-none"
+                    title="File this board under a core"
+                  >
+                    <option value={UNFILED_ID}>Unfiled</option>
+                    {folders.map(folder => (
+                      <option key={folder.id} value={folder.id}>{folder.name}</option>
+                    ))}
+                  </select>
+                </>
+              )}
+
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => createBoard.mutate()}
+                  disabled={createBoard.isPending}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-sm border border-dashed px-2 py-2 font-mono text-[9px] uppercase tracking-[0.12em] transition-all hover:bg-[hsl(43_30%_8%)]"
+                  style={{ borderColor: graphAccent, color: graphAccent }}
+                  title={selectedFolder ? `New ${label} in ${selectedFolder.name}` : `New ${label}`}
+                >
+                  {createBoard.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                  {label}
+                </button>
+                <button
+                  onClick={() => createFolder.mutate()}
+                  disabled={createFolder.isPending}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-sm border border-dashed border-[hsl(220_15%_20%)] px-2 py-2 font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground/70 transition-all hover:border-[hsl(220_15%_32%)] hover:text-foreground"
+                  title="New core"
+                >
+                  {createFolder.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <FolderPlus className="h-3 w-3" />}
+                  Core
+                </button>
+              </div>
             </div>
           )}
         />
@@ -237,7 +448,7 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
                   onClick={() => setActiveBoardId(board.id)}
                 >
                   <BookOpen className="w-3 h-3 shrink-0 opacity-60" />
-                  {editingId === board.id ? (
+                  {editingKey === `board:${board.id}` ? (
                     <input
                       autoFocus
                       value={editTitle}
@@ -245,7 +456,7 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
                       onBlur={commitRename}
                       onKeyDown={e => {
                         if (e.key === "Enter") commitRename();
-                        if (e.key === "Escape") setEditingId(null);
+                        if (e.key === "Escape") setEditingKey(null);
                       }}
                       onClick={e => e.stopPropagation()}
                       className="flex-1 bg-transparent outline-none text-xs text-gold-300 min-w-0"
@@ -259,7 +470,7 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
                       className="p-0.5 rounded hover:text-gold-400 transition-colors"
                       title="Rename"
                     >
-                      {editingId === board.id
+                      {editingKey === `board:${board.id}`
                         ? <Check className="w-2.5 h-2.5" />
                         : <PenLine className="w-2.5 h-2.5" />
                       }

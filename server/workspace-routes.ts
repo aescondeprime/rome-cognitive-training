@@ -73,7 +73,8 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
     const now = Date.now();
     const type = typeof req.body.type === "string" ? req.body.type : "taskboard";
     const title = typeof req.body.title === "string" ? req.body.title : "Untitled";
-    const result = await sb.from("boards").insert({ user_id: ownerId, type, title, created_at: now, updated_at: now }).select().single();
+    const folderId = req.body.folder_id === undefined || req.body.folder_id === null ? null : Number(req.body.folder_id);
+    const result = await sb.from("boards").insert({ user_id: ownerId, type, title, folder_id: folderId, created_at: now, updated_at: now }).select().single();
     ensureNoError(result);
     res.json(result.data);
   }));
@@ -81,7 +82,7 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
   app.patch("/api/boards/:id", route(async (req, res) => {
     const ownerId = await userId(req);
     const id = Number(req.params.id);
-    const patch = { ...pick(req.body, ["title"]), updated_at: Date.now() };
+    const patch = { ...pick(req.body, ["title", "folder_id"]), updated_at: Date.now() };
     const result = await sb.from("boards").update(patch).eq("id", id).eq("user_id", ownerId);
     ensureNoError(result);
     res.json({ ok: true });
@@ -90,6 +91,57 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
   app.delete("/api/boards/:id", route(async (req, res) => {
     const ownerId = await userId(req);
     const result = await sb.from("boards").delete().eq("id", Number(req.params.id)).eq("user_id", ownerId);
+    ensureNoError(result);
+    res.json({ ok: true });
+  }));
+
+  // Cores — the renamable files boards are organised into. Shared by every
+  // board type that draws the graph sidebar, which is why type is part of both
+  // the query and the row rather than implied by the route.
+  app.get("/api/board-folders", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const type = typeof req.query.type === "string" ? req.query.type : null;
+    let query = sb.from("board_folders").select("*").eq("user_id", ownerId).order("created_at", { ascending: true });
+    if (type) query = query.eq("type", type);
+    const result = await query;
+    ensureNoError(result);
+    res.json(result.data ?? []);
+  }));
+
+  app.post("/api/board-folders", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const now = Date.now();
+    const body = req.body ?? {};
+    const result = await sb.from("board_folders").insert({
+      user_id: ownerId,
+      type: typeof body.type === "string" ? body.type : "idea_workshop",
+      name: typeof body.name === "string" && body.name.trim() ? body.name.trim() : "New Core",
+      color: typeof body.color === "string" ? body.color : "cyan",
+      created_at: now, updated_at: now,
+    }).select().single();
+    ensureNoError(result);
+    res.json(result.data);
+  }));
+
+  app.patch("/api/board-folders/:id", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const patch = { ...pick(req.body, ["name", "color"]), updated_at: Date.now() };
+    const result = await sb.from("board_folders").update(patch).eq("id", Number(req.params.id)).eq("user_id", ownerId);
+    ensureNoError(result);
+    res.json({ ok: true });
+  }));
+
+  // Deleting a core never deletes work: its boards are unfiled first, and the
+  // sidebar shows unfiled boards under their own core, so nothing disappears.
+  app.delete("/api/board-folders/:id", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const id = Number(req.params.id);
+    const owned = await sb.from("board_folders").select("id").eq("id", id).eq("user_id", ownerId).maybeSingle();
+    ensureNoError(owned);
+    if (!owned.data) { res.status(404).json({ error: "Core not found" }); return; }
+    const unfile = await sb.from("boards").update({ folder_id: null }).eq("folder_id", id).eq("user_id", ownerId);
+    ensureNoError(unfile);
+    const result = await sb.from("board_folders").delete().eq("id", id).eq("user_id", ownerId);
     ensureNoError(result);
     res.json({ ok: true });
   }));
@@ -153,8 +205,10 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
     const body = req.body ?? {};
     const result = await sb.from("idea_cards").insert({
       board_id: boardId, user_id: ownerId, content: body.content ?? "", color: body.color ?? "violet",
-      pos_x: body.pos_x ?? 100, pos_y: body.pos_y ?? 100, width: body.width ?? 220,
+      pos_x: body.pos_x ?? 100, pos_y: body.pos_y ?? 100, width: body.width ?? 0,
       height: body.height ?? 0, tags: body.tags ?? "", energy: body.energy ?? 3,
+      kind: body.kind === "image" ? "image" : "text",
+      parent_id: body.parent_id ?? null, src: body.src ?? null,
       created_at: now, updated_at: now,
     }).select().single();
     ensureNoError(result);
@@ -163,15 +217,21 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
 
   app.patch("/api/ideas/:id", route(async (req, res) => {
     const ownerId = await userId(req);
-    const patch = { ...pick(req.body, ["content", "color", "pos_x", "pos_y", "width", "height", "tags", "energy"]), updated_at: Date.now() };
+    const patch = { ...pick(req.body, ["content", "color", "pos_x", "pos_y", "width", "height", "tags", "energy", "kind", "parent_id", "src"]), updated_at: Date.now() };
     const result = await sb.from("idea_cards").update(patch).eq("id", Number(req.params.id)).eq("user_id", ownerId);
     ensureNoError(result);
     res.json({ ok: true });
   }));
 
+  // A sub-idea only means anything next to its parent — its position is an
+  // offset from one — so an orphan would render on top of the canvas origin
+  // and could not be found again. Children go first.
   app.delete("/api/ideas/:id", route(async (req, res) => {
     const ownerId = await userId(req);
-    const result = await sb.from("idea_cards").delete().eq("id", Number(req.params.id)).eq("user_id", ownerId);
+    const id = Number(req.params.id);
+    const children = await sb.from("idea_cards").delete().eq("parent_id", id).eq("user_id", ownerId);
+    ensureNoError(children);
+    const result = await sb.from("idea_cards").delete().eq("id", id).eq("user_id", ownerId);
     ensureNoError(result);
     res.json({ ok: true });
   }));
@@ -565,6 +625,29 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
     app.delete(`/api/kronos/${config.kind}/:id`, route(async (req, res) => {
       const ownerId = await userId(req);
       const result = await sb.from(config.table).delete().eq("id", Number(req.params.id)).eq("user_id", ownerId);
+      ensureNoError(result);
+      res.json({ ok: true });
+    }));
+
+    /**
+     * The sync writeback. Its own route rather than a PATCH for one reason:
+     * **it must not touch `updated_at`.**
+     *
+     * "Locally dirty" is `updated_at > synced_at`. Every other write path here
+     * stamps `updated_at = Date.now()`, so recording a successful push through
+     * one of them would mark the row as edited by the user at the same instant
+     * it was marked as synced, and the engine would push it again forever.
+     *
+     * The caller supplies `synced_at` — the `updated_at` it read before the
+     * push, not the clock. If the user edited the row mid-cycle its
+     * `updated_at` is now higher than that, the row stays dirty, and the newer
+     * version goes next time. The race resolves in the safe direction.
+     */
+    app.post(`/api/kronos/sync/${config.kind}/:id`, route(async (req, res) => {
+      const ownerId = await userId(req);
+      const patch = pick(req.body, KRONOS_SYNC_FIELDS as unknown as string[]);
+      const result = await sb.from(config.table).update(patch)
+        .eq("id", Number(req.params.id)).eq("user_id", ownerId);
       ensureNoError(result);
       res.json({ ok: true });
     }));

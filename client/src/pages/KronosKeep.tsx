@@ -45,10 +45,11 @@ import { apiRequest } from "@/lib/queryClient";
 import {
   ChevronLeft, ChevronRight, Plus, X, Check, Loader2,
   RefreshCw, BookOpen, CalendarDays, Clock, Trash2, Circle,
-  CalendarPlus, Bookmark,
+  CalendarPlus, Bookmark, CloudOff, Cloud,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
+import CalendarSyncPanel from "./kronos/CalendarSyncPanel";
 import {
   KRONOS_TYPES, KRONOS_TYPE, type ItemType,
   GOLD, GREEN, BLUE, VIOLET,
@@ -811,6 +812,18 @@ export default function KronosKeep() {
   const [timelineDate, setTimelineDate] = useState<string | null>(null);
   const [calendarId, setCalendarId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [syncConfig, setSyncConfig] = useState<RomeKronosConfig | null>(null);
+
+  // The iCloud link, read once and again whenever the panel closes. Undefined
+  // under `npm run dev` in a browser — there is no bridge there, and the
+  // control is hidden rather than rendered inert.
+  const kronosBridge = typeof window === "undefined" ? undefined : window.romeDesktop?.kronos;
+  const refreshSyncConfig = useCallback(() => {
+    if (!kronosBridge) return;
+    void kronosBridge.getConfig().then(setSyncConfig).catch(() => undefined);
+  }, [kronosBridge]);
+  useEffect(refreshSyncConfig, [refreshSyncConfig]);
 
   const { data: calendars = [], isLoading: calLoading } = useQuery<KCalendar[]>({
     queryKey: ["/kronos/calendars"],
@@ -949,22 +962,40 @@ export default function KronosKeep() {
           <button onClick={goToday} className="text-[10px] font-mono px-2.5 py-1 rounded-lg border border-[hsl(220_15%_16%)] text-muted-foreground hover:text-foreground hover:border-[hsl(220_15%_24%)] transition-all">
             Today
           </button>
-          {selectedDate ? (
-            <div className="flex items-center gap-2 ml-auto">
-              <span className="text-[10px] font-mono text-muted-foreground/50">{selectedDate} selected</span>
-              <button onClick={() => setTimelineDate(selectedDate)}
+          <div className="flex items-center gap-2 ml-auto">
+            {selectedDate ? (
+              <>
+                <span className="text-[10px] font-mono text-muted-foreground/50">{selectedDate} selected</span>
+                <button onClick={() => setTimelineDate(selectedDate)}
+                  className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded-lg transition-all"
+                  style={{ color: GOLD, background: GOLD + "14", border: `1px solid ${GOLD}30` }}>
+                  <Clock className="w-3 h-3" />
+                  Open Timeline
+                </button>
+                <button onClick={() => setSelectedDate(null)} className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </>
+            ) : (
+              <p className="text-[10px] font-mono text-muted-foreground/30">Click a day to select · click again for timeline</p>
+            )}
+
+            {kronosBridge && (
+              <button
+                onClick={() => setSyncOpen(true)}
+                title={syncConfig?.enabled
+                  ? `Linked to ${syncConfig.calendarName} on iCloud — nothing syncs yet`
+                  : "Connect an iCloud calendar"}
                 className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded-lg transition-all"
-                style={{ color: GOLD, background: GOLD + "14", border: `1px solid ${GOLD}30` }}>
-                <Clock className="w-3 h-3" />
-                Open Timeline
+                style={syncConfig?.enabled
+                  ? { color: "hsl(195 60% 62%)", background: "hsl(195 60% 20% / .18)", border: "1px solid hsl(195 45% 34% / .6)" }
+                  : { color: "hsl(220 8% 42%)", background: "transparent", border: "1px solid hsl(220 15% 16%)" }}
+              >
+                {syncConfig?.enabled ? <Cloud className="w-3 h-3" /> : <CloudOff className="w-3 h-3" />}
+                {syncConfig?.enabled ? syncConfig.calendarName || "iCloud" : "iCloud"}
               </button>
-              <button onClick={() => setSelectedDate(null)} className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded">
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ) : (
-            <p className="ml-auto text-[10px] font-mono text-muted-foreground/30">Click a day to select · click again for timeline</p>
-          )}
+            )}
+          </div>
         </div>
 
         <CalendarGrid year={year} month={month} items={items}
@@ -987,6 +1018,12 @@ export default function KronosKeep() {
         {timelineDate && (
           <DayTimeline dateStr={timelineDate} items={timelineItems} all={items}
             onClose={() => setTimelineDate(null)} />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {syncOpen && (
+          <CalendarSyncPanel onClose={() => { setSyncOpen(false); refreshSyncConfig(); }} />
         )}
       </AnimatePresence>
     </div>

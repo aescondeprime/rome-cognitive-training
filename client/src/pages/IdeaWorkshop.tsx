@@ -1,19 +1,31 @@
 /**
- * IdeaWorkshop — Creative node canvas.
+ * IdeaWorkshop — a blueprint table you drop ideas onto.
  *
- * Features:
- * - Draggable idea cards on a free canvas (dot-grid)
- * - Connect cards by clicking "link" mode then two cards → SVG line + optional label
- * - Energy level indicator (1-5 flame icons) per card
- * - Tags per card (comma-separated, displayed as chips)
- * - Color picker per card
- * - All synced to Supabase via API
+ * The shape of the thing:
+ * - Cards have no chrome. Hold-drag to move, double-click to edit, right-click
+ *   for everything else (colour, link, sub-idea, delete). The old header strip
+ *   spent a quarter of every small card on controls that are one click away.
+ * - A card starts at whatever size its text needs and grows with it, until you
+ *   resize it by a corner — after that the size you chose is the size it keeps.
+ * - Text is rich: bold, italic, underline and colour, edited in place in a
+ *   contenteditable. A controlled textarea loses the caret on every optimistic
+ *   re-render, which is why clicking into the middle of a word used to do
+ *   nothing and only the arrow keys worked.
+ * - Images (PNG, JPG, GIF) are cards too, so they position, resize, link and
+ *   carry sub-ideas exactly like text does.
+ * - Sub-ideas are children of a card. Their position is an offset from the
+ *   parent, and both live inside one positioned wrapper, so moving a parent
+ *   moves its cluster without writing a single child row.
+ *
+ * Cmd/Ctrl+T adds an idea, Cmd/Ctrl+I adds an image. Inside an editor those
+ * two are left alone: Cmd+I has to stay italic where text is being written.
  */
 
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import {
-  Plus, Trash2, Link2, Link2Off, Zap, Tag,
-  Loader2, Lightbulb, X, Check,
+  Plus, Trash2, Link2, Link2Off, Loader2, Lightbulb, Image as ImageIcon,
+  CornerDownRight, Bold, Italic, Underline, Repeat2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -27,8 +39,11 @@ interface IdeaCard {
   color: string;
   pos_x: number;
   pos_y: number;
-  width: number;
-  height: number;
+  width: number;          // 0 = size to content
+  height: number;         // 0 = size to content
+  kind: "text" | "image" | null;
+  parent_id: number | null;
+  src: string | null;
   tags: string;
   energy: number;
 }
@@ -40,358 +55,471 @@ interface IdeaConnection {
   label: string;
 }
 
+interface CardSize { w: number; h: number }
+
 // ── Palette ────────────────────────────────────────────────────────────
+// Backgrounds are translucent so the blueprint grid reads through a card the
+// way it would through drafting film.
 const COLORS = [
-  { id: "violet", dot: "hsl(270 60% 58%)", bg: "hsl(270 35% 7%)",  border: "hsl(270 35% 26%)", header: "hsl(270 35% 11%)", text: "hsl(270 60% 72%)"  },
-  { id: "rose",   dot: "hsl(340 60% 58%)", bg: "hsl(340 35% 7%)",  border: "hsl(340 35% 26%)", header: "hsl(340 35% 11%)", text: "hsl(340 60% 72%)"  },
-  { id: "amber",  dot: "hsl(38 75% 55%)",  bg: "hsl(38 40% 7%)",   border: "hsl(38 40% 24%)",  header: "hsl(38 40% 11%)",  text: "hsl(38 75% 68%)"   },
-  { id: "teal",   dot: "hsl(175 55% 45%)", bg: "hsl(175 35% 6%)",  border: "hsl(175 35% 24%)", header: "hsl(175 35% 10%)", text: "hsl(175 55% 62%)"  },
-  { id: "slate",  dot: "hsl(220 30% 55%)", bg: "hsl(220 18% 8%)",  border: "hsl(220 18% 25%)", header: "hsl(220 18% 12%)", text: "hsl(220 30% 68%)"  },
+  { id: "cyan",   dot: "hsl(192 90% 58%)",  bg: "hsl(196 40% 8% / 0.86)",  border: "hsl(192 45% 30%)", glow: "hsl(192 95% 62%)", halo: "hsl(192 90% 55% / 0.28)", text: "hsl(192 60% 84%)" },
+  { id: "violet", dot: "hsl(270 60% 58%)",  bg: "hsl(270 32% 9% / 0.86)",  border: "hsl(270 38% 32%)", glow: "hsl(270 80% 66%)", halo: "hsl(270 75% 55% / 0.28)", text: "hsl(270 55% 84%)" },
+  { id: "rose",   dot: "hsl(340 60% 58%)",  bg: "hsl(340 32% 9% / 0.86)",  border: "hsl(340 38% 32%)", glow: "hsl(340 80% 66%)", halo: "hsl(340 75% 55% / 0.28)", text: "hsl(340 55% 84%)" },
+  { id: "amber",  dot: "hsl(38 78% 55%)",   bg: "hsl(38 36% 8% / 0.86)",   border: "hsl(38 38% 30%)",  glow: "hsl(38 88% 62%)",  halo: "hsl(38 85% 52% / 0.28)",  text: "hsl(38 62% 82%)"  },
+  { id: "teal",   dot: "hsl(160 55% 45%)",  bg: "hsl(165 34% 7% / 0.86)",  border: "hsl(163 36% 28%)", glow: "hsl(160 70% 55%)", halo: "hsl(160 65% 45% / 0.28)", text: "hsl(160 50% 80%)" },
+  { id: "slate",  dot: "hsl(220 25% 58%)",  bg: "hsl(220 18% 9% / 0.86)",  border: "hsl(220 16% 30%)", glow: "hsl(220 40% 66%)", halo: "hsl(220 35% 55% / 0.24)", text: "hsl(220 22% 82%)" },
 ] as const;
 type ColorId = typeof COLORS[number]["id"];
 const colorFor = (id: string) => COLORS.find(c => c.id === id) ?? COLORS[0];
 
-// ── Energy Icons ───────────────────────────────────────────────────────
-function EnergyBar({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+// Text colours offered by the format bar. Deliberately not the card palette:
+// these have to stay readable on every one of those backgrounds.
+const TEXT_COLORS = [
+  "hsl(210 20% 92%)", "hsl(192 90% 68%)", "hsl(270 80% 74%)",
+  "hsl(38 90% 66%)",  "hsl(150 65% 62%)", "hsl(345 85% 70%)",
+];
+
+const ACCENT      = "hsl(192 100% 62%)";
+const MIN_W       = 110;
+const MIN_H       = 44;
+const AUTO_MAX_W  = 320;
+const SUB_MAX_W   = 230;
+const IMAGE_LIMIT = 5 * 1024 * 1024;
+const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif"];
+const ACCEPT      = ".png,.jpg,.jpeg,.gif,image/png,image/jpeg,image/gif";
+
+// ── Rich text ──────────────────────────────────────────────────────────
+// The card content column now holds HTML. Everything that ever went into it
+// before was plain text, so anything without a tag is escaped on the way out
+// rather than migrated — there is nothing to migrate to.
+const KEEP   = new Set(["B", "STRONG", "I", "EM", "U", "BR", "SPAN", "DIV", "P", "FONT"]);
+const PURGE  = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "LINK", "META"]);
+
+function sanitizeHtml(html: string): string {
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
+  const clean = (node: Element) => {
+    // Unwrapping promotes grandchildren to this level, so the pass repeats
+    // until the level settles. It terminates: every unwrap loses a level.
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const child of Array.from(node.children)) {
+        if (PURGE.has(child.tagName)) { child.remove(); changed = true; continue; }
+        if (KEEP.has(child.tagName)) continue;
+        const parent = child.parentNode;
+        if (!parent) continue;
+        while (child.firstChild) parent.insertBefore(child.firstChild, child);
+        parent.removeChild(child);
+        changed = true;
+      }
+    }
+    for (const child of Array.from(node.children)) {
+      const el = child as HTMLElement;
+      const color = el.style?.color || el.getAttribute("color") || "";
+      for (const attr of Array.from(el.attributes)) el.removeAttribute(attr.name);
+      if (color) el.style.color = color;
+      clean(el);
+    }
+  };
+  clean(doc.body);
+  return doc.body.innerHTML;
+}
+
+const escapeHtml = (text: string) =>
+  text.replace(/[&<>]/g, ch => (ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : "&gt;"));
+
+function contentToHtml(content: string): string {
+  if (!content) return "";
+  return /<[a-z][^>]*>/i.test(content)
+    ? sanitizeHtml(content)
+    : escapeHtml(content).replace(/\n/g, "<br>");
+}
+
+/** True when an editor holds nothing but formatting scaffolding. */
+function isBlankHtml(html: string): boolean {
+  return html.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim().length === 0;
+}
+
+// ── Fitted title ───────────────────────────────────────────────────────
+// Measured rather than guessed: Zen Dots is wide and irregular enough that a
+// characters-to-size formula is wrong by a factor of two on short names.
+function FittedTitle({ text }: { text: string }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const textRef = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current;
+    const el = textRef.current;
+    if (!wrap || !el) return;
+    const fit = () => {
+      const available = wrap.clientWidth;
+      if (!available) return;
+      el.style.fontSize = "100px";
+      const natural = el.scrollWidth;
+      if (!natural) return;
+      el.style.fontSize = `${Math.max(19, Math.min(58, (available / natural) * 100))}px`;
+    };
+    fit();
+    // The first pass runs against the fallback face; the webfont lands later
+    // and is a different width.
+    document.fonts?.ready.then(fit).catch(() => {});
+    const observer = new ResizeObserver(fit);
+    observer.observe(wrap);
+    return () => observer.disconnect();
+  }, [text]);
+
   return (
-    <div className="flex items-center gap-0.5">
-      {[1, 2, 3, 4, 5].map(n => (
+    <div ref={wrapRef} className="min-w-0 flex-1 overflow-hidden">
+      <span
+        ref={textRef}
+        className="font-industrial block whitespace-nowrap uppercase leading-none"
+        style={{ color: ACCENT, textShadow: `0 0 22px ${ACCENT}55` }}
+      >
+        {text}
+      </span>
+    </div>
+  );
+}
+
+// ── Format bar ─────────────────────────────────────────────────────────
+// execCommand is deprecated and still the only thing that formats a selection
+// inside a contenteditable without hand-writing a range editor. styleWithCSS
+// makes foreColor emit a span the sanitiser keeps instead of a <font>.
+function FormatBar({ accent }: { accent: string }) {
+  const run = (command: string, value?: string) => {
+    try {
+      if (command === "foreColor") document.execCommand("styleWithCSS", false, "true");
+      document.execCommand(command, false, value);
+    } catch { /* selection went away; nothing to format */ }
+  };
+
+  return (
+    <div
+      // Losing the selection would make every button a no-op.
+      onMouseDown={e => { e.preventDefault(); e.stopPropagation(); }}
+      className="absolute -top-8 left-0 z-[120] flex items-center gap-1 border px-1.5 py-1"
+      style={{ background: "hsl(222 26% 7% / 0.96)", borderColor: accent, backdropFilter: "blur(8px)" }}
+    >
+      {([["bold", Bold], ["italic", Italic], ["underline", Underline]] as const).map(([command, Icon]) => (
         <button
-          key={n}
-          onClick={e => { e.stopPropagation(); onChange(n); }}
-          className={cn(
-            "text-[10px] transition-opacity select-none",
-            n <= value ? "opacity-100" : "opacity-20"
-          )}
-          title={`Energy ${n}`}
+          key={command}
+          onClick={() => run(command)}
+          className="p-1 text-muted-foreground transition-colors hover:text-foreground"
+          title={command[0].toUpperCase() + command.slice(1)}
         >
-          ⚡
+          <Icon className="h-3 w-3" />
         </button>
+      ))}
+      <span className="mx-0.5 h-3.5 w-px" style={{ background: accent, opacity: 0.4 }} />
+      {TEXT_COLORS.map(color => (
+        <button
+          key={color}
+          onClick={() => run("foreColor", color)}
+          className="h-3 w-3 border border-black/40 transition-transform hover:scale-125"
+          style={{ background: color }}
+          title="Text colour"
+        />
       ))}
     </div>
   );
 }
 
-// ── Tag Editor ─────────────────────────────────────────────────────────
-function TagChips({ tags, onSave }: { tags: string; onSave: (t: string) => void }) {
-  const [editing, setEditing] = useState(false);
-  const [draft,   setDraft]   = useState(tags);
-  const chips = tags.split(",").map(t => t.trim()).filter(Boolean);
-
-  const commit = () => {
-    setEditing(false);
-    if (draft !== tags) onSave(draft);
-  };
-
-  if (editing) {
-    return (
-      <input
-        autoFocus
-        value={draft}
-        onChange={e => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") { setEditing(false); setDraft(tags); } }}
-        onClick={e => e.stopPropagation()}
-        placeholder="tag1, tag2, tag3"
-        className="w-full bg-transparent text-[10px] outline-none text-current opacity-80 border-b border-current/20"
-      />
-    );
-  }
-
-  return (
-    <div className="flex flex-wrap gap-1 cursor-text" onClick={e => { e.stopPropagation(); setEditing(true); }}>
-      {chips.length === 0
-        ? <span className="text-[10px] opacity-30 italic flex items-center gap-0.5"><Tag className="w-2.5 h-2.5" />add tags…</span>
-        : chips.map(t => (
-          <span key={t} className="px-1.5 py-0.5 rounded text-[9px] font-mono tracking-wide bg-current/10 opacity-70">
-            {t}
-          </span>
-        ))
-      }
-    </div>
-  );
-}
-
-// ── Idea Card ──────────────────────────────────────────────────────────
-interface IdeaCardProps {
-  card: IdeaCard;
-  onUpdate: (id: number, patch: Partial<IdeaCard>) => void;
-  onDelete: (id: number) => void;
-  onStartLink: (id: number) => void;
-  isLinking: boolean;
-  isLinkTarget: boolean;
-  boardRef: React.RefObject<HTMLDivElement>;
-}
-
 // ── Corner resize handles ──────────────────────────────────────────────
 type Corner = "nw" | "ne" | "sw" | "se";
 const CORNER_POS: Record<Corner, React.CSSProperties> = {
-  nw: { top: -4,    left: -4,    cursor: "nw-resize" },
-  ne: { top: -4,    right: -4,   cursor: "ne-resize" },
-  sw: { bottom: -4, left: -4,    cursor: "sw-resize" },
-  se: { bottom: -4, right: -4,   cursor: "se-resize" },
+  nw: { top: -4,    left: -4,  cursor: "nw-resize" },
+  ne: { top: -4,    right: -4, cursor: "ne-resize" },
+  sw: { bottom: -4, left: -4,  cursor: "sw-resize" },
+  se: { bottom: -4, right: -4, cursor: "se-resize" },
 };
-function ResizeHandles({ onStart, color }: { onStart: (c: Corner, e: React.MouseEvent) => void; color: string }) {
+
+function ResizeHandles({ onStart, color }: { onStart: (corner: Corner, e: React.MouseEvent) => void; color: string }) {
   return (
     <>
-      {(["nw","ne","sw","se"] as Corner[]).map(c => (
+      {(["nw", "ne", "sw", "se"] as Corner[]).map(corner => (
         <div
-          key={c}
-          className="absolute w-3 h-3 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"
-          style={{ ...CORNER_POS[c], background: "hsl(220 15% 14%)", border: `1.5px solid ${color}`, zIndex: 50 }}
-          onMouseDown={e => { e.stopPropagation(); onStart(c, e); }}
+          key={corner}
+          className="absolute h-2.5 w-2.5 opacity-0 transition-opacity group-hover:opacity-100"
+          style={{ ...CORNER_POS[corner], background: "hsl(222 22% 10%)", border: `1.5px solid ${color}`, zIndex: 60 }}
+          onMouseDown={e => { e.stopPropagation(); onStart(corner, e); }}
         />
       ))}
     </>
   );
 }
 
-function IdeaCardComponent({ card, onUpdate, onDelete, onStartLink, isLinking, isLinkTarget, boardRef }: IdeaCardProps) {
+// ── Card ───────────────────────────────────────────────────────────────
+interface CardProps {
+  card: IdeaCard;
+  sub?: boolean;
+  onUpdate: (id: number, patch: Partial<IdeaCard>) => void;
+  onMenu: (card: IdeaCard, e: React.MouseEvent) => void;
+  onLinkClick: (id: number) => void;
+  onMeasure: (id: number, size: CardSize) => void;
+  isLinking: boolean;
+  isLinkTarget: boolean;
+  boardRef: React.RefObject<HTMLDivElement>;
+  children?: React.ReactNode;
+}
+
+function IdeaCardView({
+  card, sub = false,
+  onUpdate, onMenu, onLinkClick, onMeasure,
+  isLinking, isLinkTarget, boardRef, children,
+}: CardProps) {
   const [editing, setEditing] = useState(false);
-  const [draft,   setDraft]   = useState(card.content);
+  const [busy,    setBusy]    = useState(false);
   const [pos,     setPos]     = useState({ x: card.pos_x, y: card.pos_y });
-  const [size,    setSize]    = useState({ w: card.width, h: card.height ?? 0 });
-  const dragRef   = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
-  const resizeRef = useRef<{ sx: number; sy: number; ow: number; oh: number; ox: number; oy: number; corner: Corner } | null>(null);
-  const col = colorFor(card.color);
-  const MIN_W = 160, MIN_H = 120;
+  const [size,    setSize]    = useState({ w: card.width ?? 0, h: card.height ?? 0 });
+  const [measured, setMeasured] = useState<CardSize>({ w: card.width || 160, h: card.height || 60 });
+
+  const cardRef   = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const dragRef   = useRef<{ sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
+
+  const col      = colorFor(card.color);
+  const html     = useMemo(() => contentToHtml(card.content), [card.content]);
+  const isImage  = card.kind === "image" && Boolean(card.src);
+  const autoW    = !(size.w > 0);
+  const autoH    = !(size.h > 0);
 
   useEffect(() => { setPos({ x: card.pos_x, y: card.pos_y }); }, [card.pos_x, card.pos_y]);
-  useEffect(() => { setSize({ w: card.width, h: card.height ?? 0 }); }, [card.width, card.height]);
-  useEffect(() => { setDraft(card.content); }, [card.content]);
+  useEffect(() => { setSize({ w: card.width ?? 0, h: card.height ?? 0 }); }, [card.width, card.height]);
 
-  // ── move ──
-  const startDrag = (cx: number, cy: number) => {
-    if (editing) return;
-    dragRef.current = { sx: cx, sy: cy, ox: pos.x, oy: pos.y };
+  // Connections and sub-idea tethers both need a real box, and an auto-sized
+  // card does not have one until it has been laid out.
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const publish = () => {
+      const next = { w: el.offsetWidth, h: el.offsetHeight };
+      setMeasured(previous => (previous.w === next.w && previous.h === next.h ? previous : next));
+      onMeasure(card.id, next);
+    };
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [card.id, onMeasure]);
+
+  // ── Move ──
+  const beginDrag = (cx: number, cy: number) => {
+    dragRef.current = { sx: cx, sy: cy, ox: pos.x, oy: pos.y, moved: false };
+    setBusy(true);
   };
-  const moveDrag = (cx: number, cy: number) => {
-    if (!dragRef.current || !boardRef.current) return;
-    const b = boardRef.current.getBoundingClientRect();
-    const nx = Math.max(0, Math.min(b.width - size.w - 4, dragRef.current.ox + cx - dragRef.current.sx));
-    const ny = Math.max(0, dragRef.current.oy + cy - dragRef.current.sy);
-    setPos({ x: nx, y: ny });
-  };
-  const endDrag = (cx: number, cy: number) => {
-    if (!dragRef.current || !boardRef.current) return;
-    const b = boardRef.current.getBoundingClientRect();
-    const nx = Math.max(0, Math.min(b.width - size.w - 4, dragRef.current.ox + cx - dragRef.current.sx));
-    const ny = Math.max(0, dragRef.current.oy + cy - dragRef.current.sy);
-    dragRef.current = null;
-    onUpdate(card.id, { pos_x: nx, pos_y: ny });
+  const resolveDrag = (cx: number, cy: number) => {
+    const drag = dragRef.current;
+    if (!drag) return null;
+    const dx = cx - drag.sx;
+    const dy = cy - drag.sy;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) drag.moved = true;
+    // A sub-idea's position is an offset from its parent, so it is free to sit
+    // above or to the left of it; only canvas cards are clamped.
+    if (sub) return { x: drag.ox + dx, y: drag.oy + dy };
+    const bounds = boardRef.current?.getBoundingClientRect();
+    const maxX = bounds ? Math.max(0, bounds.width - measured.w - 4) : Infinity;
+    return { x: Math.max(0, Math.min(maxX, drag.ox + dx)), y: Math.max(0, drag.oy + dy) };
   };
   const onMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || editing || isLinking) return;
+    if ((e.target as HTMLElement).closest(".idea-editor, .idea-nodrag")) return;
     e.preventDefault();
-    startDrag(e.clientX, e.clientY);
-    const mm = (ev: MouseEvent) => moveDrag(ev.clientX, ev.clientY);
-    const mu = (ev: MouseEvent) => { endDrag(ev.clientX, ev.clientY); window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu); };
-    window.addEventListener("mousemove", mm);
-    window.addEventListener("mouseup", mu);
-  };
-  const onTouchStart = (e: React.TouchEvent) => {
-    startDrag(e.touches[0].clientX, e.touches[0].clientY);
-    const tm = (ev: TouchEvent) => { if (!dragRef.current) return; ev.preventDefault(); moveDrag(ev.touches[0].clientX, ev.touches[0].clientY); };
-    const tu = (ev: TouchEvent) => { endDrag(ev.changedTouches[0].clientX, ev.changedTouches[0].clientY); window.removeEventListener("touchmove", tm); window.removeEventListener("touchend", tu); };
-    window.addEventListener("touchmove", tm, { passive: false });
-    window.addEventListener("touchend", tu);
+    e.stopPropagation();
+    beginDrag(e.clientX, e.clientY);
+    const move = (ev: MouseEvent) => { const next = resolveDrag(ev.clientX, ev.clientY); if (next) setPos(next); };
+    const up = (ev: MouseEvent) => {
+      const next = resolveDrag(ev.clientX, ev.clientY);
+      const moved = dragRef.current?.moved ?? false;
+      dragRef.current = null;
+      setBusy(false);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      if (next && moved) { setPos(next); onUpdate(card.id, { pos_x: Math.round(next.x), pos_y: Math.round(next.y) }); }
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
   };
 
-  // ── resize ──
+  // ── Resize ──
   const startResize = (corner: Corner, e: React.MouseEvent) => {
     e.preventDefault();
-    const initH = size.h > 0 ? size.h : (boardRef.current?.querySelector(`[data-card-id="${card.id}"]`) as HTMLElement)?.offsetHeight ?? 200;
-    resizeRef.current = { sx: e.clientX, sy: e.clientY, ow: size.w, oh: initH, ox: pos.x, oy: pos.y, corner };
-    const mm = (ev: MouseEvent) => {
-      if (!resizeRef.current) return;
-      const { sx, sy, ow, oh, ox, oy, corner } = resizeRef.current;
-      const dx = ev.clientX - sx, dy = ev.clientY - sy;
-      let nw = ow, nh = oh, nx = ox, ny = oy;
-      if (corner === "se") { nw = Math.max(MIN_W, ow + dx); nh = Math.max(MIN_H, oh + dy); }
-      if (corner === "sw") { const nwt = Math.max(MIN_W, ow - dx); nx = ox + (ow - nwt); nw = nwt; nh = Math.max(MIN_H, oh + dy); }
-      if (corner === "ne") { nw = Math.max(MIN_W, ow + dx); const nht = Math.max(MIN_H, oh - dy); ny = oy + (oh - nht); nh = nht; }
-      if (corner === "nw") { const nwt = Math.max(MIN_W, ow - dx); nx = ox + (ow - nwt); nw = nwt; const nht = Math.max(MIN_H, oh - dy); ny = oy + (oh - nht); nh = nht; }
-      setSize({ w: nw, h: nh });
-      setPos({ x: Math.max(0, nx), y: Math.max(0, ny) });
+    setBusy(true);
+    const base = { w: measured.w, h: measured.h };
+    const start = { sx: e.clientX, sy: e.clientY, ox: pos.x, oy: pos.y };
+    let last = { w: base.w, h: base.h, x: pos.x, y: pos.y };
+    const move = (ev: MouseEvent) => {
+      const dx = ev.clientX - start.sx;
+      const dy = ev.clientY - start.sy;
+      let w = base.w, h = base.h, x = start.ox, y = start.oy;
+      if (corner === "se") { w = Math.max(MIN_W, base.w + dx); h = Math.max(MIN_H, base.h + dy); }
+      if (corner === "sw") { w = Math.max(MIN_W, base.w - dx); x = start.ox + (base.w - w); h = Math.max(MIN_H, base.h + dy); }
+      if (corner === "ne") { w = Math.max(MIN_W, base.w + dx); h = Math.max(MIN_H, base.h - dy); y = start.oy + (base.h - h); }
+      if (corner === "nw") { w = Math.max(MIN_W, base.w - dx); x = start.ox + (base.w - w); h = Math.max(MIN_H, base.h - dy); y = start.oy + (base.h - h); }
+      if (!sub) { x = Math.max(0, x); y = Math.max(0, y); }
+      last = { w, h, x, y };
+      setSize({ w, h });
+      setPos({ x, y });
     };
-    const mu = () => {
-      if (!resizeRef.current) return;
-      resizeRef.current = null;
-      // capture final state synchronously via callback form
-      setSize(s => {
-        setPos(p => {
-          onUpdate(card.id, { width: s.w, height: s.h, pos_x: p.x, pos_y: p.y });
-          return p;
-        });
-        return s;
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      setBusy(false);
+      onUpdate(card.id, {
+        width: Math.round(last.w), height: Math.round(last.h),
+        pos_x: Math.round(last.x), pos_y: Math.round(last.y),
       });
-      window.removeEventListener("mousemove", mm);
-      window.removeEventListener("mouseup", mu);
     };
-    window.addEventListener("mousemove", mm);
-    window.addEventListener("mouseup", mu);
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
   };
 
-  const saveEdit = () => { setEditing(false); if (draft !== card.content) onUpdate(card.id, { content: draft }); };
+  // ── Edit ──
+  useEffect(() => {
+    if (!editing) return;
+    const el = editorRef.current;
+    if (!el) return;
+    el.innerHTML = contentToHtml(card.content);   // read once, then left alone
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    // Only on entry: re-running this on every content change is exactly the
+    // caret-stealing bug this editor exists to avoid.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing]);
 
-  const hasH = size.h > 0;
-  const cardStyle: React.CSSProperties = {
-    left: pos.x,
-    top:  pos.y,
-    width: size.w,
-    height: hasH ? size.h : undefined,
-    background: col.bg,
-    borderColor: isLinkTarget ? "hsl(270 80% 65%)" : col.border,
-    zIndex: editing ? 100 : 10,
-    boxShadow: isLinkTarget ? `0 0 0 2px hsl(270 80% 65%), 0 0 20px hsl(270 60% 50% / 0.4)` : undefined,
+  const saveEdit = () => {
+    const el = editorRef.current;
+    setEditing(false);
+    if (!el) return;
+    const html = sanitizeHtml(el.innerHTML);
+    const next = isBlankHtml(html) ? "" : html;
+    if (next !== card.content) onUpdate(card.id, { content: next });
   };
 
-  return (
+  const bodyStyle: React.CSSProperties = { color: col.text };
+
+  const cardBox = (
     <div
+      ref={cardRef}
       data-card-id={card.id}
       className={cn(
-        "absolute rounded-xl border select-none transition-shadow group flex flex-col",
-        isLinking && "cursor-crosshair",
-        !isLinking && !editing && "cursor-grab active:cursor-grabbing"
+        "idea-card group flex flex-col",
+        sub && "is-sub",
+        (busy || editing) && "is-busy",
+        editing && "is-editing",
+        isLinking ? "cursor-crosshair" : !editing && "cursor-grab active:cursor-grabbing",
       )}
-      style={cardStyle}
-      onMouseDown={isLinking ? undefined : onMouseDown}
-      onTouchStart={isLinking ? undefined : onTouchStart}
-      onClick={isLinking ? () => onStartLink(card.id) : undefined}
+      style={{
+        ...(sub ? { left: pos.x, top: pos.y } : {}),
+        width:    autoW ? "max-content" : size.w,
+        minWidth: sub ? 90 : 120,
+        maxWidth: autoW ? (sub ? SUB_MAX_W : AUTO_MAX_W) : undefined,
+        height:   autoH ? undefined : size.h,
+        background: col.bg,
+        ["--idea-accent" as string]: isLinkTarget ? col.glow : col.border,
+        ["--idea-glow"   as string]: col.glow,
+        ["--idea-halo"   as string]: col.halo,
+        zIndex: editing ? 110 : sub ? 20 : 2,
+        boxShadow: isLinkTarget ? `0 0 0 1px ${col.glow}, 0 0 22px ${col.halo}` : undefined,
+      }}
+      onMouseDown={onMouseDown}
+      onClick={isLinking ? e => { e.stopPropagation(); onLinkClick(card.id); } : undefined}
+      onDoubleClick={e => {
+        if (isLinking || isImage) return;
+        e.stopPropagation();
+        setEditing(true);
+      }}
+      onContextMenu={e => { e.stopPropagation(); onMenu(card, e); }}
     >
-      {/* Resize handles */}
-      {!isLinking && <ResizeHandles onStart={startResize} color={col.border} />}
+      {!isLinking && !editing && <ResizeHandles onStart={startResize} color={col.border} />}
+      {editing && <FormatBar accent={col.glow} />}
 
-      {/* Header */}
-      <div
-        className="flex items-center justify-between px-2.5 py-2 rounded-t-xl shrink-0"
-        style={{ background: col.header, borderBottom: `1px solid ${col.border}` }}
-      >
-        {/* Color dots */}
-        <div className="flex gap-1">
-          {COLORS.map(c => (
-            <button
-              key={c.id}
-              onMouseDown={e => e.stopPropagation()}
-              onClick={e => { e.stopPropagation(); onUpdate(card.id, { color: c.id }); }}
-              className={cn("w-2.5 h-2.5 rounded-full border border-black/20 transition-transform hover:scale-125",
-                card.color === c.id ? "ring-1 ring-white/40 scale-110" : "opacity-50")}
-              style={{ background: c.dot }}
-            />
-          ))}
-        </div>
-        {/* Actions */}
-        <div className="flex items-center gap-1">
-          <button
-            onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); onStartLink(card.id); }}
-            className="p-0.5 rounded transition-opacity opacity-40 hover:opacity-100"
-            style={{ color: col.text }}
-            title="Connect to another card"
-          >
-            <Link2 className="w-3 h-3" />
-          </button>
-          <button
-            onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); onDelete(card.id); }}
-            className="p-0.5 rounded text-rose-400/40 hover:text-rose-400 transition-colors"
-          >
-            <Trash2 className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
+      {isImage ? (
+        <img
+          src={card.src ?? ""}
+          alt=""
+          draggable={false}
+          className="block h-full w-full select-none"
+          style={{ objectFit: autoH ? "contain" : "cover" }}
+        />
+      ) : editing ? (
+        <div
+          ref={editorRef}
+          contentEditable
+          suppressContentEditableWarning
+          data-placeholder="Write your idea…"
+          className={cn("idea-editor idea-nodrag flex-1 px-2.5 py-2", sub ? "text-[11px] leading-snug" : "text-sm leading-relaxed")}
+          style={bodyStyle}
+          onBlur={saveEdit}
+          onKeyDown={e => {
+            e.stopPropagation();
+            if (e.key === "Escape") { setEditing(false); return; }
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveEdit(); }
+          }}
+        />
+      ) : (
+        <div
+          className={cn("idea-content flex-1 px-2.5 py-2", sub ? "text-[11px] leading-snug" : "text-sm leading-relaxed")}
+          style={{ ...bodyStyle, opacity: card.content ? 1 : 0.35 }}
+          dangerouslySetInnerHTML={{ __html: html || "Double-click to write…" }}
+        />
+      )}
 
-      {/* Body */}
-      <div
-        className="p-2.5 space-y-2.5 flex-1 overflow-auto"
-        onDoubleClick={() => { if (!isLinking) setEditing(true); }}
-      >
-        {editing ? (
-          <textarea
-            autoFocus
-            value={draft}
-            onChange={e => setDraft(e.target.value)}
-            onBlur={saveEdit}
-            onKeyDown={e => { if (e.key === "Escape") { setEditing(false); setDraft(card.content); } }}
-            className="w-full bg-transparent resize-none outline-none text-sm leading-relaxed"
-            style={{ color: col.text, minHeight: 80 }}
-            placeholder="Write your idea…"
-            rows={4}
-          />
-        ) : (
-          <p
-            className="text-sm leading-relaxed whitespace-pre-wrap break-words"
-            style={{ color: col.text, minHeight: 80, opacity: card.content ? 1 : 0.3 }}
-          >
-            {card.content || "Double-click to write…"}
-          </p>
-        )}
+    </div>
+  );
 
-        {/* Energy */}
-        <EnergyBar value={card.energy} onChange={v => onUpdate(card.id, { energy: v })} />
+  // A sub-idea sits inside its parent's wrapper and has no cluster of its own.
+  // A top-level card owns the wrapper, and the wrapper is what carries the
+  // position — which is how dragging a parent moves every sub-idea with it
+  // without a single child row being written.
+  if (sub) return cardBox;
 
-        {/* Tags */}
-        <div style={{ color: col.text }}>
-          <TagChips tags={card.tags} onSave={t => onUpdate(card.id, { tags: t })} />
-        </div>
-      </div>
+  return (
+    <div className="idea-node" style={{ left: pos.x, top: pos.y, zIndex: editing ? 110 : 10 }}>
+      {cardBox}
+      {children}
     </div>
   );
 }
 
-// ── SVG Connections ────────────────────────────────────────────────────
+// ── Connections ────────────────────────────────────────────────────────
 function ConnectionLines({
-  connections,
-  cards,
-  onDelete,
+  connections, cards, sizes, onDelete,
 }: {
   connections: IdeaConnection[];
   cards: IdeaCard[];
+  sizes: Map<number, CardSize>;
   onDelete: (id: number) => void;
 }) {
-  const cardMap = useMemo(() => {
-    const m: Record<number, IdeaCard> = {};
-    cards.forEach(c => { m[c.id] = c; });
-    return m;
-  }, [cards]);
+  const cardMap = useMemo(() => new Map(cards.map(card => [card.id, card])), [cards]);
+  const centre = (card: IdeaCard) => {
+    const size = sizes.get(card.id) ?? { w: card.width || 180, h: card.height || 80 };
+    return { x: card.pos_x + size.w / 2, y: card.pos_y + size.h / 2 };
+  };
 
   return (
-    <svg
-      className="absolute inset-0 pointer-events-none"
-      style={{ width: "100%", height: "100%", overflow: "visible", zIndex: 5 }}
-    >
+    <svg className="pointer-events-none absolute inset-0" style={{ width: "100%", height: "100%", overflow: "visible", zIndex: 5 }}>
       <defs>
         <marker id="arrow-idea" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-          <path d="M0,0 L0,6 L8,3 Z" fill="hsl(270 60% 58% / 0.6)" />
+          <path d="M0,0 L0,6 L8,3 Z" fill={`${ACCENT}99`} />
         </marker>
       </defs>
       {connections.map(conn => {
-        const from = cardMap[conn.from_id];
-        const to   = cardMap[conn.to_id];
+        const from = cardMap.get(conn.from_id);
+        const to   = cardMap.get(conn.to_id);
         if (!from || !to) return null;
-
-        const x1 = from.pos_x + from.width / 2;
-        const y1 = from.pos_y + 60;
-        const x2 = to.pos_x + to.width / 2;
-        const y2 = to.pos_y + 60;
-        const mx = (x1 + x2) / 2;
-        const my = (y1 + y2) / 2;
-        const cpx = mx + (y2 - y1) * 0.15;
-        const cpy = my - (x2 - x1) * 0.15;
-
+        const a = centre(from);
+        const b = centre(to);
+        const cpx = (a.x + b.x) / 2 + (b.y - a.y) * 0.15;
+        const cpy = (a.y + b.y) / 2 - (b.x - a.x) * 0.15;
+        const path = `M${a.x},${a.y} Q${cpx},${cpy} ${b.x},${b.y}`;
         return (
           <g key={conn.id}>
+            <path d={path} fill="none" stroke={`${ACCENT}55`} strokeWidth="1.4" strokeDasharray="5 3" markerEnd="url(#arrow-idea)" />
             <path
-              d={`M${x1},${y1} Q${cpx},${cpy} ${x2},${y2}`}
-              fill="none"
-              stroke="hsl(270 60% 58% / 0.35)"
-              strokeWidth="1.5"
-              strokeDasharray="5 3"
-              markerEnd="url(#arrow-idea)"
-            />
-            {/* Invisible wider hit target */}
-            <path
-              d={`M${x1},${y1} Q${cpx},${cpy} ${x2},${y2}`}
+              d={path}
               fill="none"
               stroke="transparent"
               strokeWidth="12"
@@ -399,14 +527,7 @@ function ConnectionLines({
               onClick={() => onDelete(conn.id)}
             />
             {conn.label && (
-              <text
-                x={cpx}
-                y={cpy - 6}
-                textAnchor="middle"
-                fill="hsl(270 60% 70% / 0.7)"
-                fontSize="10"
-                fontFamily="DM Mono, monospace"
-              >
+              <text x={cpx} y={cpy - 6} textAnchor="middle" fill={`${ACCENT}bb`} fontSize="10" fontFamily="DM Mono, monospace">
                 {conn.label}
               </text>
             )}
@@ -417,18 +538,141 @@ function ConnectionLines({
   );
 }
 
-// ── Workshop View ──────────────────────────────────────────────────────
+// ── Sub-idea tethers ───────────────────────────────────────────────────
+// Drawn in the wrapper rather than inside the parent card, so the card's hover
+// scale cannot drag the lines away from the sub-ideas they point at.
+function SubIdeaTethers({
+  parent, subs, sizes,
+}: {
+  parent: IdeaCard;
+  subs: IdeaCard[];
+  sizes: Map<number, CardSize>;
+}) {
+  if (subs.length === 0) return null;
+  const col = colorFor(parent.color);
+  const parentSize = sizes.get(parent.id) ?? { w: 180, h: 80 };
+  return (
+    <svg
+      className="pointer-events-none absolute left-0 top-0"
+      style={{ width: parentSize.w, height: parentSize.h, overflow: "visible", zIndex: 1 }}
+    >
+      {subs.map(child => {
+        const childSize = sizes.get(child.id) ?? { w: 120, h: 40 };
+        return (
+          <line
+            key={child.id}
+            x1={parentSize.w / 2}
+            y1={parentSize.h / 2}
+            x2={child.pos_x + childSize.w / 2}
+            y2={child.pos_y + childSize.h / 2}
+            stroke={col.glow}
+            strokeWidth="1"
+            strokeDasharray="3 3"
+            opacity="0.45"
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
+// ── Context menu ───────────────────────────────────────────────────────
+interface MenuState { card: IdeaCard; x: number; y: number }
+
+function CardMenu({
+  state, onClose, onColor, onLink, onSubIdea, onReplaceImage, onDelete,
+}: {
+  state: MenuState;
+  onClose: () => void;
+  onColor: (color: ColorId) => void;
+  onLink: () => void;
+  onSubIdea: () => void;
+  onReplaceImage: () => void;
+  onDelete: () => void;
+}) {
+  useEffect(() => {
+    const dismiss = () => onClose();
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("mousedown", dismiss, true);
+    window.addEventListener("keydown", escape);
+    return () => { window.removeEventListener("mousedown", dismiss, true); window.removeEventListener("keydown", escape); };
+  }, [onClose]);
+
+  const isImage = state.card.kind === "image";
+  const isSub   = state.card.parent_id != null;
+  const col     = colorFor(state.card.color);
+
+  const item = (label: string, Icon: typeof Link2, action: () => void, danger = false) => (
+    <button
+      onClick={() => { action(); onClose(); }}
+      className={cn(
+        "flex w-full items-center gap-2 px-2.5 py-1.5 text-left font-mono text-[9px] uppercase tracking-[0.1em] transition-colors",
+        danger ? "text-rose-400/70 hover:bg-rose-500/10 hover:text-rose-300" : "text-muted-foreground hover:bg-white/5 hover:text-foreground",
+      )}
+    >
+      <Icon className="h-3 w-3" />
+      {label}
+    </button>
+  );
+
+  return createPortal(
+    <div
+      // Position is clamped so a card near the right or bottom edge still gets
+      // a whole menu.
+      style={{
+        position: "fixed",
+        left: Math.min(state.x, window.innerWidth - 190),
+        top:  Math.min(state.y, window.innerHeight - 190),
+        zIndex: 400,
+        background: "hsl(222 26% 6% / 0.97)",
+        border: `1px solid ${col.border}`,
+        backdropFilter: "blur(10px)",
+        minWidth: 170,
+      }}
+      onMouseDown={e => e.stopPropagation()}
+      onContextMenu={e => e.preventDefault()}
+    >
+      <div className="flex items-center gap-1.5 border-b px-2.5 py-2" style={{ borderColor: `${col.border}` }}>
+        {COLORS.map(colour => (
+          <button
+            key={colour.id}
+            onClick={() => { onColor(colour.id); onClose(); }}
+            className={cn(
+              "h-3.5 w-3.5 border border-black/40 transition-transform hover:scale-125",
+              state.card.color === colour.id && "ring-1 ring-white/50",
+            )}
+            style={{ background: colour.dot }}
+            title={colour.id}
+          />
+        ))}
+      </div>
+      {!isSub && item("Link to…", Link2, onLink)}
+      {!isSub && item("Add sub-idea", CornerDownRight, onSubIdea)}
+      {isImage && item("Replace image", Repeat2, onReplaceImage)}
+      {item(isSub ? "Delete sub-idea" : "Delete", Trash2, onDelete, true)}
+    </div>,
+    document.body,
+  );
+}
+
+// ── Workshop ───────────────────────────────────────────────────────────
 function WorkshopView({ board }: { board: Board }) {
   const qc = useQueryClient();
-  const boardRef = useRef<HTMLDivElement>(null);
+  const boardRef  = useRef<HTMLDivElement>(null);
+  const fileRef   = useRef<HTMLInputElement>(null);
+  const pointerRef = useRef<{ x: number; y: number } | null>(null);
+  const replaceRef = useRef<number | null>(null);
+  const sizesRef  = useRef<Map<number, CardSize>>(new Map());
+  const [sizeTick, setSizeTick] = useState(0);
+  const rafRef    = useRef<number | null>(null);
+
   const cardQKey = ["/boards", board.id, "ideas"];
   const connQKey = ["/boards", board.id, "idea-connections"];
 
-  const { data: cards = [], isLoading: cardsLoading } = useQuery<IdeaCard[]>({
+  const { data: cards = [], isLoading } = useQuery<IdeaCard[]>({
     queryKey: cardQKey,
     queryFn: () => apiRequest("GET", `/api/boards/${board.id}/ideas`).then(r => r.json()),
   });
-
   const { data: connections = [] } = useQuery<IdeaConnection[]>({
     queryKey: connQKey,
     queryFn: () => apiRequest("GET", `/api/boards/${board.id}/idea-connections`).then(r => r.json()),
@@ -437,7 +681,6 @@ function WorkshopView({ board }: { board: Board }) {
   const invalidateCards = () => qc.invalidateQueries({ queryKey: cardQKey });
   const invalidateConns = () => qc.invalidateQueries({ queryKey: connQKey });
 
-  // ── Card mutations ────────────────────────────────────────────────────
   const createCard = useMutation({
     mutationFn: (body: object) => apiRequest("POST", `/api/boards/${board.id}/ideas`, body).then(r => r.json()),
     onSuccess: invalidateCards,
@@ -448,7 +691,7 @@ function WorkshopView({ board }: { board: Board }) {
     onMutate: async ({ id, patch }) => {
       await qc.cancelQueries({ queryKey: cardQKey });
       const prev = qc.getQueryData<IdeaCard[]>(cardQKey);
-      qc.setQueryData<IdeaCard[]>(cardQKey, old => (old ?? []).map(c => c.id === id ? { ...c, ...patch as IdeaCard } : c));
+      qc.setQueryData<IdeaCard[]>(cardQKey, old => (old ?? []).map(c => (c.id === id ? { ...c, ...patch as IdeaCard } : c)));
       return { prev };
     },
     onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(cardQKey, ctx.prev); },
@@ -460,14 +703,15 @@ function WorkshopView({ board }: { board: Board }) {
     onMutate: async (id) => {
       await qc.cancelQueries({ queryKey: cardQKey });
       const prev = qc.getQueryData<IdeaCard[]>(cardQKey);
-      qc.setQueryData<IdeaCard[]>(cardQKey, old => (old ?? []).filter(c => c.id !== id));
+      // Sub-ideas go with their parent on the server; mirror that optimistically
+      // or the children flash at the canvas origin before the refetch lands.
+      qc.setQueryData<IdeaCard[]>(cardQKey, old => (old ?? []).filter(c => c.id !== id && c.parent_id !== id));
       return { prev };
     },
     onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(cardQKey, ctx.prev); },
     onSettled: invalidateCards,
   });
 
-  // ── Connection mutations ───────────────────────────────────────────────
   const createConn = useMutation({
     mutationFn: (body: object) => apiRequest("POST", `/api/boards/${board.id}/idea-connections`, body).then(r => r.json()),
     onSuccess: invalidateConns,
@@ -485,91 +729,222 @@ function WorkshopView({ board }: { board: Board }) {
     onSettled: invalidateConns,
   });
 
-  // ── Link mode ─────────────────────────────────────────────────────────
   const [linkSource, setLinkSource] = useState<number | null>(null);
+  const [menu,       setMenu]       = useState<MenuState | null>(null);
+  const [notice,     setNotice]     = useState<string | null>(null);
 
-  const handleCardLinkClick = useCallback((id: number) => {
-    if (linkSource === null) {
-      setLinkSource(id);
-    } else if (linkSource === id) {
-      setLinkSource(null);
-    } else {
-      // Check if connection already exists
-      const exists = connections.some(
-        c => (c.from_id === linkSource && c.to_id === id) || (c.from_id === id && c.to_id === linkSource)
-      );
-      if (!exists) {
-        createConn.mutate({ from_id: linkSource, to_id: id, label: "" });
-      }
-      setLinkSource(null);
-    }
-  }, [linkSource, connections, createConn]);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 4200);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
-  // ── Add card ─────────────────────────────────────────────────────────
-  const addCard = () => {
-    const off = (cards.length % 5) * 28;
-    const colors: ColorId[] = ["violet", "rose", "amber", "teal", "slate"];
-    const color = colors[cards.length % colors.length];
-    createCard.mutate({ content: "", color, pos_x: 60 + off, pos_y: 60 + off, width: 220, tags: "", energy: 3 });
-  };
+  // Measurements arrive one card at a time during layout; coalescing them into
+  // a single frame keeps a fifty-card board from re-rendering fifty times.
+  const handleMeasure = useCallback((id: number, size: CardSize) => {
+    const current = sizesRef.current.get(id);
+    if (current && current.w === size.w && current.h === size.h) return;
+    sizesRef.current.set(id, size);
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      setSizeTick(value => value + 1);
+    });
+  }, []);
+  useEffect(() => () => { if (rafRef.current !== null) cancelAnimationFrame(rafRef.current); }, []);
+
+  const topCards = useMemo(() => cards.filter(c => c.parent_id == null), [cards]);
+  const childrenOf = useMemo(() => {
+    const map = new Map<number, IdeaCard[]>();
+    cards.forEach(card => {
+      if (card.parent_id == null) return;
+      const list = map.get(card.parent_id);
+      if (list) list.push(card);
+      else map.set(card.parent_id, [card]);
+    });
+    return map;
+  }, [cards]);
 
   const handleUpdate = useCallback((id: number, patch: Partial<IdeaCard>) => {
     updateCard.mutate({ id, patch });
   }, [updateCard]);
 
-  const handleDelete = useCallback((id: number) => {
-    deleteCard.mutate(id);
-  }, [deleteCard]);
+  // ── Placement ──
+  // A new card lands where the pointer last was on the canvas, which is where
+  // you were looking when you pressed the shortcut. Falling back to a cascade
+  // keeps cards from stacking when the pointer is elsewhere.
+  const nextSpot = () => {
+    const point = pointerRef.current;
+    if (point) return { x: Math.max(0, Math.round(point.x - 70)), y: Math.max(0, Math.round(point.y - 24)) };
+    const step = (topCards.length % 6) * 30;
+    return { x: 70 + step, y: 70 + step };
+  };
 
-  const canvasMinH = Math.max(520, ...cards.map(c => c.pos_y + 280));
+  const addIdea = useCallback(() => {
+    const spot = nextSpot();
+    const color = COLORS[topCards.length % COLORS.length].id;
+    createCard.mutate({ content: "", color, pos_x: spot.x, pos_y: spot.y, width: 0, height: 0, kind: "text" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createCard, topCards.length]);
 
-  if (cardsLoading) return (
-    <div className="flex items-center justify-center h-48">
-      <Loader2 className="w-5 h-5 animate-spin text-[hsl(270_60%_58%)] opacity-50" />
+  const addSubIdea = (parent: IdeaCard) => {
+    const parentSize = sizesRef.current.get(parent.id) ?? { w: 180, h: 80 };
+    const existing = childrenOf.get(parent.id)?.length ?? 0;
+    createCard.mutate({
+      content: "", color: parent.color, kind: "text",
+      parent_id: parent.id,
+      pos_x: Math.round(parentSize.w + 34),
+      pos_y: Math.round(existing * 46),
+      width: 0, height: 0,
+    });
+  };
+
+  // ── Images ──
+  const readImage = (file: File) => new Promise<{ src: string; width: number }>((resolve, reject) => {
+    if (!IMAGE_TYPES.includes(file.type)) { reject(new Error(`${file.name}: only PNG, JPG and GIF are supported.`)); return; }
+    if (file.size > IMAGE_LIMIT)          { reject(new Error(`${file.name} is ${(file.size / 1048576).toFixed(1)}MB — the limit is 5MB.`)); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`${file.name} could not be read.`));
+    reader.onload = () => {
+      const src = String(reader.result);
+      const probe = new Image();
+      // Natural width decides the starting size: a 64px icon and a screenshot
+      // should not both open at the same box.
+      probe.onload  = () => resolve({ src, width: Math.max(MIN_W, Math.min(360, probe.naturalWidth)) });
+      probe.onerror = () => reject(new Error(`${file.name} is not a readable image.`));
+      probe.src = src;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  const addImages = useCallback(async (files: File[]) => {
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      try {
+        const { src, width } = await readImage(file);
+        const target = replaceRef.current;
+        if (target != null) {
+          replaceRef.current = null;
+          handleUpdate(target, { src, kind: "image" });
+        } else {
+          const spot = nextSpot();
+          const stagger = index * 26;
+          createCard.mutate({ content: "", color: "slate", pos_x: spot.x + stagger, pos_y: spot.y + stagger, width, height: 0, kind: "image", src });
+        }
+      } catch (error) {
+        replaceRef.current = null;
+        setNotice(error instanceof Error ? error.message : "That image could not be added.");
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createCard, handleUpdate, topCards.length]);
+
+  const pickImage = useCallback((replaceId?: number) => {
+    replaceRef.current = replaceId ?? null;
+    fileRef.current?.click();
+  }, []);
+
+  // ── Shortcuts ──
+  // Skipped while a card editor has focus: in there Cmd+B/I/U are the browser's
+  // own formatting commands, which is exactly what those keys should do.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.closest(".idea-editor") || active?.tagName === "INPUT" || active?.tagName === "TEXTAREA") return;
+      const key = e.key.toLowerCase();
+      if (key === "t") { e.preventDefault(); addIdea(); }
+      if (key === "i") { e.preventDefault(); pickImage(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [addIdea, pickImage]);
+
+  // Pasting an image is the fastest path there is, and it costs one handler.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.closest(".idea-editor")) return;
+      const files = Array.from(e.clipboardData?.files ?? []).filter(f => IMAGE_TYPES.includes(f.type));
+      if (files.length === 0) return;
+      e.preventDefault();
+      void addImages(files);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [addImages]);
+
+  const handleLinkClick = useCallback((id: number) => {
+    if (linkSource === null) { setLinkSource(id); return; }
+    if (linkSource === id)   { setLinkSource(null); return; }
+    const exists = connections.some(
+      c => (c.from_id === linkSource && c.to_id === id) || (c.from_id === id && c.to_id === linkSource),
+    );
+    if (!exists) createConn.mutate({ from_id: linkSource, to_id: id, label: "" });
+    setLinkSource(null);
+  }, [linkSource, connections, createConn]);
+
+  const canvasMinH = Math.max(
+    560,
+    ...topCards.map(card => card.pos_y + (sizesRef.current.get(card.id)?.h ?? 120) + 160),
+  );
+  void sizeTick;
+
+  if (isLoading) return (
+    <div className="flex h-48 items-center justify-center">
+      <Loader2 className="h-5 w-5 animate-spin opacity-50" style={{ color: ACCENT }} />
     </div>
   );
 
+  const toolButton = "flex items-center gap-1.5 border px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.12em] transition-colors";
+
   return (
-    <div className="p-5 space-y-3 h-full flex flex-col">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
-          <h2 className="font-roman text-base font-bold tracking-widest uppercase"
-            style={{ color: "hsl(270 60% 72%)" }}>
-            {board.title}
-          </h2>
-          {linkSource !== null && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs"
-              style={{ background: "hsl(270 35% 10%)", color: "hsl(270 60% 72%)", border: "1px solid hsl(270 35% 26%)" }}>
-              <Link2 className="w-3 h-3" />
-              Click another card to connect · click same card or
-              <button className="underline ml-1" onClick={() => setLinkSource(null)}>cancel</button>
-            </div>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="flex h-full flex-col gap-3 p-5">
+      <input
+        ref={fileRef}
+        type="file"
+        accept={ACCEPT}
+        multiple
+        className="hidden"
+        onChange={e => {
+          const files = Array.from(e.target.files ?? []);
+          e.target.value = "";     // re-picking the same file must fire again
+          void addImages(files);
+        }}
+      />
+
+      {/* Header — the board's name fills the space it is given. */}
+      <div className="flex shrink-0 items-end gap-4">
+        <FittedTitle text={board.title} />
+        <div className="flex shrink-0 items-center gap-2 pb-1">
           {linkSource !== null && (
             <button
               onClick={() => setLinkSource(null)}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs transition-all"
-              style={{ background: "hsl(270 35% 10%)", color: "hsl(270 60% 65%)", border: "1px solid hsl(270 35% 26%)" }}
+              className={toolButton}
+              style={{ borderColor: `${ACCENT}55`, color: ACCENT }}
             >
-              <Link2Off className="w-3 h-3" />
-              Cancel Link
+              <Link2Off className="h-3 w-3" />
+              Cancel link
             </button>
           )}
           <button
-            onClick={addCard}
+            onClick={addIdea}
             disabled={createCard.isPending}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-all"
-            style={{
-              border: "1px solid hsl(270 35% 26%)",
-              color: "hsl(270 60% 68%)",
-              background: "transparent",
-            }}
+            className={toolButton}
+            style={{ borderColor: `${ACCENT}40`, color: ACCENT }}
+            title="New idea (⌘T)"
           >
-            {createCard.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
-            New Idea
+            {createCard.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+            Idea <span className="opacity-40">⌘T</span>
+          </button>
+          <button
+            onClick={() => pickImage()}
+            className={cn(toolButton, "text-muted-foreground hover:text-foreground")}
+            style={{ borderColor: "hsl(220 15% 20%)" }}
+            title="Add image (⌘I)"
+          >
+            <ImageIcon className="h-3 w-3" />
+            Image <span className="opacity-40">⌘I</span>
           </button>
         </div>
       </div>
@@ -577,52 +952,104 @@ function WorkshopView({ board }: { board: Board }) {
       {/* Canvas */}
       <div
         ref={boardRef}
-        className="relative flex-1 rounded-xl"
-        style={{
-          minHeight: canvasMinH,
-          background: "hsl(220 15% 5%)",
-          border: "1px solid hsl(220 15% 12%)",
-          cursor: linkSource !== null ? "crosshair" : "default",
+        className="idea-canvas flex-1"
+        style={{ minHeight: canvasMinH, cursor: linkSource !== null ? "crosshair" : "default" }}
+        onMouseMove={e => {
+          const bounds = boardRef.current?.getBoundingClientRect();
+          if (bounds) pointerRef.current = { x: e.clientX - bounds.left, y: e.clientY - bounds.top };
         }}
+        onMouseLeave={() => { pointerRef.current = null; }}
+        onDragOver={e => { if (e.dataTransfer.types.includes("Files")) e.preventDefault(); }}
+        onDrop={e => {
+          const files = Array.from(e.dataTransfer.files ?? []).filter(f => IMAGE_TYPES.includes(f.type));
+          if (files.length === 0) return;
+          e.preventDefault();
+          const bounds = boardRef.current?.getBoundingClientRect();
+          if (bounds) pointerRef.current = { x: e.clientX - bounds.left, y: e.clientY - bounds.top };
+          void addImages(files);
+        }}
+        onClick={() => { if (linkSource !== null) setLinkSource(null); }}
       >
-        {/* Dot grid */}
-        <div className="absolute inset-0 pointer-events-none opacity-[0.035] rounded-xl"
-          style={{ backgroundImage: "radial-gradient(circle, hsl(270 60% 70%) 1px, transparent 1px)", backgroundSize: "28px 28px" }} />
+        <div className="idea-canvas-grid" />
 
-        {/* Connection lines */}
-        <ConnectionLines connections={connections} cards={cards} onDelete={id => deleteConn.mutate(id)} />
+        <ConnectionLines connections={connections} cards={topCards} sizes={sizesRef.current} onDelete={id => deleteConn.mutate(id)} />
 
-        {/* Empty state */}
-        {cards.length === 0 && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground pointer-events-none">
-            <Lightbulb className="w-10 h-10 opacity-10" />
-            <p className="text-sm opacity-40">Add an idea card to get started</p>
+        {linkSource !== null && (
+          <div
+            className="absolute left-1/2 top-3 z-30 -translate-x-1/2 border px-3 py-1.5 font-mono text-[9px] uppercase tracking-[0.12em]"
+            style={{ background: "hsl(222 26% 6% / 0.9)", borderColor: `${ACCENT}55`, color: ACCENT }}
+          >
+            <Link2 className="mr-1.5 inline h-3 w-3" />
+            Click another card to connect · click the table to cancel
           </div>
         )}
 
-        {/* Cards */}
-        {cards.map(card => (
-          <IdeaCardComponent
+        {notice && (
+          <div
+            className="absolute left-1/2 top-3 z-30 -translate-x-1/2 border px-3 py-1.5 font-mono text-[9px] tracking-wide text-rose-300"
+            style={{ background: "hsl(222 26% 6% / 0.92)", borderColor: "hsl(350 50% 40%)" }}
+          >
+            {notice}
+          </div>
+        )}
+
+        {cards.length === 0 && (
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+            <Lightbulb className="h-10 w-10 opacity-10" />
+            <p className="font-mono text-[10px] uppercase tracking-[0.16em] opacity-40">⌘T for an idea · ⌘I for an image</p>
+          </div>
+        )}
+
+        {topCards.map(card => (
+          <IdeaCardView
             key={card.id}
             card={card}
             onUpdate={handleUpdate}
-            onDelete={handleDelete}
-            onStartLink={handleCardLinkClick}
+            onMenu={(target, e) => setMenu({ card: target, x: e.clientX, y: e.clientY })}
+            onLinkClick={handleLinkClick}
+            onMeasure={handleMeasure}
             isLinking={linkSource !== null}
             isLinkTarget={linkSource !== null && linkSource !== card.id}
             boardRef={boardRef}
-          />
+          >
+            <SubIdeaTethers parent={card} subs={childrenOf.get(card.id) ?? []} sizes={sizesRef.current} />
+            {(childrenOf.get(card.id) ?? []).map(child => (
+              <IdeaCardView
+                key={child.id}
+                card={child}
+                sub
+                onUpdate={handleUpdate}
+                onMenu={(target, e) => setMenu({ card: target, x: e.clientX, y: e.clientY })}
+                onLinkClick={handleLinkClick}
+                onMeasure={handleMeasure}
+                isLinking={false}
+                isLinkTarget={false}
+                boardRef={boardRef}
+              />
+            ))}
+          </IdeaCardView>
         ))}
       </div>
 
-      {/* Legend */}
-      <div className="flex items-center gap-4 shrink-0 text-[10px] text-muted-foreground opacity-50">
-        <span>⚡ = energy level (click to set)</span>
-        <span><Tag className="w-2.5 h-2.5 inline mr-0.5" />click tags area to edit</span>
-        <span><Link2 className="w-2.5 h-2.5 inline mr-0.5" />click link icon → click another card</span>
-        <span>Click a connection line to remove it</span>
-        <span>Double-click card body to edit</span>
+      <div className="flex shrink-0 flex-wrap items-center gap-4 font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground opacity-45">
+        <span>Hold-drag to move</span>
+        <span>Double-click to write</span>
+        <span>Right-click for colour, links, sub-ideas</span>
+        <span>Corners resize</span>
+        <span>Drop or paste an image</span>
       </div>
+
+      {menu && (
+        <CardMenu
+          state={menu}
+          onClose={() => setMenu(null)}
+          onColor={color => handleUpdate(menu.card.id, { color })}
+          onLink={() => setLinkSource(menu.card.id)}
+          onSubIdea={() => addSubIdea(menu.card)}
+          onReplaceImage={() => pickImage(menu.card.id)}
+          onDelete={() => deleteCard.mutate(menu.card.id)}
+        />
+      )}
     </div>
   );
 }
@@ -630,8 +1057,8 @@ function WorkshopView({ board }: { board: Board }) {
 // ── Page ───────────────────────────────────────────────────────────────
 export default function IdeaWorkshop() {
   return (
-    <BoardShell type="idea_workshop" label="Workshop" emptyIcon={<Lightbulb className="w-16 h-16" />}>
-      {board => <WorkshopView board={board} />}
+    <BoardShell type="idea_workshop" label="Workshop" emptyIcon={<Lightbulb className="h-16 w-16" />}>
+      {board => <WorkshopView key={board.id} board={board} />}
     </BoardShell>
   );
 }
