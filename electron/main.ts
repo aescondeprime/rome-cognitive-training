@@ -13,6 +13,8 @@ import { BrowserController } from "./browser/browser-controller";
 import { registerBrowserIpc } from "./browser/browser-ipc";
 import { AkiraController } from "./akira/controller";
 import { registerAkiraIpc } from "./akira/akira-ipc";
+import { KronosController } from "./kronos/kronos-controller";
+import { registerKronosIpc } from "./kronos/kronos-ipc";
 import {
   DEFAULT_CONSOLE_SHORTCUT,
   DEFAULT_CONVERSATION_SHORTCUT,
@@ -25,11 +27,13 @@ declare const __dirname: string;
 let mainWindow: BrowserWindow | null = null;
 let browserController: BrowserController | null = null;
 let akiraController: AkiraController | null = null;
+let kronosController: KronosController | null = null;
 let serverProcess: ChildProcess | null = null;
 let isQuitting = false;
 
 registerBrowserIpc(() => browserController);
 registerAkiraIpc(() => akiraController);
+registerKronosIpc(() => kronosController);
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -439,6 +443,13 @@ async function createWindow(): Promise<void> {
     const trusted = contents.id === window.webContents.id && isTrustedShellUrl(details.requestingUrl || contents.getURL());
     const microphoneOnly = permission === "media" && mediaTypes.length > 0 && mediaTypes.every(type => type === "audio");
     callback(trusted && microphoneOnly);
+  });
+  // The calendar link. Its own data directory and its own encrypted vault —
+  // a calendar password is not one of Akira's secrets.
+  kronosController = new KronosController({
+    root: path.join(getDataDir(), "Kronos"),
+    getWindow: () => mainWindow,
+    serverBase: `http://127.0.0.1:${SERVER_PORT}`,
   });
   akiraController = new AkiraController({
     root: path.join(getDataDir(), "Akira"),

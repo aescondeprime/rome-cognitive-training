@@ -239,7 +239,8 @@ export function ConstellationNavigator({
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-        const desired = nodeMap.get(link.source)?.kind === "hub" || nodeMap.get(link.target)?.kind === "hub" ? 88 : 66;
+        const anchored = (kind?: string) => kind === "hub" || kind === "folder";
+        const desired = anchored(nodeMap.get(link.source)?.kind) || anchored(nodeMap.get(link.target)?.kind) ? 88 : 66;
         const force = (dist - desired) * 0.008 * alpha;
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;
@@ -254,7 +255,7 @@ export function ConstellationNavigator({
         if (!pos) return;
         const groupIndex = Math.max(0, groupIds.indexOf(node.group));
         const groupAngle = (groupIndex / Math.max(1, groupIds.length)) * Math.PI * 2 - Math.PI / 2;
-        const groupRadius = node.kind === "hub" ? 0 : Math.min(size.width, size.height) * 0.13;
+        const groupRadius = node.kind === "hub" ? 0 : node.kind === "folder" ? Math.min(size.width, size.height) * 0.06 : Math.min(size.width, size.height) * 0.19;
         const targetX = centerX + Math.cos(groupAngle) * groupRadius;
         const targetY = centerY + Math.sin(groupAngle) * groupRadius;
         pos.vx += (targetX - pos.x) * 0.0018 * alpha;
@@ -454,7 +455,7 @@ export function ConstellationNavigator({
               const isFocused = !focusSet || focusSet.has(node.id);
               const matches = !matchedIds || matchedIds.has(node.id);
               const degree = adjacency.get(node.id)?.size ?? 0;
-              const radius = Math.min(12, 4.5 + Math.sqrt(Math.max(1, (node.weight ?? 1) + degree)) * 1.25 + (node.kind === "hub" ? 2 : 0));
+              const radius = Math.min(12, 4.5 + Math.sqrt(Math.max(1, (node.weight ?? 1) + degree)) * 1.25 + (node.kind === "hub" ? 2 : node.kind === "folder" ? 1.5 : 0));
               const color = node.color ?? groups.find(group => group.id === node.group)?.color ?? "hsl(var(--accent-h) 70% 58%)";
               const opacity = isFocused && matches ? 1 : matchedIds?.has(node.id) ? 0.8 : 0.12;
               const labelVisible = isActive || isHovered || node.kind === "hub" || node.kind === "folder" || visibleNodes.length <= 24 || (zoom > 1.15 && matches);
@@ -502,7 +503,7 @@ export function ConstellationNavigator({
                         dominantBaseline="central"
                         fill={isActive || isHovered ? color : "hsl(215 18% 72%)"}
                         fontFamily="DM Mono, monospace"
-                        fontSize={node.kind === "hub" ? 8.5 : 7.7}
+                        fontSize={node.kind === "hub" || node.kind === "folder" ? 8.5 : 7.7}
                         letterSpacing="0.02em"
                         style={{ paintOrder: "stroke", stroke: "hsl(222 22% 4%)", strokeWidth: 3, strokeLinecap: "round", strokeLinejoin: "round" }}
                       >

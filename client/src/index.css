@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700;900&family=Cinzel+Decorative:wght@400;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700;900&family=Cinzel+Decorative:wght@400;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&family=Zen+Dots&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -1279,3 +1279,116 @@ html[data-rome-cursor="on"] input:not([type="checkbox"]):not([type="radio"]):not
 @media (prefers-reduced-motion: reduce) {
   .rome-node-halo { animation: none; opacity: .6; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Idea Workshop — blueprint table and its cards
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* Zen Dots. Kept as its own utility rather than folded into .font-display,
+   because the display face is Cinzel everywhere else in ROME and only the
+   workshop is meant to read as machined rather than carved. */
+.font-industrial {
+  font-family: 'Zen Dots', 'Cinzel', sans-serif;
+  letter-spacing: 0.01em;
+}
+
+/* The table itself is glass: no fill of its own beyond a thin tint, so the
+   cave gradient and the drifting starfield keep showing through — blurred, the
+   way the constellation widgets treat what passes behind them. The grid is
+   drawn on top of that blur, not behind it, which is why it survives being
+   made this much stronger. */
+.idea-canvas {
+  position: relative;
+  border-radius: 0;
+  background-color: hsl(222 26% 6% / 0.55);
+  -webkit-backdrop-filter: blur(16px) saturate(118%);
+  backdrop-filter: blur(16px) saturate(118%);
+  border: 1px solid hsl(192 60% 55% / 0.22);
+  box-shadow:
+    0 0 26px hsl(192 70% 45% / 0.08),
+    inset 0 0 60px hsl(222 40% 2% / 0.55);
+}
+
+/* Two grids at once: a fine 24px weave for texture and a 120px major rule that
+   gives the eye something to place a card against. Drawn as one layer so the
+   canvas keeps a single stacking context under the cards. */
+.idea-canvas-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(hsl(192 90% 62% / 0.16) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(192 90% 62% / 0.16) 1px, transparent 1px),
+    linear-gradient(hsl(192 90% 62% / 0.075) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(192 90% 62% / 0.075) 1px, transparent 1px);
+  background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px;
+  background-position: -1px -1px;
+}
+
+/* Cards carry their own accent in --idea-accent so one rule covers all five
+   palette entries and every future one. */
+/* A card and its sub-ideas share one positioned wrapper, so dragging the wrapper
+   moves the whole cluster without a single child row being written. The card box
+   itself stays in flow inside it, which is what makes the wrapper's size the
+   card's size — the tether maths depends on that. */
+.idea-node { position: absolute; }
+
+.idea-card {
+  position: relative;
+  border-radius: 0;
+  border: 1px solid var(--idea-accent);
+  box-shadow: 0 2px 14px hsl(222 40% 2% / 0.5);
+  transition:
+    transform 170ms cubic-bezier(.2,.7,.3,1),
+    box-shadow 170ms ease,
+    border-color 170ms ease;
+  will-change: transform;
+}
+
+/* Hover lifts and radiates. transform-origin is the centre so a card grows
+   into its own space instead of shoving down and right. */
+/* Sub-ideas hang off the wrapper, not off the card box, so hovering one does not
+   light up its parent and the parent's growth does not drag them with it. */
+.idea-card.is-sub { position: absolute; }
+
+.idea-card:hover {
+  transform: scale(1.035);
+  border-color: var(--idea-glow);
+  box-shadow:
+    0 0 0 1px var(--idea-glow),
+    0 0 20px 2px var(--idea-halo),
+    0 0 46px 6px var(--idea-halo),
+    0 4px 18px hsl(222 40% 2% / 0.55);
+}
+
+/* While a card is being dragged, resized or edited the scale would fight the
+   pointer — the box would no longer be where the maths says it is. */
+.idea-card.is-busy,
+.idea-card.is-busy:hover {
+  transform: none;
+  transition: box-shadow 170ms ease, border-color 170ms ease;
+}
+
+.idea-card.is-editing {
+  box-shadow:
+    0 0 0 1px var(--idea-glow),
+    0 0 26px 3px var(--idea-halo),
+    0 4px 18px hsl(222 40% 2% / 0.55);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .idea-card, .idea-card:hover { transition-duration: .01ms; transform: none; }
+}
+
+/* The editor is a contenteditable rather than a textarea: a controlled
+   textarea loses the caret every time an optimistic update re-renders it,
+   which is why clicking into the middle of a word used to do nothing. */
+.idea-editor { outline: none; white-space: pre-wrap; overflow-wrap: anywhere; }
+.idea-editor:empty::before {
+  content: attr(data-placeholder);
+  opacity: 0.35;
+  pointer-events: none;
+}
+.idea-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+.idea-content b, .idea-content strong { font-weight: 700; }
+.idea-content i, .idea-content em { font-style: italic; }

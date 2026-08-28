@@ -100,4 +100,21 @@ contextBridge.exposeInMainWorld("romeDesktop", {
       return () => ipcRenderer.removeListener("rome:constellation:toggle", handler);
     },
   },
+  kronos: {
+    getConfig: () => ipcRenderer.invoke("rome:kronos:get-config"),
+    updateConfig: (patch: unknown) => ipcRenderer.invoke("rome:kronos:update-config", patch),
+    // Write-only by design: there is no getPassword channel anywhere.
+    setPassword: (value: string) => ipcRenderer.invoke("rome:kronos:set-password", value),
+    verify: () => ipcRenderer.invoke("rome:kronos:verify"),
+    createCalendar: (name: string) => ipcRenderer.invoke("rome:kronos:create-calendar", name),
+    disconnect: () => ipcRenderer.invoke("rome:kronos:disconnect"),
+    openAppleIdPage: () => ipcRenderer.invoke("rome:kronos:open-apple-id"),
+    syncStatus: () => ipcRenderer.invoke("rome:kronos:sync-status"),
+    syncNow: (dryRun: boolean) => ipcRenderer.invoke("rome:kronos:sync-now", dryRun),
+    onSyncStatus: (listener: (status: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, status: unknown) => listener(status);
+      ipcRenderer.on("rome:kronos:sync-status", handler);
+      return () => ipcRenderer.removeListener("rome:kronos:sync-status", handler);
+    },
+  },
 });
