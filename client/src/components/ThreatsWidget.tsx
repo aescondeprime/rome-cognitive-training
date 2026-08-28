@@ -6,6 +6,15 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import {
+  widgetRootStyle,
+  useWidgetFit,
+  useWidgetWheelScale,
+  useWidgetYield,
+  widgetYieldStyle,
+  WidgetScaleHandle,
+  type FocusRect,
+} from "./WidgetChrome";
 
 interface Threat {
   id: number;
@@ -20,6 +29,13 @@ interface Props {
   collapsed: boolean;
   onPosChange: (p: { x: number; y: number }) => void;
   onCollapsedChange: (c: boolean) => void;
+  /** Uniform scale and the editor's resize affordances. See `WidgetChrome`. */
+  scale?: number;
+  editing?: boolean;
+  onScaleChange?: (scale: number) => void;
+  /** Set while the camera has flown to a node; `focus` is the space it claims. */
+  zoomed?: boolean;
+  focus?: FocusRect | null;
 }
 
 const W = 230;
@@ -76,11 +92,21 @@ function PriorityPicker({ value, onChange }: { value: 1 | 2 | 3; onChange: (v: 1
   );
 }
 
-export default function ThreatsWidget({ pos, collapsed, onPosChange, onCollapsedChange }: Props) {
+export default function ThreatsWidget({ pos, collapsed, onPosChange, onCollapsedChange, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null }: Props) {
   const DEFAULT_X = window.innerWidth - W - 24;
   const DEFAULT_Y = 560;
   const x = pos?.x ?? DEFAULT_X;
   const y = pos?.y ?? DEFAULT_Y;
+
+  // Editor sizing and keep-on-screen. Scale is a transform, not a re-layout —
+  // see the note at the top of `WidgetChrome`. `useWidgetFit` is what stops a
+  // widget saved on a larger display from sitting past the edge of this one.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const onWheelScale = useWidgetWheelScale(editing, scale, onScaleChange);
+  useWidgetFit(rootRef, x, y, onPosChange, [scale, collapsed]);
+  // Selecting a node flies it to screen centre, straight under any widget
+  // parked there. Yielding is a fade, not a move — see `useWidgetYield`.
+  const yielding = useWidgetYield(rootRef, zoomed, focus, [x, y, scale, collapsed]);
 
   const qc = useQueryClient();
   const [newTitle, setNewTitle]     = useState("");
@@ -182,25 +208,23 @@ export default function ThreatsWidget({ pos, collapsed, onPosChange, onCollapsed
 
   return (
     <div
+      ref={rootRef}
       onMouseDown={onMouseDown}
       onTouchStart={onTouchStart}
-      style={{ position: "fixed", left: x, top: y, width: W, zIndex: 202, cursor: "grab", userSelect: "none", fontFamily: "DM Mono, monospace" }}
+      onWheel={editing ? onWheelScale : undefined}
+      style={widgetRootStyle(x, y, W, scale, widgetYieldStyle(yielding))}
     >
-      <div style={{
-        background: "hsl(222 18% 7% / 0.90)", backdropFilter: "blur(14px)",
-        border: "1px solid hsl(0 40% 25% / 0.4)",
-        borderRadius: 2,
-        boxShadow: "0 0 0 1px hsl(0 30% 10% / 0.6), 0 8px 32px hsl(0 30% 4% / 0.7), inset 0 1px 0 hsl(0 40% 30% / 0.06)",
-        overflow: "hidden",
-      }}>
+      {editing && <WidgetScaleHandle scale={scale} onScaleChange={onScaleChange} width={W} />}
+      <div className={`rome-widget-shell${editing ? " is-editing" : ""}${zoomed ? " is-zoomed" : ""}`}>
 
         {/* ── Header ─────────────────────────────────────────────────── */}
-        <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "6px 10px 5px",
-          borderBottom: collapsed ? "none" : "1px solid hsl(0 25% 14% / 0.6)",
-          background: "hsl(0 15% 5% / 0.7)",
-        }}>
+        <div
+          className={collapsed ? undefined : "rome-widget-rule"}
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "6px 10px 5px",
+          }}
+        >
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {/* Custom red corner bracket */}
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ opacity: 0.7 }}>

@@ -6,10 +6,20 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { kronosType, type ItemType } from "@/lib/kronosTypes";
+import {
+  widgetRootStyle,
+  useWidgetFit,
+  useWidgetWheelScale,
+  useWidgetYield,
+  widgetYieldStyle,
+  WidgetScaleHandle,
+  type FocusRect,
+} from "./WidgetChrome";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 interface AgendaItem {
-  type: "routine" | "assignment" | "event";
+  type: ItemType;
   id: number;
   title: string;
   color: string;
@@ -23,6 +33,13 @@ interface Props {
   collapsed: boolean;
   onPosChange: (p: { x: number; y: number }) => void;
   onCollapsedChange: (c: boolean) => void;
+  /** Uniform scale and the editor's resize affordances. See `WidgetChrome`. */
+  scale?: number;
+  editing?: boolean;
+  onScaleChange?: (scale: number) => void;
+  /** Set while the camera has flown to a node; `focus` is the space it claims. */
+  zoomed?: boolean;
+  focus?: FocusRect | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -57,32 +74,39 @@ function Corner({ flip = false }: { flip?: boolean }) {
 }
 
 // ── Type icon ─────────────────────────────────────────────────────────────
-function TypeDot({ type }: { type: "routine" | "assignment" | "event" }) {
-  const icons: Record<string, string> = {
-    routine:    "M4 4 L4 14 M4 9 L14 9 M14 4 L14 14",   // grid-like refresh symbol
-    assignment: "M5 3 L13 3 L13 15 L5 15 Z M7 7 L11 7 M7 10 L11 10",
-    event:      "M3 6 L15 6 L15 15 L3 15 Z M7 3 L7 6 M11 3 L11 6",
-  };
-  const colors: Record<string, string> = {
-    routine:    "hsl(var(--accent-h) 88% 60%)",
-    assignment: "hsl(210 65% 62%)",
-    event:      "hsl(270 60% 72%)",
-  };
+function TypeDot({ type }: { type: ItemType | string }) {
+  // The glyph and colour come from the shared registry rather than a pair of
+  // objects local to this file. The old version looked the type up in a bare
+  // `Record<string, string>` and passed `undefined` straight into `d` and
+  // `stroke` for anything it did not know about, which is a silently blank dot
+  // — exactly what a fourth item type would have produced here.
+  const meta = kronosType(type);
+  if (!meta) return null;
   return (
     <svg width="12" height="12" viewBox="0 0 18 18" fill="none" style={{ flexShrink: 0, opacity: 0.9 }}>
-      <path d={icons[type]} stroke={colors[type]} strokeWidth="1.8" strokeLinecap="round" />
+      <path d={meta.dotPath} stroke={meta.color} strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }
 
 // ── Main widget ────────────────────────────────────────────────────────────
-export default function ConstellationWidget({ pos, collapsed, onPosChange, onCollapsedChange }: Props) {
+export default function ConstellationWidget({ pos, collapsed, onPosChange, onCollapsedChange, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null }: Props) {
   const W = 220;
   const DEFAULT_X = window.innerWidth  - W - 24;
   const DEFAULT_Y = 80;
 
   const x = pos?.x ?? DEFAULT_X;
   const y = pos?.y ?? DEFAULT_Y;
+
+  // Editor sizing and keep-on-screen. Scale is a transform, not a re-layout —
+  // see the note at the top of `WidgetChrome`. `useWidgetFit` is what stops a
+  // widget saved on a larger display from sitting past the edge of this one.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const onWheelScale = useWidgetWheelScale(editing, scale, onScaleChange);
+  useWidgetFit(rootRef, x, y, onPosChange, [scale, collapsed]);
+  // Selecting a node flies it to screen centre, straight under any widget
+  // parked there. Yielding is a fade, not a move — see `useWidgetYield`.
+  const yielding = useWidgetYield(rootRef, zoomed, focus, [x, y, scale, collapsed]);
 
   // ── Clock tick ──────────────────────────────────────────────────────────
   const [now, setNow] = useState(new Date());
@@ -155,38 +179,26 @@ export default function ConstellationWidget({ pos, collapsed, onPosChange, onCol
 
   return (
     <div
+      ref={rootRef}
       onMouseDown={onMouseDown}
       onTouchStart={onTouchStart}
-      style={{
-        position:  "fixed",
-        left:      x,
-        top:       y,
-        width:     W,
-        zIndex:    202,
-        cursor:    "grab",
-        userSelect: "none",
-        fontFamily: "DM Mono, monospace",
-      }}
+      onWheel={editing ? onWheelScale : undefined}
+      style={widgetRootStyle(x, y, W, scale, widgetYieldStyle(yielding))}
     >
+      {editing && <WidgetScaleHandle scale={scale} onScaleChange={onScaleChange} width={W} />}
       {/* ── Outer shell ─────────────────────────────────────────────────── */}
-      <div style={{
-        background:   "hsl(222 18% 7% / 0.88)",
-        backdropFilter: "blur(14px)",
-        border:       "1px solid hsl(var(--accent-h) 30% 22% / 0.5)",
-        borderRadius: 2,
-        boxShadow:    "0 0 0 1px hsl(var(--accent-h) 20% 12% / 0.6), 0 8px 32px hsl(222 30% 4% / 0.7), inset 0 1px 0 hsl(var(--accent-h) 50% 40% / 0.08)",
-        overflow:     "hidden",
-      }}>
+      <div className={`rome-widget-shell${editing ? " is-editing" : ""}${zoomed ? " is-zoomed" : ""}`}>
 
         {/* ── Header bar (always visible) ──────────────────────────────── */}
-        <div style={{
-          display:      "flex",
-          alignItems:   "center",
-          justifyContent: "space-between",
-          padding:      "6px 10px 5px",
-          borderBottom: collapsed ? "none" : "1px solid hsl(var(--accent-h) 20% 16% / 0.5)",
-          background:   "hsl(222 20% 6% / 0.6)",
-        }}>
+        <div
+          className={collapsed ? undefined : "rome-widget-rule"}
+          style={{
+            display:      "flex",
+            alignItems:   "center",
+            justifyContent: "space-between",
+            padding:      "6px 10px 5px",
+          }}
+        >
           {/* Corner accent + day label */}
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <Corner />

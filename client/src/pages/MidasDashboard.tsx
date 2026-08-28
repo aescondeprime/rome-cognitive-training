@@ -22,6 +22,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, Plus, X } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import MidasProfile, { type ProfileScale } from "@/components/MidasProfile";
+import CapabilityBar from "@/components/CapabilityBar";
 import {
   MIDAS_SCALES,
   addScale,
@@ -78,6 +79,9 @@ export default function MidasDashboard() {
     queryKey: ["/api/stats"],
     queryFn: () => apiRequest("GET", "/api/stats").then(r => r.json()),
   });
+  // The Capability ledger is per-profile, the same way the Task Stabilizer's
+  // task list is — they are two views of one person's work.
+  const { data: activeProfile } = useQuery<{ id: number }>({ queryKey: ["/api/active-profile"] });
 
   const measured = useMemo(() => {
     const map: Record<string, number> = {};
@@ -207,6 +211,12 @@ export default function MidasDashboard() {
           )}
         </div>
       </div>
+
+      {/* ── Capability ─────────────────────────────────────────────────── */}
+      {/* Deliberately its own band rather than a sixth header chip: the profile
+          above is a shape and this is a quantity, and a panel of evidence has
+          to be able to open under it. */}
+      <CapabilityBar profileId={activeProfile?.id} />
 
       {/* ── Trials ─────────────────────────────────────────────────────── */}
       <div className="mt-8">

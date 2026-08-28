@@ -464,19 +464,29 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
     ensureNoError(calendars);
     const calendarIds = (calendars.data ?? []).map((calendar: { id: number }) => calendar.id);
     if (calendarIds.length === 0) { res.json([]); return; }
-    const [routines, assignments, events] = await Promise.all([
+    const [routines, assignments, events, generals] = await Promise.all([
       sb.from("kronos_routines").select("*").in("calendar_id", calendarIds).eq("user_id", ownerId),
       sb.from("kronos_assignments").select("*").in("calendar_id", calendarIds).eq("user_id", ownerId).eq("due_date", dateStr),
       sb.from("kronos_events").select("*").in("calendar_id", calendarIds).eq("user_id", ownerId).eq("event_date", dateStr),
+      sb.from("kronos_generals").select("*").in("calendar_id", calendarIds).eq("user_id", ownerId).eq("item_date", dateStr),
     ]);
-    [routines, assignments, events].forEach(ensureNoError);
+    [routines, assignments, events, generals].forEach(ensureNoError);
     const items: Array<Record<string, unknown>> = [];
+    // A template (`saved`) is a library entry, not something on the calendar.
+    // A routine additionally has to fall inside its date window; an empty
+    // bound means unbounded, which is how pre-window rows keep behaving.
+    const placed = (item: { saved?: boolean }) => !item.saved;
+    const inWindow = (item: { start_date?: string | null; end_date?: string | null }) =>
+      (!item.start_date || dateStr >= item.start_date) && (!item.end_date || dateStr <= item.end_date);
+
     for (const item of routines.data ?? []) {
+      if (!placed(item) || !inWindow(item)) continue;
       const fits = item.recurrence === "daily" || (item.recurrence === "weekly" && Array.isArray(item.days_of_week) && item.days_of_week.includes(weekday));
       if (fits) items.push({ type: "routine", id: item.id, title: item.title, color: item.color, start_time: item.start_time, duration_minutes: item.duration_minutes });
     }
-    for (const item of assignments.data ?? []) items.push({ type: "assignment", id: item.id, title: item.title, color: item.color, start_time: item.start_time, duration_minutes: item.duration_minutes });
-    for (const item of events.data ?? []) items.push({ type: "event", id: item.id, title: item.title, color: item.color, start_time: item.start_time, duration_minutes: item.duration_minutes });
+    for (const item of assignments.data ?? []) if (placed(item)) items.push({ type: "assignment", id: item.id, title: item.title, color: item.color, start_time: item.start_time, duration_minutes: item.duration_minutes });
+    for (const item of events.data ?? []) if (placed(item)) items.push({ type: "event", id: item.id, title: item.title, color: item.color, start_time: item.start_time, duration_minutes: item.duration_minutes });
+    for (const item of generals.data ?? []) if (placed(item)) items.push({ type: "general", id: item.id, title: item.title, color: item.color, start_time: item.start_time, duration_minutes: item.duration_minutes });
     items.sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)));
     res.json(items);
   }));
@@ -510,10 +520,16 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
     res.json({ ok: true });
   }));
 
+  // Columns every kind carries for the iCloud CalDAV link. Listed once: a kind
+  // whose `fields` array is missing one of these silently drops that value on
+  // every PATCH, and the sync engine then re-pushes the row forever.
+  const KRONOS_SYNC_FIELDS = ["ical_uid", "ical_href", "ical_etag", "ical_raw", "synced_at", "sync_state"] as const;
+
   const kronosChildren = [
-    { kind: "routines", table: "kronos_routines", defaults: { color: "hsl(43 88% 60%)", start_time: "09:00", duration_minutes: 60, recurrence: "daily", days_of_week: null, notes: "", saved: false }, fields: ["title", "color", "start_time", "duration_minutes", "recurrence", "days_of_week", "notes", "saved"] },
-    { kind: "assignments", table: "kronos_assignments", defaults: { color: "hsl(210 65% 62%)", start_time: "09:00", duration_minutes: 60, due_date: "", instructions: "", saved: false }, fields: ["title", "color", "start_time", "duration_minutes", "due_date", "instructions", "saved"] },
-    { kind: "events", table: "kronos_events", defaults: { color: "hsl(270 60% 72%)", start_time: "09:00", duration_minutes: 60, event_date: "", preparations: "", saved: false }, fields: ["title", "color", "start_time", "duration_minutes", "event_date", "preparations", "saved"] },
+    { kind: "routines", table: "kronos_routines", defaults: { color: "hsl(43 88% 60%)", start_time: "09:00", duration_minutes: 60, recurrence: "daily", days_of_week: null, notes: "", saved: false, start_date: "", end_date: "" }, fields: ["title", "color", "start_time", "duration_minutes", "recurrence", "days_of_week", "notes", "saved", "start_date", "end_date", ...KRONOS_SYNC_FIELDS] },
+    { kind: "assignments", table: "kronos_assignments", defaults: { color: "hsl(210 65% 62%)", start_time: "09:00", duration_minutes: 60, due_date: "", instructions: "", saved: false }, fields: ["title", "color", "start_time", "duration_minutes", "due_date", "instructions", "saved", ...KRONOS_SYNC_FIELDS] },
+    { kind: "events", table: "kronos_events", defaults: { color: "hsl(270 60% 72%)", start_time: "09:00", duration_minutes: 60, event_date: "", preparations: "", saved: false }, fields: ["title", "color", "start_time", "duration_minutes", "event_date", "preparations", "saved", ...KRONOS_SYNC_FIELDS] },
+    { kind: "generals", table: "kronos_generals", defaults: { color: "hsl(145 55% 50%)", start_time: "09:00", duration_minutes: 60, item_date: "", notes: "", saved: false }, fields: ["title", "color", "start_time", "duration_minutes", "item_date", "notes", "saved", ...KRONOS_SYNC_FIELDS] },
   ] as const;
 
   for (const config of kronosChildren) {

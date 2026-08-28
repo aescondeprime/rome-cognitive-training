@@ -115,7 +115,7 @@ export const CONSTELLATION_NODES: ConstellationNode[] = [
     tagline: "Planning, execution, and decision architecture",
     subnodes: [
       { id: "st-task",   label: "Contingency Garden", icon: "❦", href: "/taskboard",    description: "Branching plans with contingencies, traced into lettered routes" },
-      { id: "st-kronos", label: "Kronos Keep",   icon: "⧗", href: "/kronos-keep",  description: "Time-aware calendar with routines, assignments and events" },
+      { id: "st-kronos", label: "Kronos Keep",   icon: "⧗", href: "/kronos-keep",  description: "Time-aware calendar with routines, assignments, events and general items" },
     ],
     connections: ["creative", "investigative"],
   },

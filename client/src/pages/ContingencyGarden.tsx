@@ -418,7 +418,7 @@ function ImportPanel({ profileId, calendars, targetId, targetLabel, onImport, on
     queryFn: async () => {
       const out: ImportItem[] = [];
       for (const cal of calendars) {
-        for (const kind of ["assignments", "events", "routines"] as const) {
+        for (const kind of ["assignments", "events", "routines", "generals"] as const) {
           try {
             const rows = await apiRequest("GET", `/api/kronos/calendars/${cal.id}/${kind}`).then(r => r.json());
             for (const row of rows ?? []) {

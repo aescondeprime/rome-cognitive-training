@@ -14,14 +14,19 @@
  * means. `attach()` and `detach()` are the whole mechanism.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
-  ArrowLeft, Ban, Check, ChevronRight, GitCompare, Highlighter, Loader2, NotebookPen,
-  PenLine, Plus, RotateCcw, Settings2, SkipForward, Trash2, X,
+  ArrowLeft, Ban, Check, ChevronRight, FolderClosed, GitCompare, Highlighter, Layers,
+  Loader2, NotebookPen, Pencil, PenLine, Plus, RotateCcw, Settings2, SkipForward, Trash2, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ClaimAlignment, ClaimVerdict, RecallQuestionType } from "@/lib/academiaStore";
+import {
+  alreadyArchived, cardFromQuestion, createFlashcard, DEFAULT_FOLDER, deleteFlashcard,
+  fetchFlashcards, FLASHCARDS_KEY, foldersOf, updateFlashcard, type Flashcard,
+} from "@/lib/flashcards";
 import { useRecallSession, type Corpus } from "@/lib/recallSession";
 import {
   RECALL_DEFAULTS, type Graded, type Question, type RecallConfig, type Round, type Verdict,
@@ -39,6 +44,9 @@ const ROSE = "hsl(350 62% 64%)";
 export default function RecallState() {
   const session = useRecallSession();
   const [showSettings, setShowSettings] = useState(false);
+  // The Archive is a place in the Recall State, not a step in a run — it opens
+  // over whatever is happening and closes again without disturbing it.
+  const [showArchive, setShowArchive] = useState(false);
   const [remaining, setRemaining] = useState(0);
   const [fraction, setFraction] = useState(1);
   const [entry, setEntry] = useState("");
@@ -135,6 +143,8 @@ export default function RecallState() {
           <EngineChip engine={session.engine} modelReady={session.modelReady} model={session.model}
             locked={running} onToggle={() => session.setEngine(session.engine === "model" ? "mock" : "model")} />
           <CoverageMeter coverage={session.coverage} rounds={session.history.length} />
+          <button onClick={() => setShowArchive(v => !v)} title="Flashcard Archive"
+            className={cn("transition-colors", showArchive ? "text-[hsl(35_80%_65%)]" : "text-muted-foreground/40 hover:text-foreground")}><Layers size={15} /></button>
           <button onClick={() => setShowSettings(s => !s)} title="Optimizer" className="text-muted-foreground/40 hover:text-foreground"><Settings2 size={15} /></button>
           {running && <button onClick={session.endSession} title="End the run (Esc)" className="flex items-center gap-1 rounded-sm border border-[hsl(350_40%_30%)] px-2 py-1 text-[8px] font-mono tracking-widest text-[hsl(350_60%_70%)]"><Ban size={10} /> END</button>}
           {stoppable && <button onClick={session.restart} title="Stop this and start a fresh run" className="flex items-center gap-1 rounded-sm border border-[hsl(220_18%_22%)] px-2 py-1 text-[8px] font-mono tracking-widest text-muted-foreground/55 hover:text-foreground"><RotateCcw size={10} /> NEW RUN</button>}
@@ -143,7 +153,9 @@ export default function RecallState() {
 
       {showSettings && <Optimizer config={session.config} live={running} onChange={session.setConfig} onClose={() => setShowSettings(false)} />}
 
-      <div className="relative z-10 flex min-h-0 flex-1 flex-col items-center overflow-y-auto p-6">
+      {showArchive && <FlashcardArchive onClose={() => setShowArchive(false)} />}
+
+      <div className={cn("relative z-10 flex min-h-0 flex-1 flex-col items-center overflow-y-auto p-6", showArchive && "hidden")}>
 
         {session.phase === "loading" && <Centered><Loader2 size={18} className="animate-spin text-cyan-400/60" /><p className="mt-3 text-[9px] font-mono tracking-widest text-muted-foreground/40">GATHERING MATERIAL</p></Centered>}
 
@@ -223,7 +235,7 @@ export default function RecallState() {
           {session.failures.length > 0 && <p className="text-[8px] font-mono leading-4 text-[hsl(43_60%_60%)]/60">
             {session.failures.length} question{session.failures.length === 1 ? "" : "s"} the model could not write — {session.failures[session.failures.length - 1]}
           </p>}
-          {session.graded.map((item, i) => <ReviewCard key={item.question.id} item={item} onOverride={() => session.override(i)} />)}
+          {session.graded.map((item, i) => <ReviewCard key={item.question.id} item={item} round={session.round!} onOverride={() => session.override(i)} />)}
           <Excerpt round={session.round} />
           <button onClick={session.nextRound} className="self-end flex items-center gap-1.5 rounded-sm border border-[hsl(270_50%_40%)] bg-[hsl(270_40%_12%)] px-5 py-2 text-[9px] font-mono tracking-[.18em] text-[hsl(270_70%_80%)]">NEXT ROUND <ChevronRight size={12} /></button>
         </div>}
@@ -273,6 +285,115 @@ export default function RecallState() {
       </div>
     </div>
   );
+}
+
+/* ── The Flashcard Archive ───────────────────────────────────────────── */
+
+/**
+ * Every card, in folders, editable.
+ *
+ * It lives in the Recall State rather than in a run because it outlives runs:
+ * cards written from one sitting are drilled in another, shown on the
+ * constellation widget, and will feed the memorization drills in Athena Trials.
+ * The rows are ROME's existing `recall_items`, so the Memory Vault sees the same
+ * cards and the scheduling that Athena will want is already on them.
+ *
+ * Folders are the `category` column — a string that already exists and is
+ * already displayed. Moving a card between folders is an edit, not a
+ * relationship to maintain.
+ */
+function FlashcardArchive({ onClose }: { onClose: () => void }) {
+  const client = useQueryClient();
+  const { data: cards = [], isLoading } = useQuery<Flashcard[]>({ queryKey: FLASHCARDS_KEY, queryFn: fetchFlashcards });
+  const [folder, setFolder] = useState<string | null>(null);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState({ front: "", back: "", category: DEFAULT_FOLDER });
+
+  const folders = useMemo(() => foldersOf(cards), [cards]);
+  const shown = folder ? cards.filter(card => (card.category || DEFAULT_FOLDER) === folder) : cards;
+
+  const invalidate = () => client.invalidateQueries({ queryKey: FLASHCARDS_KEY });
+  const save = useMutation({
+    mutationFn: (input: { id: number; patch: Partial<Flashcard> }) => updateFlashcard(input.id, input.patch),
+    onSuccess: () => { invalidate(); setEditing(null); },
+  });
+  const remove = useMutation({ mutationFn: (id: number) => deleteFlashcard(id), onSuccess: invalidate });
+
+  const startEdit = (card: Flashcard) => {
+    setEditing(card.id);
+    setDraft({ front: card.front, back: card.back, category: card.category || DEFAULT_FOLDER });
+  };
+
+  return <div className="relative z-10 flex min-h-0 flex-1 flex-col p-6">
+    <div className="mb-4 flex items-baseline gap-3">
+      <div>
+        <p className="font-display text-base tracking-[.14em] text-[hsl(35_80%_68%)]">FLASHCARD ARCHIVE</p>
+        <p className="mt-1 text-[10px] text-muted-foreground/50">
+          {cards.length} card{cards.length === 1 ? "" : "s"} across {folders.length} folder{folders.length === 1 ? "" : "s"} · shared with the Memory Vault and the constellation widget
+        </p>
+      </div>
+      <button onClick={onClose} className="ml-auto text-muted-foreground/40 hover:text-foreground"><X size={14} /></button>
+    </div>
+
+    <div className="mb-3 flex flex-wrap gap-1.5">
+      <FolderChip label="ALL" count={cards.length} active={folder === null} onClick={() => setFolder(null)} />
+      {folders.map(item => <FolderChip key={item.name} label={item.name.toUpperCase()} count={item.count}
+        active={folder === item.name} onClick={() => setFolder(item.name)} />)}
+    </div>
+
+    {isLoading && <div className="flex flex-1 items-center justify-center"><Loader2 size={16} className="animate-spin text-[hsl(35_70%_62%)]/60" /></div>}
+
+    {!isLoading && shown.length === 0 && <div className="flex flex-1 flex-col items-center justify-center text-center">
+      <Layers size={22} className="mb-3 text-muted-foreground/20" />
+      <p className="text-[10px] text-muted-foreground/45">Nothing kept yet</p>
+      <p className="mt-1 max-w-64 text-[8px] leading-4 text-muted-foreground/25">
+        After a round is marked, ARCHIVE on any question keeps it as a card.
+      </p>
+    </div>}
+
+    <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+      {shown.map(card => editing === card.id
+        ? <div key={card.id} className="space-y-2 rounded-sm border border-[hsl(35_45%_30%)] bg-[hsl(35_30%_7%/.5)] p-3">
+            <input value={draft.front} onChange={e => setDraft({ ...draft, front: e.target.value })} placeholder="Front"
+              className="w-full rounded-sm border border-[hsl(220_18%_16%)] bg-[hsl(222_20%_4%)] px-2.5 py-2 text-[11px] text-foreground/85 outline-none focus:border-[hsl(35_50%_38%)]" />
+            <textarea value={draft.back} onChange={e => setDraft({ ...draft, back: e.target.value })} rows={4} placeholder="Back"
+              className="w-full resize-none rounded-sm border border-[hsl(220_18%_16%)] bg-[hsl(222_20%_4%)] px-2.5 py-2 text-[11px] leading-5 text-foreground/85 outline-none focus:border-[hsl(35_50%_38%)]" />
+            <div className="flex items-center gap-2">
+              <FolderClosed size={11} className="text-muted-foreground/40" />
+              <input value={draft.category} onChange={e => setDraft({ ...draft, category: e.target.value })}
+                list="rome-folders" placeholder="Folder"
+                className="min-w-0 flex-1 rounded-sm border border-[hsl(220_18%_16%)] bg-[hsl(222_20%_4%)] px-2 py-1 text-[9px] font-mono text-foreground/75 outline-none focus:border-[hsl(35_50%_38%)]" />
+              <datalist id="rome-folders">{folders.map(item => <option key={item.name} value={item.name} />)}</datalist>
+              <button onClick={() => setEditing(null)} className="text-[8px] font-mono tracking-widest text-muted-foreground/40 hover:text-foreground">CANCEL</button>
+              <button onClick={() => save.mutate({ id: card.id, patch: draft })} disabled={!draft.front.trim() || !draft.back.trim() || save.isPending}
+                className="rounded-sm border border-[hsl(35_50%_36%)] bg-[hsl(35_35%_10%)] px-3 py-1 text-[8px] font-mono tracking-widest text-[hsl(35_80%_70%)] disabled:opacity-30">SAVE</button>
+            </div>
+          </div>
+        : <div key={card.id} className="group rounded-sm border border-[hsl(220_18%_14%)] bg-[hsl(222_18%_6%/.8)] p-3">
+            <div className="flex items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] leading-5 text-foreground/80">{card.front}</p>
+                <p className="mt-1.5 whitespace-pre-wrap text-[10px] leading-5 text-muted-foreground/55">{card.back}</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                <button onClick={() => startEdit(card)} title="Edit" className="text-muted-foreground/40 hover:text-foreground"><Pencil size={11} /></button>
+                <button onClick={() => remove.mutate(card.id)} title="Delete" className="text-rose-400/40 hover:text-rose-400"><Trash2 size={11} /></button>
+              </div>
+            </div>
+            <p className="mt-2 flex items-center gap-1 text-[8px] font-mono tracking-[.14em] text-muted-foreground/25">
+              <FolderClosed size={9} /> {(card.category || DEFAULT_FOLDER).toUpperCase()}
+            </p>
+          </div>)}
+    </div>
+  </div>;
+}
+
+function FolderChip({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
+  return <button onClick={onClick}
+    className={cn("rounded-sm border px-2.5 py-1 text-[8px] font-mono tracking-[.14em] transition-colors",
+      active ? "border-[hsl(35_50%_40%)] bg-[hsl(35_35%_10%)] text-[hsl(35_80%_70%)]" : "border-[hsl(220_18%_16%)] text-muted-foreground/45 hover:text-foreground")}>
+    {label} <span className="text-muted-foreground/30">{count}</span>
+  </button>;
 }
 
 /* ── Pieces ──────────────────────────────────────────────────────────── */
@@ -362,7 +483,35 @@ const VERDICT_TONE: Record<Verdict, { label: string; color: string }> = {
   missed: { label: "MISSED", color: "hsl(220 12% 45%)" },
 };
 
-function ReviewCard({ item, onOverride }: { item: Graded; onOverride: () => void }) {
+/**
+ * Keeping a question you have just been marked on.
+ *
+ * The moment after the verdict is the right one to offer this: the answer has
+ * its evidence attached and you have just found out whether you knew it. A
+ * question already on a card says so rather than offering a duplicate — an
+ * archive that quietly accumulated the same question from three sittings would
+ * make the drills that read it worse, not better.
+ */
+function ArchiveButton({ item, round }: { item: Graded; round: Round }) {
+  const client = useQueryClient();
+  const { data: cards = [] } = useQuery<Flashcard[]>({ queryKey: FLASHCARDS_KEY, queryFn: fetchFlashcards });
+  const archived = alreadyArchived(cards, item.question);
+
+  const add = useMutation({
+    mutationFn: () => createFlashcard(cardFromQuestion(item.question, round)),
+    onSuccess: () => client.invalidateQueries({ queryKey: FLASHCARDS_KEY }),
+  });
+
+  if (archived) return <span className="flex items-center gap-1 text-[8px] font-mono tracking-[.14em] text-[hsl(35_60%_60%)]/70"><Layers size={10} /> IN ARCHIVE</span>;
+
+  return <button onClick={() => add.mutate()} disabled={add.isPending}
+    title="Keep this as a flashcard"
+    className="flex items-center gap-1 text-[8px] font-mono tracking-[.14em] text-muted-foreground/40 hover:text-[hsl(35_80%_65%)] disabled:opacity-40">
+    {add.isPending ? <Loader2 size={10} className="animate-spin" /> : <Layers size={10} />} ARCHIVE
+  </button>;
+}
+
+function ReviewCard({ item, round, onOverride }: { item: Graded; round: Round; onOverride: () => void }) {
   const tone = VERDICT_TONE[item.verdict];
   const given = item.question.type === "choice"
     ? (item.answer.value === null ? "—" : item.question.options?.[Number(item.answer.value)] ?? "—")
@@ -373,8 +522,11 @@ function ReviewCard({ item, onOverride }: { item: Graded; onOverride: () => void
       <span className="text-[8px] font-mono tracking-[.16em]" style={{ color: tone.color }}>{tone.label}</span>
       <span className="text-[8px] font-mono tracking-[.16em] text-muted-foreground/30">{typeLabel(item.question.type)}</span>
       {item.overridden && <span className="text-[8px] font-mono tracking-[.16em] text-[hsl(190_60%_60%)]">OVERRULED</span>}
-      {item.question.type === "open" && item.verdict !== "correct" && !item.overridden &&
-        <button onClick={onOverride} title="Count this as correct" className="ml-auto flex items-center gap-1 text-[8px] font-mono tracking-[.14em] text-muted-foreground/40 hover:text-foreground"><Check size={10} /> I WAS RIGHT</button>}
+      <div className="ml-auto flex items-center gap-3">
+        {item.question.type === "open" && item.verdict !== "correct" && !item.overridden &&
+          <button onClick={onOverride} title="Count this as correct" className="flex items-center gap-1 text-[8px] font-mono tracking-[.14em] text-muted-foreground/40 hover:text-foreground"><Check size={10} /> I WAS RIGHT</button>}
+        <ArchiveButton item={item} round={round} />
+      </div>
     </div>
     <p className="mt-2 text-[12px] leading-6 text-foreground/80">{item.question.stem}</p>
     <p className="mt-2 text-[10px] leading-5 text-muted-foreground/55"><span className="text-muted-foreground/35">You:</span> {given}</p>
