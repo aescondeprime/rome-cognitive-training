@@ -216,7 +216,7 @@ export class AkiraCapabilityRegistry {
       objectSchema({ ideaId: number("Exact idea id.") }, ["ideaId"])),
       async args => { const id = numericId(args.ideaId); await this.api("DELETE", `/api/ideas/${id}`); return { value: { deletedId: id } }; });
 
-    this.add(this.descriptor("rome.schedule.today", "Read today's Kronos schedule", "Reads live routines, assignments, and events for a date.", "read", "background", [], [], false,
+    this.add(this.descriptor("rome.schedule.today", "Read today's Kronos schedule", "Reads live routines, assignments, events, and general items for a date.", "read", "background", [], [], false,
       objectSchema({ date: string("Local date in YYYY-MM-DD.") })),
       async args => ({ value: await this.api("GET", `/api/kronos/today${args.date ? `?date=${encodeURIComponent(String(args.date))}` : ""}`) }));
     this.add(this.descriptor("rome.schedule.create_assignment", "Create a Kronos assignment", "Creates a dated assignment on a Kronos calendar.", "write", "background", [["kronos-today"], ["/kronos"], ["/kronos/calendars"]], [], true,
@@ -451,7 +451,7 @@ export class AkiraCapabilityRegistry {
       async () => ({ value: await this.api("GET", "/api/kronos/calendars") }));
 
     this.add(this.descriptor("rome.schedule.create_routine", "Create a recurring routine", "Creates a daily or weekly routine on a Kronos calendar.", "write", "background", KRONOS, [], true,
-      objectSchema({ calendarId: number("Calendar id."), title: string("Routine title."), startTime: string("Time HH:MM."), durationMinutes: number("Duration in minutes."), recurrence: string("daily or weekly."), daysOfWeek: { type: "array", items: { type: "number" }, description: "Weekday numbers, 0 = Sunday, when recurrence is weekly." }, notes: string("Optional notes.") }, ["title"])),
+      objectSchema({ calendarId: number("Calendar id."), title: string("Routine title."), startTime: string("Time HH:MM."), durationMinutes: number("Duration in minutes."), recurrence: string("daily or weekly."), daysOfWeek: { type: "array", items: { type: "number" }, description: "Weekday numbers, 0 = Sunday, when recurrence is weekly." }, notes: string("Optional notes."), startDate: string("First day the routine runs, YYYY-MM-DD. Defaults to the start of the current month."), endDate: string("Last day the routine runs, YYYY-MM-DD. Defaults to the end of the current month.") }, ["title"])),
       async args => {
         const calendarId = args.calendarId ? numericId(args.calendarId) : await this.ensureCalendar();
         const recurrence = String(args.recurrence ?? "daily") === "weekly" ? "weekly" : "daily";
@@ -462,6 +462,11 @@ export class AkiraCapabilityRegistry {
           recurrence,
           days_of_week: recurrence === "weekly" && Array.isArray(args.daysOfWeek) ? args.daysOfWeek : [],
           notes: args.notes ?? "", saved: false,
+          // Unbounded by default would put the routine on every day forever in
+          // both directions. Absent an explicit window, bound it to the month
+          // it is being created in, which is what the page's form does too.
+          start_date: args.startDate ?? monthStart(args.startDate ?? args.endDate),
+          end_date: args.endDate ?? monthEnd(args.startDate ?? args.endDate),
         });
         return { value, undo: { method: "DELETE", path: `/api/kronos/routines/${numericId(value?.id)}` } };
       });
@@ -480,13 +485,27 @@ export class AkiraCapabilityRegistry {
         return { value, undo: { method: "DELETE", path: `/api/kronos/events/${numericId(value?.id)}` } };
       });
 
-    this.add(this.descriptor("rome.schedule.cancel", "Cancel a scheduled item", "Deletes one routine, assignment, or event by exact id.", "destructive", "background", KRONOS, [], false,
-      objectSchema({ kind: string("routine, assignment, or event."), id: number("Exact item id.") }, ["kind", "id"])),
+    this.add(this.descriptor("rome.schedule.create_general", "Create a general calendar item", "Creates a dated general item — the neutral type, for anything that is not a routine, an assignment or an event.", "write", "background", KRONOS, [], true,
+      objectSchema({ calendarId: number("Calendar id."), title: string("Item title."), itemDate: string("Date YYYY-MM-DD."), startTime: string("Time HH:MM."), durationMinutes: number("Duration in minutes."), notes: string("Optional notes.") }, ["title", "itemDate"])),
+      async args => {
+        const calendarId = args.calendarId ? numericId(args.calendarId) : await this.ensureCalendar();
+        const value = await this.api<any>("POST", `/api/kronos/calendars/${calendarId}/generals`, {
+          title: requiredText(args.title, "title"),
+          item_date: requiredText(args.itemDate, "itemDate"),
+          start_time: args.startTime ?? "09:00",
+          duration_minutes: Math.max(1, Number(args.durationMinutes) || 60),
+          notes: args.notes ?? "", saved: false,
+        });
+        return { value, undo: { method: "DELETE", path: `/api/kronos/generals/${numericId(value?.id)}` } };
+      });
+
+    this.add(this.descriptor("rome.schedule.cancel", "Cancel a scheduled item", "Deletes one routine, assignment, event, or general item by exact id.", "destructive", "background", KRONOS, [], false,
+      objectSchema({ kind: string("routine, assignment, event, or general."), id: number("Exact item id.") }, ["kind", "id"])),
       async args => {
         const kind = String(args.kind);
-        const plural: Record<string, string> = { routine: "routines", assignment: "assignments", event: "events" };
+        const plural: Record<string, string> = { routine: "routines", assignment: "assignments", event: "events", general: "generals" };
         const segment = plural[kind];
-        if (!segment) throw new Error("kind must be routine, assignment, or event.");
+        if (!segment) throw new Error("kind must be routine, assignment, event, or general.");
         const id = numericId(args.id);
         await this.api("DELETE", `/api/kronos/${segment}/${id}`);
         return { value: { deletedId: id, kind } };
@@ -809,4 +828,17 @@ function sanitizeBrowserMetadata(tab: {
     incognito: Boolean(tab.incognito),
     crashed: Boolean(tab.crashed),
   };
+}
+
+/** First day of the month containing `dateStr`, or of today. */
+function monthStart(dateStr?: unknown): string {
+  const d = typeof dateStr === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? new Date(`${dateStr}T12:00:00`) : new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+/** Last day of the month containing `dateStr`, or of today. */
+function monthEnd(dateStr?: unknown): string {
+  const d = typeof dateStr === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? new Date(`${dateStr}T12:00:00`) : new Date();
+  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, "0")}-${String(last.getDate()).padStart(2, "0")}`;
 }

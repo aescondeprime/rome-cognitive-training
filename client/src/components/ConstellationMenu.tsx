@@ -17,8 +17,12 @@ import {
   DEFAULT_SOUND_ENABLED,
   DEFAULT_SOUND_VOLUME,
   DEFAULT_SOUND_PITCH,
+  refitWidgetPositions,
+  widgetScale,
+  clampWidgetScale,
   type ConstellationLayout,
   type NodeOverride,
+  type WidgetKey,
 } from "@/lib/constellationLayout";
 // setRayEditOffset was called by handleReset but never imported, so pressing
 // Reset in the Constellation editor threw a ReferenceError before it finished.
@@ -27,10 +31,13 @@ import { setAkiraAmbience } from "@/lib/akiraAmbienceState";
 import { applyLayout, isRayFloating } from "@/lib/applyLayout";
 import { playCue, setSoundEnabled, setSoundVolume, setSoundPitch, CUE_NAMES, CUE_LABELS } from "@/lib/sound";
 import ConstellationNode from "./ConstellationNode";
+import ParticleCanvas from "./ParticleCanvas";
+import { nodeFocusRect } from "./WidgetChrome";
 import NodeBranchMenu from "./NodeBranchMenu";
 import NodeHologram from "./NodeHologram";
 import ConstellationWidget from "./ConstellationWidget";
 import ProjectsWidget from "./ProjectsWidget";
+import FlashcardWidget from "./FlashcardWidget";
 import ThreatsWidget from "./ThreatsWidget";
 import TaskStabilizerWidget from "./TaskStabilizerWidget";
 
@@ -105,223 +112,9 @@ function ColorSliders({ value, onChange }: { value: string; onChange: (hsl: stri
   );
 }
 
-// ── Moving particle canvas ─────────────────────────────────────────────────
-//
-// Two things this field has to do that a plain drifting starfield does not:
-//
-// 1. Fake the camera. The canvas is mounted OUTSIDE the camera-transformed
-//    layer, so when the map flies to a node the field would otherwise sit
-//    frozen behind it and the depth illusion collapses. Every particle carries
-//    a `depth` (0 = far, 1 = near) and is projected through a weakened copy of
-//    the camera transform — near particles take almost all of the zoom and pan,
-//    far ones barely move. Wrapping is done in each layer's OWN world units
-//    (not in screen space), so on-screen density stays constant at every zoom
-//    instead of thinning out as the field is magnified.
-//
-// 2. Answer the pointer. A soft radial push inside a falloff radius, plus a
-//    tangential drag carried by the cursor's own velocity, applied as an
-//    impulse on the particle's velocity which then relaxes back to the drift it
-//    was born with. Nothing is yanked; the field stirs and settles.
-//
-// The camera values arrive as framer-motion MotionValues and are read with
-// `.get()` inside the RAF loop — subscribing React to them would re-render the
-// whole menu sixty times a second.
-
-/** Pointer influence — radius in screen px, and impulse strengths. */
-const PTR_RADIUS = 185;
-const PTR_PUSH   = 0.055;  // steady repulsion from a resting cursor
-const PTR_SWIRL  = 0.030;  // drag carried by cursor velocity
-const VEL_RELAX  = 0.040;  // per-frame pull back toward birth drift
-const MAX_SPEED  = 1.8;
-const WRAP_MARGIN = 56;    // wrap this far off-screen so pops are never seen
-
-function ParticleCanvas({
-  width, height, count = 280, particleHue, saturation = DEFAULT_PARTICLE_SATURATION,
-  camScale, camX, camY, depthStrength = 1,
-}: {
-  width: number; height: number; count?: number; particleHue?: number; saturation?: number;
-  camScale?: MotionValue<number>; camX?: MotionValue<number>; camY?: MotionValue<number>;
-  /** 0 disables camera parallax entirely (edit mode). */
-  depthStrength?: number;
-}) {
-  const canvasRef  = useRef<HTMLCanvasElement>(null);
-  const countRef   = useRef(count);
-  const hueRef     = useRef(particleHue);
-  const satRef     = useRef(saturation);
-  const depthRef   = useRef(depthStrength);
-  const camRef     = useRef({ camScale, camX, camY });
-
-  // Pointer state lives in a ref: a mousemove that set React state would
-  // re-render the menu on every pixel of cursor travel.
-  const ptrRef = useRef({ x: -9999, y: -9999, vx: 0, vy: 0, active: false });
-
-  // Keep refs in sync so the RAF loop always reads current values
-  useEffect(() => { countRef.current = count; }, [count]);
-  useEffect(() => { hueRef.current   = particleHue; }, [particleHue]);
-  useEffect(() => { satRef.current   = saturation; }, [saturation]);
-  useEffect(() => { depthRef.current = depthStrength; }, [depthStrength]);
-  useEffect(() => { camRef.current   = { camScale, camX, camY }; }, [camScale, camX, camY]);
-
-  useEffect(() => {
-    const ptr = ptrRef.current;
-    function onMove(e: MouseEvent) {
-      // movementX/Y is already a per-event delta, so it doubles as velocity
-      // without keeping a previous sample around.
-      ptr.vx = Math.max(-14, Math.min(14, (e.movementX || 0)));
-      ptr.vy = Math.max(-14, Math.min(14, (e.movementY || 0)));
-      ptr.x = e.clientX; ptr.y = e.clientY;
-      ptr.active = true;
-    }
-    function onLeave() { ptr.active = false; }
-    window.addEventListener("mousemove", onMove, { passive: true });
-    window.addEventListener("mouseleave", onLeave);
-    window.addEventListener("blur", onLeave);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseleave", onLeave);
-      window.removeEventListener("blur", onLeave);
-    };
-  }, []);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || width === 0 || height === 0) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const reduced = typeof window.matchMedia === "function"
-      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    // A reduced-motion field still has depth, just a shallower one, and the
-    // pointer only breathes on it.
-    const depthGain = reduced ? 0.4 : 1;
-    const ptrGain   = reduced ? 0.35 : 1;
-
-    // Spawn MAX_COUNT particles once; only draw the first `countRef.current` of them
-    const MAX = 560;
-    const particles = Array.from({ length: MAX }, () => {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = Math.random() * 0.18 + 0.04;
-      const r     = Math.random() * 1.5 + 0.3;
-      const vx    = Math.cos(angle) * speed;
-      const vy    = Math.sin(angle) * speed;
-      return {
-        x: Math.random() * width, y: Math.random() * height,
-        vx, vy,
-        // Birth drift — every impulse decays back to this, so the field always
-        // returns to the motion it started with.
-        bvx: vx, bvy: vy,
-        r,
-        // Depth is read off the radius the particle already had, so a resting
-        // field looks exactly as it did before: big dots simply turn out to be
-        // the near ones.
-        depth: 0.14 + ((r - 0.3) / 1.5) * 0.86,
-        alpha: Math.random() * 0.6 + 0.15,
-        phase: Math.random() * Math.PI * 2,
-        flicker: Math.random() * 0.025 + 0.008,
-      };
-    });
-
-    let t = 0;
-    let raf: number;
-    let cancelled = false;
-
-    const mod = (a: number, b: number) => ((a % b) + b) % b;
-
-    function draw() {
-      if (cancelled) return;
-      ctx!.clearRect(0, 0, width, height);
-      t++;
-
-      // Read accent hue directly from CSS var at draw time (canvas can't use var())
-      // particleHue === -1 is the "White" sentinel — use low saturation
-      const rawHue = hueRef.current;
-      const isWhite = rawHue === -1;
-      const h = isWhite ? 43
-        : rawHue != null ? rawHue
-        : (parseInt(getComputedStyle(document.documentElement).getPropertyValue("--accent-h").trim()) || 43);
-      // White stays desaturated by definition; everything else follows the
-      // editor, which used to be pinned at a washed-out 55.
-      const sat = isWhite ? 10 : Math.max(0, Math.min(100, satRef.current));
-
-      // ── Camera, read once per frame ────────────────────────────────────
-      const cam = camRef.current;
-      const gain = depthGain * depthRef.current;
-      const camS = cam.camScale ? cam.camScale.get() : 1;
-      const camTX = cam.camX ? cam.camX.get() : 0;
-      const camTY = cam.camY ? cam.camY.get() : 0;
-
-      const ptr = ptrRef.current;
-      // Cursor velocity is an impulse, not a state — bleed it off every frame
-      // so a cursor that stops moving stops dragging.
-      ptr.vx *= 0.86; ptr.vy *= 0.86;
-
-      const visible = Math.min(countRef.current, MAX);
-      for (let i = 0; i < visible; i++) {
-        const p = particles[i];
-        p.x += p.vx; p.y += p.vy;
-
-        // Per-layer camera: depth 0 sits still, depth 1 rides the full move.
-        const d  = p.depth * gain;
-        const es = 1 + (camS - 1) * d;      // this layer's effective zoom
-        const tx = camTX * d;               // this layer's effective pan
-        const ty = camTY * d;
-
-        // Wrap inside the world window this layer actually shows, so density
-        // on screen never changes with zoom.
-        const spanX = (width  + WRAP_MARGIN * 2) / es;
-        const spanY = (height + WRAP_MARGIN * 2) / es;
-        const originX = (-WRAP_MARGIN - tx) / es;
-        const originY = (-WRAP_MARGIN - ty) / es;
-        p.x = originX + mod(p.x - originX, spanX);
-        p.y = originY + mod(p.y - originY, spanY);
-
-        const sx = p.x * es + tx;
-        const sy = p.y * es + ty;
-
-        if (ptr.active) {
-          const dx = sx - ptr.x, dy = sy - ptr.y;
-          const dist2 = dx * dx + dy * dy;
-          if (dist2 < PTR_RADIUS * PTR_RADIUS) {
-            const dist = Math.sqrt(dist2) || 0.0001;
-            const fall = 1 - dist / PTR_RADIUS;
-            const f = fall * fall * ptrGain;   // squared falloff = soft edge
-            // Impulses are computed in screen px, so divide by this layer's
-            // zoom to convert back into the world units velocity lives in.
-            p.vx += ((dx / dist) * PTR_PUSH + ptr.vx * PTR_SWIRL) * f / es;
-            p.vy += ((dy / dist) * PTR_PUSH + ptr.vy * PTR_SWIRL) * f / es;
-          }
-        }
-
-        // Relax toward birth drift, then clamp — the field can be stirred but
-        // never thrown.
-        p.vx += (p.bvx - p.vx) * VEL_RELAX;
-        p.vy += (p.bvy - p.vy) * VEL_RELAX;
-        const sp2 = p.vx * p.vx + p.vy * p.vy;
-        if (sp2 > MAX_SPEED * MAX_SPEED) {
-          const k = MAX_SPEED / Math.sqrt(sp2);
-          p.vx *= k; p.vy *= k;
-        }
-
-        if (sx < -4 || sx > width + 4 || sy < -4 || sy > height + 4) continue;
-
-        const flicker = Math.sin(t * p.flicker + p.phase) * 0.28 + 0.72;
-        ctx!.beginPath();
-        // Near particles gain a little size with the zoom; far ones stay pins.
-        ctx!.arc(sx, sy, p.r * (0.82 + 0.18 * es), 0, Math.PI * 2);
-        ctx!.fillStyle = `hsla(${h}, ${sat}%, 80%, ${(p.alpha * flicker).toFixed(3)})`;
-        ctx!.fill();
-      }
-      raf = requestAnimationFrame(draw);
-    }
-    draw();
-    return () => { cancelled = true; cancelAnimationFrame(raf); };
-  }, [width, height]);
-
-  return (
-    <canvas ref={canvasRef} width={width} height={height}
-      style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />
-  );
-}
+// The particle field lives in `ParticleCanvas.tsx` — the ambient backdrop the
+// World Browser fades onto reuses it, and a starfield is not the constellation
+// editor's private property.
 
 // ── Direction handle — orbits the ray source handle ───────────────────────
 // Drag it around the source circle to set beam direction.
@@ -588,6 +381,8 @@ export default function ConstellationMenu({ onClose }: Props) {
   const [hoveredId, setHoveredId]   = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editMode, setEditMode]     = useState(false);
+  // The editor card folds away so the whole screen is visible while arranging.
+  const [editPanelOpen, setEditPanelOpen] = useState(true);
 
   // Layout overrides — loaded from localStorage, mutated in edit mode
   const [layout, setLayout] = useState<ConstellationLayout>(loadLayout);
@@ -625,6 +420,30 @@ export default function ConstellationMenu({ onClose }: Props) {
     window.addEventListener("resize", onResize);
     return () => { cancelAnimationFrame(id); window.removeEventListener("resize", onResize); };
   }, []);
+
+  /**
+   * Re-fit the widgets to the screen that is actually here.
+   *
+   * The symptom this fixes: ROME saved widget positions on a large display, you
+   * reopened it on a laptop, and half the widgets were simply gone — parked at
+   * coordinates past the right or bottom edge with no way to reach them. The
+   * remap is proportional, so a widget that lived in the lower right of the big
+   * screen lands in the lower right of the small one instead of being shoved
+   * against the edge with everything else.
+   *
+   * This pass only knows nominal widths; each widget then clamps itself against
+   * its real measured box (`useWidgetFit`), which is what accounts for height.
+   *
+   * `refitWidgetPositions` returns the same object when nothing changed, so the
+   * identity check below is what stops this from looping on its own write.
+   */
+  useEffect(() => {
+    if (dims.w <= 0 || dims.h <= 0) return;
+    setLayout(prev => {
+      const next = refitWidgetPositions(prev, dims);
+      return next === prev ? prev : next;
+    });
+  }, [dims.w, dims.h]);
 
   // Parallax mouse spring
   const mx = useMotionValue(0);
@@ -747,6 +566,14 @@ export default function ConstellationMenu({ onClose }: Props) {
     });
   }, []);
 
+  /** Uniform widget scale. One handler for all five — the key picks the slot. */
+  const handleWidgetScale = useCallback((key: WidgetKey, value: number) => {
+    setLayout(prev => ({
+      ...prev,
+      widgetScales: { ...(prev.widgetScales ?? {}), [key]: clampWidgetScale(value) },
+    }));
+  }, []);
+
   const handleRayDrag = useCallback((ox: number, oy: number) => {
     const x = Math.max(-0.4, Math.min(0.4, ox));
     const y = Math.max(-0.4, Math.min(0.4, oy));
@@ -864,6 +691,22 @@ export default function ConstellationMenu({ onClose }: Props) {
 
   const connectionPairs = useMemo(() => getConnectionPairs(), []);
   const selectedNode = effectiveNodes.find(n => n.id === selectedId) ?? null;
+
+  /**
+   * The space a zoomed node claims, and the flag that turns it on.
+   *
+   * Widgets are `position: fixed` and live outside the camera layer, so they
+   * genuinely do not move when the map flies — but the node flies to the exact
+   * centre of the screen, and a widget parked in the middle of the map ends up
+   * sitting on top of it. Whichever widgets overlap this rectangle fade out for
+   * the duration and come back on deselect, so a widget can be dropped anywhere
+   * without having to leave the middle of the screen clear.
+   *
+   * Edit mode has no camera, so nothing yields there — you need to see every
+   * widget while you are arranging them.
+   */
+  const zoomed = Boolean(selectedId) && !editMode;
+  const focusRect = useMemo(() => nodeFocusRect(dims), [dims.w, dims.h]);
   const activeId     = editMode ? null : (hoveredId ?? selectedId);
 
   // One read at mount — the hologram and the assembly effect both branch on it.
@@ -1145,6 +988,42 @@ export default function ConstellationMenu({ onClose }: Props) {
               </>
             )}
 
+            {/* Collapsed editor — a slim tab in the corner. Folding the card
+                away is the only way to judge widget placement against the
+                whole screen; at 160px wide and full height it covers exactly
+                the corner you are usually arranging into. */}
+            {!editPanelOpen && (
+              <button
+                onClick={() => setEditPanelOpen(true)}
+                title="Show editor panel"
+                style={{
+                  position: "fixed",
+                  top: 20,
+                  left: 20,
+                  zIndex: 40,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  background: "hsl(222 18% 8% / 0.82)",
+                  border: "1px solid hsl(var(--accent-h) 35% 26%)",
+                  borderRadius: 8,
+                  padding: "6px 10px",
+                  backdropFilter: "blur(10px)",
+                  cursor: "pointer",
+                  fontFamily: "DM Mono, monospace",
+                  fontSize: 8,
+                  letterSpacing: "0.18em",
+                  textTransform: "uppercase",
+                  color: "hsl(var(--accent-h) 60% 58%)",
+                }}
+              >
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 3h8M2 6h8M2 9h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                </svg>
+                Editor
+              </button>
+            )}
+
             {/* Ray colour picker — fixed top-left card */}
             <div
               style={{
@@ -1163,8 +1042,41 @@ export default function ConstellationMenu({ onClose }: Props) {
                 // the last section is unreachable.
                 maxHeight: "calc(100vh - 40px)",
                 overflowY: "auto",
+                // Kept mounted while collapsed rather than unmounted: the card
+                // scrolls, and unmounting would throw away your scroll position
+                // every time you peeked at the screen behind it.
+                display: editPanelOpen ? undefined : "none",
               }}
             >
+              {/* Collapse control — pinned above the first section. */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <p style={{
+                  fontFamily: "DM Mono, monospace",
+                  fontSize: 8,
+                  color: "hsl(var(--accent-h) 55% 55%)",
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                  margin: 0,
+                }}>Editor</p>
+                <button
+                  onClick={() => setEditPanelOpen(false)}
+                  title="Hide panel — the constellation stays editable"
+                  style={{
+                    background: "none",
+                    border: "1px solid hsl(var(--accent-h) 18% 24%)",
+                    borderRadius: 3,
+                    padding: "1px 6px",
+                    cursor: "pointer",
+                    color: "hsl(var(--accent-h) 40% 48%)",
+                    fontFamily: "DM Mono, monospace",
+                    fontSize: 7,
+                    letterSpacing: "0.14em",
+                    textTransform: "uppercase",
+                    lineHeight: 1.6,
+                  }}
+                >Hide</button>
+              </div>
+
               {/* Ray source — floating or pinned. */}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                 <p style={{
@@ -1633,46 +1545,77 @@ export default function ConstellationMenu({ onClose }: Props) {
         );
       })()}
 
+      {/* ── Widgets ───────────────────────────────────────────────────────
+          These used to unmount the moment edit mode opened, which made the one
+          thing you most want to arrange invisible while arranging. They stay
+          mounted now and take `editing`, which turns on the resize grip and
+          scroll-to-scale without changing anything else about them. */}
+
       {/* Kronos agenda widget */}
-      {!editMode && (
-        <ConstellationWidget
-          pos={layout.widgetPos ?? null}
-          collapsed={layout.widgetCollapsed ?? false}
-          onPosChange={p => setLayout(prev => ({ ...prev, widgetPos: p }))}
-          onCollapsedChange={c => setLayout(prev => ({ ...prev, widgetCollapsed: c }))}
-        />
-      )}
+      <ConstellationWidget
+        pos={layout.widgetPos ?? null}
+        collapsed={layout.widgetCollapsed ?? false}
+        onPosChange={p => setLayout(prev => ({ ...prev, widgetPos: p }))}
+        onCollapsedChange={c => setLayout(prev => ({ ...prev, widgetCollapsed: c }))}
+        scale={widgetScale(layout, "kronos")}
+        editing={editMode}
+        onScaleChange={s => handleWidgetScale("kronos", s)}
+        zoomed={zoomed}
+        focus={focusRect}
+      />
 
       {/* Task Stabilizer — persistent focus queue + Kronos timer sync */}
-      {!editMode && (
-        <TaskStabilizerWidget
-          pos={layout.taskStabilizerWidgetPos ?? null}
-          collapsed={layout.taskStabilizerWidgetCollapsed ?? false}
-          onPosChange={p => setLayout(prev => ({ ...prev, taskStabilizerWidgetPos: p }))}
-          onCollapsedChange={c => setLayout(prev => ({ ...prev, taskStabilizerWidgetCollapsed: c }))}
-        />
-      )}
+      <TaskStabilizerWidget
+        pos={layout.taskStabilizerWidgetPos ?? null}
+        collapsed={layout.taskStabilizerWidgetCollapsed ?? false}
+        onPosChange={p => setLayout(prev => ({ ...prev, taskStabilizerWidgetPos: p }))}
+        onCollapsedChange={c => setLayout(prev => ({ ...prev, taskStabilizerWidgetCollapsed: c }))}
+        scale={widgetScale(layout, "taskStabilizer")}
+        editing={editMode}
+        onScaleChange={s => handleWidgetScale("taskStabilizer", s)}
+        zoomed={zoomed}
+        focus={focusRect}
+      />
 
       {/* Threats widget */}
-      {!editMode && (
-        <ThreatsWidget
-          pos={layout.threatsWidgetPos ?? null}
-          collapsed={layout.threatsWidgetCollapsed ?? false}
-          onPosChange={p => setLayout(prev => ({ ...prev, threatsWidgetPos: p }))}
-          onCollapsedChange={c => setLayout(prev => ({ ...prev, threatsWidgetCollapsed: c }))}
-        />
-      )}
+      <ThreatsWidget
+        pos={layout.threatsWidgetPos ?? null}
+        collapsed={layout.threatsWidgetCollapsed ?? false}
+        onPosChange={p => setLayout(prev => ({ ...prev, threatsWidgetPos: p }))}
+        onCollapsedChange={c => setLayout(prev => ({ ...prev, threatsWidgetCollapsed: c }))}
+        scale={widgetScale(layout, "threats")}
+        editing={editMode}
+        onScaleChange={s => handleWidgetScale("threats", s)}
+        zoomed={zoomed}
+        focus={focusRect}
+      />
 
       {/* Projects widget */}
-      {!editMode && (
-        <ProjectsWidget
-          pos={layout.projectsWidgetPos ?? null}
-          collapsed={layout.projectsWidgetCollapsed ?? false}
-          onPosChange={p => setLayout(prev => ({ ...prev, projectsWidgetPos: p }))}
-          onCollapsedChange={c => setLayout(prev => ({ ...prev, projectsWidgetCollapsed: c }))}
-          onClose={onClose}
-        />
-      )}
+      <ProjectsWidget
+        pos={layout.projectsWidgetPos ?? null}
+        collapsed={layout.projectsWidgetCollapsed ?? false}
+        onPosChange={p => setLayout(prev => ({ ...prev, projectsWidgetPos: p }))}
+        onCollapsedChange={c => setLayout(prev => ({ ...prev, projectsWidgetCollapsed: c }))}
+        onClose={onClose}
+        scale={widgetScale(layout, "projects")}
+        editing={editMode}
+        onScaleChange={s => handleWidgetScale("projects", s)}
+        zoomed={zoomed}
+        focus={focusRect}
+      />
+
+      {/* Flashcard Archive — the cards Quantum Recall kept, when they come due */}
+      <FlashcardWidget
+        pos={layout.flashcardWidgetPos ?? null}
+        collapsed={layout.flashcardWidgetCollapsed ?? false}
+        onPosChange={p => setLayout(prev => ({ ...prev, flashcardWidgetPos: p }))}
+        onCollapsedChange={c => setLayout(prev => ({ ...prev, flashcardWidgetCollapsed: c }))}
+        scale={widgetScale(layout, "flashcards")}
+        editing={editMode}
+        onScaleChange={s => handleWidgetScale("flashcards", s)}
+        zoomed={zoomed}
+        focus={focusRect}
+      />
 
       {/* Profile badge */}
       {activeProfile && !editMode && (
@@ -1698,7 +1641,7 @@ export default function ConstellationMenu({ onClose }: Props) {
       <div style={{ position: "absolute", bottom: 28, left: "50%", transform: "translateX(-50%)", zIndex: 30, pointerEvents: "none" }}>
         {editMode ? (
           <p style={{ fontFamily: "DM Mono, monospace", fontSize: 9, color: "hsl(var(--accent-h) 55% 42%)", letterSpacing: "0.18em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
-            DRAG NODES · SCROLL TO RESIZE · DRAG RAY SOURCE · ESC TO EXIT
+            DRAG NODES &amp; WIDGETS · SCROLL TO RESIZE · DRAG RAY SOURCE · ESC TO EXIT
           </p>
         ) : (
           <p style={{ fontFamily: "DM Mono, monospace", fontSize: 9, color: "hsl(214 20% 28%)", letterSpacing: "0.18em", textTransform: "uppercase", whiteSpace: "nowrap" }}>

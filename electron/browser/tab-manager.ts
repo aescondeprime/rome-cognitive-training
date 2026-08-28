@@ -7,6 +7,7 @@ import {
 } from "electron";
 import { BrowserStorage, isWebUrl } from "./browser-storage";
 import { GUEST_CURSOR_JS, guestCursorCss } from "./guest-cursor";
+import { guestOpacityJs, normalizeTextColor } from "./guest-opacity";
 import { DownloadManager } from "./download-manager";
 import { PermissionManager } from "./permission-manager";
 import { SessionManager } from "./session-manager";
@@ -91,6 +92,26 @@ export class TabManager {
    */
   private cursorAccent = { h: "43", s: "88%" };
   private viewport: BrowserViewport = { x: 0, y: 0, width: 0, height: 0, visible: false };
+  /**
+   * How solid the browser surface is, 0.25–1.
+   *
+   * A `WebContentsView` is a native view composited above the React tree, so
+   * no CSS in ROME can fade it — the same constraint that makes the guest draw
+   * its own cursor. Translucency is three things done together: the view's own
+   * backdrop is cleared here, the renderer paints ROME's sky behind the
+   * viewport rectangle, and the page itself is faded by `guest-opacity`, which
+   * has to relocate the page's background before `opacity` can touch it.
+   */
+  private opacity = 1;
+
+  /**
+   * Forced text colour for guest pages, or null for the page's own.
+   *
+   * Lives beside the opacity for the same reason: the main process is the only
+   * thing that can reach a native `WebContentsView`, so it owns both values and
+   * the renderer's controls are a view onto them.
+   */
+  private textColor: string | null = null;
 
   constructor(
     private readonly host: BrowserWindow,
@@ -208,6 +229,10 @@ export class TabManager {
     // double-injection itself.
     contents.on("dom-ready", () => {
       void this.injectGuestCursor(tab);
+      // Re-applied per navigation: the injected state belongs to the document,
+      // and a tab that silently went opaque again after following a link would
+      // read as the setting having been forgotten.
+      void this.applyOpacity(tab, true);
     });
     contents.on("page-title-updated", (_event, title) => {
       tab.state.title = title || "New Tab";
@@ -439,6 +464,75 @@ export class TabManager {
   openExternal(id: string): void {
     const url = this.requireTab(id).state.url;
     if (isWebUrl(url)) void shell.openExternal(url);
+  }
+
+  /** Current surface opacity, so the renderer can restore its slider on mount. */
+  getOpacity(): number {
+    return this.opacity;
+  }
+
+  /**
+   * 0–1.
+   *
+   * The floor used to be a quarter, because the old implementation faded the
+   * whole page and below that the text was gone. `guest-opacity` now puts the
+   * alpha on backgrounds only and leaves text and images at full strength, so
+   * zero is a legitimate setting: the page becomes its own words and pictures
+   * floating over ROME.
+   */
+  setOpacity(value: number): number {
+    const next = Math.min(1, Math.max(0, Number.isFinite(value) ? Number(value) : 1));
+    this.opacity = next;
+    for (const tab of this.tabs.values()) void this.applyOpacity(tab);
+    return this.opacity;
+  }
+
+  /** Current forced text colour, so the renderer can restore its swatch. */
+  getTextColor(): string | null {
+    return this.textColor;
+  }
+
+  /**
+   * A hex colour to force on all guest text, or null to hand the page back its
+   * own. Anything else is treated as null rather than passed through — this
+   * value is concatenated into an injected script.
+   */
+  setTextColor(value: string | null): string | null {
+    const next = normalizeTextColor(value);
+    this.textColor = next;
+    for (const tab of this.tabs.values()) void this.applyOpacity(tab);
+    return this.textColor;
+  }
+
+  /**
+   * @param refresh True when the page is new to us — a load or a navigation —
+   *                so the payload re-reads every surface. A slider move passes
+   *                false and is written from the cache the page already has.
+   */
+  private async applyOpacity(tab: ManagedTab, refresh = false): Promise<void> {
+    const contents = tab.view.webContents;
+    if (contents.isDestroyed()) return;
+
+    // Clearing the view's backdrop is what lets ROME show through the gap the
+    // faded page leaves. Restored to an opaque near-black at full opacity so a
+    // page that paints no background of its own (a bare PDF viewer, a blank
+    // document) still looks like a browser rather than a hole in the app.
+    try {
+      tab.view.setBackgroundColor(this.opacity >= 0.999 ? "#070a0f" : "#00000000");
+    } catch {
+      // A build without a settable view backdrop. The page-level fade below is
+      // still visible against whatever the view does paint.
+    }
+
+    // Only real pages, matching the cursor injection: error pages and
+    // about:blank are chrome, not content, and should not be tampered with.
+    if (!isWebUrl(contents.getURL())) return;
+
+    try {
+      await contents.executeJavaScript(guestOpacityJs(this.opacity, this.textColor, refresh), true);
+    } catch {
+      // A page that navigated away mid-call. The next dom-ready re-applies.
+    }
   }
 
   setViewport(viewport: BrowserViewport): void {

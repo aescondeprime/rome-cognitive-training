@@ -2,7 +2,7 @@
   "name": "rome-cognitive-training",
   "version": "0.5.0",
   "productName": "ROME",
-  "description": "ROME Mark II \u2014 Local-first cognitive training lab",
+  "description": "ROME Mark II — Local-first cognitive training lab",
   "license": "MIT",
   "type": "module",
   "main": "dist-electron/main.cjs",
@@ -17,11 +17,14 @@
     "test:akira": "node --import tsx --test electron/akira/__tests__/*.test.ts",
     "test:midas": "node --import tsx --test client/src/lib/__tests__/midas.test.ts",
     "test:academia": "node --import tsx --test client/src/lib/__tests__/academia.test.ts",
-    "test:recall": "node --import tsx --test client/src/lib/__tests__/recall.test.ts client/src/lib/__tests__/recallLlm.test.ts client/src/lib/__tests__/recallCompare.test.ts",
+    "test:recall": "node --import tsx --test client/src/lib/__tests__/recall.test.ts client/src/lib/__tests__/recallLlm.test.ts client/src/lib/__tests__/recallCompare.test.ts client/src/lib/__tests__/flashcards.test.ts",
     "test:garden": "node --import tsx --test client/src/lib/__tests__/garden.test.ts",
     "dist:win": "tsx script/build-electron.ts && electron-builder --win",
     "dist:mac": "tsx script/build-electron.ts && electron-builder --mac",
-    "dist:all": "tsx script/build-electron.ts && electron-builder --win --mac"
+    "dist:all": "tsx script/build-electron.ts && electron-builder --win --mac",
+    "test:capability": "node --import tsx --test client/src/lib/__tests__/capability.test.ts",
+    "test:kronos": "node --import tsx --test electron/kronos/__tests__/*.test.ts",
+    "test:browser": "node --import tsx --test electron/browser/__tests__/*.test.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

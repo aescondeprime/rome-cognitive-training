@@ -26,6 +26,10 @@ export function registerBrowserIpc(getController: () => BrowserController | null
   ipcMain.handle("rome:browser:open-external", (event, id: string) => withController(event, (c) => c.tabs.openExternal(String(id))));
   ipcMain.handle("rome:browser:set-viewport", (event, viewport: BrowserViewport) => withController(event, (c) => c.setViewport(viewport)));
   ipcMain.handle("rome:browser:set-fullscreen", (event, value: boolean) => withController(event, (c) => c.setFullscreen(Boolean(value))));
+  ipcMain.handle("rome:browser:get-opacity", (event) => withController(event, (c) => c.tabs.getOpacity()));
+  ipcMain.handle("rome:browser:set-opacity", (event, value: number) => withController(event, (c) => c.tabs.setOpacity(Number(value))));
+  ipcMain.handle("rome:browser:get-text-color", (event) => withController(event, (c) => c.tabs.getTextColor()));
+  ipcMain.handle("rome:browser:set-text-color", (event, value: string | null) => withController(event, (c) => c.tabs.setTextColor(value == null ? null : String(value))));
   ipcMain.handle("rome:browser:get-history", (event) => withController(event, (c) => c.storage.getHistory()));
   ipcMain.handle("rome:browser:clear-history", (event) => withController(event, (c) => c.storage.clearHistory()));
   ipcMain.handle("rome:browser:get-bookmarks", (event) => withController(event, (c) => c.storage.getBookmarks()));

@@ -32,6 +32,8 @@ export interface ConstellationLayout {
   projectsWidgetPos: { x: number; y: number } | null;
   projectsWidgetCollapsed: boolean;
   threatsWidgetPos: { x: number; y: number } | null;
+  flashcardWidgetPos: { x: number; y: number } | null;
+  flashcardWidgetCollapsed: boolean;
   threatsWidgetCollapsed: boolean;
   taskStabilizerWidgetPos: { x: number; y: number } | null;
   taskStabilizerWidgetCollapsed: boolean;
@@ -56,6 +58,94 @@ export interface ConstellationLayout {
    * `sound.ts` can use it directly without converting on every voice.
    */
   soundPitch: number;       // 0.5–2.2, default 1.122 (+2 semitones)
+  /**
+   * Per-widget uniform scale, keyed by `WidgetKey`. A single map rather than
+   * five more sibling fields — the widget list has grown twice already and the
+   * flat fields below are the reason `loadLayout` is thirty lines of backfill.
+   */
+  widgetScales: Partial<Record<WidgetKey, number>>;
+  /**
+   * Viewport the widget positions were last written against. Opening ROME on a
+   * smaller display remaps them proportionally instead of leaving half of them
+   * past the edge — without this there is no way to tell "dragged to x=1700"
+   * from "saved on a 2560-wide screen".
+   */
+  widgetViewport: { w: number; h: number } | null;
+}
+
+// ── Widgets ────────────────────────────────────────────────────────────────
+
+export const WIDGET_KEYS = ["kronos", "taskStabilizer", "threats", "projects", "flashcards"] as const;
+export type WidgetKey = (typeof WIDGET_KEYS)[number];
+
+/** Which `ConstellationLayout` field holds each widget's position. */
+export const WIDGET_POS_FIELD: Record<WidgetKey, keyof ConstellationLayout> = {
+  kronos:         "widgetPos",
+  taskStabilizer: "taskStabilizerWidgetPos",
+  threats:        "threatsWidgetPos",
+  projects:       "projectsWidgetPos",
+  flashcards:     "flashcardWidgetPos",
+};
+
+export const WIDGET_LABELS: Record<WidgetKey, string> = {
+  kronos:         "Agenda",
+  taskStabilizer: "Stabilizer",
+  threats:        "Threats",
+  projects:       "Projects",
+  flashcards:     "Flashcards",
+};
+
+export const DEFAULT_WIDGET_SCALE = 1;
+export const MIN_WIDGET_SCALE = 0.6;
+export const MAX_WIDGET_SCALE = 1.6;
+
+export function clampWidgetScale(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_WIDGET_SCALE;
+  return Math.min(MAX_WIDGET_SCALE, Math.max(MIN_WIDGET_SCALE, value));
+}
+
+export function widgetScale(layout: ConstellationLayout, key: WidgetKey): number {
+  return clampWidgetScale(layout.widgetScales?.[key] ?? DEFAULT_WIDGET_SCALE);
+}
+
+/**
+ * Remap every stored widget position from the viewport it was saved against to
+ * the one on screen now. Returns the same object when nothing moved, so callers
+ * can use identity to decide whether to write state back.
+ *
+ * Positions are kept *proportional*, not merely clamped: a widget parked in the
+ * lower right of a 27" display belongs in the lower right of a laptop screen,
+ * not stacked against the edge with the other three. The final clamp against
+ * the real measured box still happens in each widget — this pass only knows the
+ * nominal width and cannot know how tall a widget rendered.
+ */
+export function refitWidgetPositions(
+  layout: ConstellationLayout,
+  viewport: { w: number; h: number },
+): ConstellationLayout {
+  const from = layout.widgetViewport;
+  const sameViewport = from && from.w === viewport.w && from.h === viewport.h;
+  if (sameViewport) return layout;
+
+  // No recorded origin: adopt the current viewport without moving anything.
+  // Guessing a scale factor here would shuffle a layout that is already correct.
+  if (!from || from.w <= 0 || from.h <= 0) {
+    return { ...layout, widgetViewport: { w: viewport.w, h: viewport.h } };
+  }
+
+  const sx = viewport.w / from.w;
+  const sy = viewport.h / from.h;
+  const next: ConstellationLayout = { ...layout, widgetViewport: { w: viewport.w, h: viewport.h } };
+
+  for (const key of WIDGET_KEYS) {
+    const field = WIDGET_POS_FIELD[key];
+    const pos = layout[field] as { x: number; y: number } | null | undefined;
+    if (!pos) continue;   // still on its default — the widget computes that itself
+    const x = Math.max(0, Math.min(viewport.w - 40, Math.round(pos.x * sx)));
+    const y = Math.max(0, Math.min(viewport.h - 40, Math.round(pos.y * sy)));
+    (next as any)[field] = { x, y };
+  }
+  return next;
 }
 
 export const DEFAULT_RAY_COLOR    = "43 88% 60%";
@@ -90,6 +180,8 @@ export function defaultLayout(): ConstellationLayout {
     projectsWidgetPos: null,
     projectsWidgetCollapsed: false,
     threatsWidgetPos: null,
+    flashcardWidgetPos: null,
+    flashcardWidgetCollapsed: false,
     threatsWidgetCollapsed: false,
     taskStabilizerWidgetPos: null,
     taskStabilizerWidgetCollapsed: false,
@@ -99,6 +191,8 @@ export function defaultLayout(): ConstellationLayout {
     soundEnabled: DEFAULT_SOUND_ENABLED,
     soundVolume: DEFAULT_SOUND_VOLUME,
     soundPitch: DEFAULT_SOUND_PITCH,
+    widgetScales: {},
+    widgetViewport: null,
   };
 }
 
@@ -133,6 +227,8 @@ export function loadLayout(): ConstellationLayout {
     if (!("projectsWidgetPos"      in parsed)) (parsed as any).projectsWidgetPos      = null;
     if (!("projectsWidgetCollapsed" in parsed)) (parsed as any).projectsWidgetCollapsed = false;
     if (!("threatsWidgetPos"        in parsed)) (parsed as any).threatsWidgetPos        = null;
+    if (!("flashcardWidgetPos"      in parsed)) (parsed as any).flashcardWidgetPos      = null;
+    if (!("flashcardWidgetCollapsed" in parsed)) (parsed as any).flashcardWidgetCollapsed = false;
     if (!("threatsWidgetCollapsed"  in parsed)) (parsed as any).threatsWidgetCollapsed  = false;
     if (!("taskStabilizerWidgetPos" in parsed)) (parsed as any).taskStabilizerWidgetPos = null;
     if (!("taskStabilizerWidgetCollapsed" in parsed)) (parsed as any).taskStabilizerWidgetCollapsed = false;
@@ -144,6 +240,11 @@ export function loadLayout(): ConstellationLayout {
     if (!("soundEnabled" in parsed)) (parsed as any).soundEnabled = DEFAULT_SOUND_ENABLED;
     if (!("soundVolume"  in parsed)) (parsed as any).soundVolume  = DEFAULT_SOUND_VOLUME;
     if (!("soundPitch"   in parsed)) (parsed as any).soundPitch   = DEFAULT_SOUND_PITCH;
+    // Backfill widget sizing (added with the editor's resize handles)
+    if (!("widgetScales"   in parsed) || typeof parsed.widgetScales !== "object" || parsed.widgetScales === null) {
+      (parsed as any).widgetScales = {};
+    }
+    if (!("widgetViewport" in parsed)) (parsed as any).widgetViewport = null;
     return parsed;
   } catch {
     return defaultLayout();

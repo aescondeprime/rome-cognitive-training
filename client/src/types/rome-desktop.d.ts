@@ -109,6 +109,15 @@ interface RomeBrowserBridge {
   openExternal: (id: string) => Promise<void>;
   setViewport: (viewport: { x: number; y: number; width: number; height: number; visible: boolean }) => Promise<void>;
   setFullscreen: (value: boolean) => Promise<boolean>;
+  /**
+   * Background opacity of guest pages, 0–1. Text and images are unaffected —
+   * see `electron/browser/guest-opacity.ts` for why that needs saying.
+   */
+  getOpacity: () => Promise<number>;
+  setOpacity: (value: number) => Promise<number>;
+  /** Hex colour forced on all guest text, or null for the page's own. */
+  getTextColor: () => Promise<string | null>;
+  setTextColor: (value: string | null) => Promise<string | null>;
   getHistory: () => Promise<RomeBrowserHistoryEntry[]>;
   clearHistory: () => Promise<void>;
   getBookmarks: () => Promise<RomeBrowserBookmark[]>;

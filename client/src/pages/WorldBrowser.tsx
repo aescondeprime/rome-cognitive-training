@@ -30,9 +30,56 @@ import {
   LockKeyhole, Square,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import AmbientBackdrop from "@/components/AmbientBackdrop";
 
 // ── Accent colour (matches ROME theme) ──────────────────────────────────────
 const ACC = "hsl(43 88% 60%)";
+
+// ── Surface opacity ─────────────────────────────────────────────────────────
+// How solid the browser is over the rest of ROME. The main process owns the
+// live value (it is the only thing that can touch a native WebContentsView);
+// this key is only so the setting survives a restart, since the view is rebuilt
+// from scratch every launch.
+const OPACITY_KEY = "rome_browser_opacity";
+const TEXT_COLOR_KEY = "rome_browser_text_color";
+
+// Zero, not a quarter.
+//
+// The floor was 25% while the implementation faded the whole page, because
+// below that the text was unreadable. `guest-opacity` now puts the alpha on
+// backgrounds only — text, images and video stay at full strength at every
+// setting — so 0 is a real position: the page becomes its own words and
+// pictures floating over the constellation.
+const MIN_OPACITY = 0;
+
+function readStoredOpacity(): number {
+  try {
+    const raw = Number(localStorage.getItem(OPACITY_KEY));
+    if (!Number.isFinite(raw)) return 1;
+    return Math.min(1, Math.max(MIN_OPACITY, raw));
+  } catch {
+    return 1;
+  }
+}
+
+// Deliberately identical to `HEX_COLOR` in `electron/browser/guest-opacity.ts`,
+// which is the copy that matters — the value is interpolated into a script
+// injected into guest pages, and main validates it again on arrival. The
+// renderer checks too so a bad stored value never reaches the slider's UI.
+const HEX_COLOR = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+
+/** A forced text colour for guest pages, or null for the page's own. */
+function readStoredTextColor(): string | null {
+  try {
+    const raw = localStorage.getItem(TEXT_COLOR_KEY);
+    return raw && HEX_COLOR.test(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Offered beside the swatch: enough to be useful, few enough to fit. */
+const TEXT_PRESETS = ["#e8eef5", "#f2d492", "#8fd4e8", "#c7f0d0", "#f0b8c8", "#1a1d23"];
 
 // ── Decorative corner marks ──────────────────────────────────────────────────
 function Corners() {
@@ -388,6 +435,8 @@ function DesktopWorldBrowser() {
   const [fullscreen, setFullscreen] = useState(false);
   const [ready, setReady] = useState(false);
   const [bridgeError, setBridgeError] = useState("");
+  const [opacity, setOpacity] = useState(readStoredOpacity);
+  const [textColor, setTextColor] = useState<string | null>(readStoredTextColor);
   const [constellationOpen, setConstellationOpen] = useState(
     () => document.documentElement.dataset.romeConstellationOpen === "true",
   );
@@ -409,6 +458,33 @@ function DesktopWorldBrowser() {
       height: rect.height,
       visible: ready && !overlayVisible,
     }).catch(() => undefined);
+  };
+
+  // Restore the stored surface settings onto the native view. Runs on `ready`
+  // rather than on mount because before initialize() resolves there is no view
+  // to apply them to, and the calls would be silently dropped.
+  useEffect(() => {
+    if (!ready) return;
+    void bridge.setOpacity(opacity).catch(() => undefined);
+    void bridge.setTextColor?.(textColor).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
+
+  const changeOpacity = (value: number) => {
+    const next = Math.min(1, Math.max(MIN_OPACITY, value));
+    setOpacity(next);
+    try { localStorage.setItem(OPACITY_KEY, String(next)); } catch { /* private mode */ }
+    void bridge.setOpacity(next).catch(() => undefined);
+  };
+
+  const changeTextColor = (value: string | null) => {
+    const next = value && HEX_COLOR.test(value) ? value : null;
+    setTextColor(next);
+    try {
+      if (next) localStorage.setItem(TEXT_COLOR_KEY, next);
+      else localStorage.removeItem(TEXT_COLOR_KEY);
+    } catch { /* private mode */ }
+    void bridge.setTextColor?.(next).catch(() => undefined);
   };
 
   useEffect(() => {
@@ -574,6 +650,12 @@ function DesktopWorldBrowser() {
   const cyan = "hsl(191 55% 55%)";
   const dim = "hsl(220 8% 40%)";
 
+  // Below full opacity the browser is a window onto ROME rather than a panel
+  // sitting on it, and three surfaces have to get out of the way: this page's
+  // viewport fill, the native view's backdrop (`TabManager`) and the guest
+  // page's own background (`guest-opacity`).
+  const translucent = opacity < 0.999;
+
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", background: bg, color: "hsl(210 10% 74%)", fontFamily: "DM Sans, sans-serif" }}>
       <Corners />
@@ -679,7 +761,11 @@ function DesktopWorldBrowser() {
 
       {/* This rectangle is deliberately empty while active: Electron places the
           native WebContentsView at these exact content coordinates. */}
-      <div ref={viewportRef} style={{ flex: 1, minHeight: 0, position: "relative", background: "hsl(222 15% 4%)", overflow: "hidden" }}>
+      <div ref={viewportRef} style={{ flex: 1, minHeight: 0, position: "relative", background: translucent ? "transparent" : "hsl(222 15% 4%)", overflow: "hidden" }}>
+        {/* ROME's sky, in exactly the rectangle the native view covers, and
+            only while there is a gap to see it through. First child, so every
+            panel and dialog in here paints over it by tree order alone. */}
+        {translucent && <AmbientBackdrop strength={Math.min(1, 1.15 - opacity)} />}
         {!ready && !bridgeError && <BrowserCenterState icon={<Loader2 size={20} style={{ animation: "romeBrowserSpin 1s linear infinite" }} />} title="Initializing local Chromium" detail="Preparing an isolated browser surface…" />}
         {(active?.error || active?.crashed) && (
           <BrowserCenterState
@@ -712,6 +798,61 @@ function DesktopWorldBrowser() {
 
       <div style={{ height: 20, flexShrink: 0, display: "flex", alignItems: "center", padding: "0 11px", borderTop: `1px solid ${border}`, background: surface, font: "8px DM Mono, monospace", letterSpacing: ".11em", textTransform: "uppercase", color: "hsl(220 8% 28%)" }}>
         <span style={{ color: active?.incognito ? cyan : "hsl(142 40% 40%)" }}>●</span>&nbsp;&nbsp;Local Chromium · {active?.incognito ? "Ephemeral session" : "Persistent profile"}
+
+        {/* Surface opacity. A hairline track rather than a labelled control:
+            it lives in a 20px status strip and is reached perhaps twice a
+            week. The percentage only appears once you are touching it. */}
+        <span className="rome-browser-opacity" style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 14 }}>
+          <span style={{ color: "hsl(220 8% 24%)" }}>Opacity</span>
+          <input
+            type="range"
+            min={MIN_OPACITY * 100}
+            max={100}
+            step={1}
+            value={Math.round(opacity * 100)}
+            onChange={event => changeOpacity(Number(event.target.value) / 100)}
+            onDoubleClick={() => changeOpacity(1)}
+            title={`Browser opacity — ${Math.round(opacity * 100)}% · double-click to reset`}
+            aria-label="Browser opacity"
+          />
+          <span className="rome-browser-opacity-value" style={{ width: 22, color: ACC }}>{Math.round(opacity * 100)}</span>
+        </span>
+
+        {/* Text colour. The page keeps its own until you pick one — an override
+            is occasionally necessary once the surfaces behind the text have
+            gone translucent, and never wanted by default. */}
+        <span className="rome-browser-textcolor" style={{ display: "flex", alignItems: "center", gap: 5, marginLeft: 14 }}>
+          <span style={{ color: "hsl(220 8% 24%)" }}>Text</span>
+          <span className="rome-browser-textcolor-presets">
+            {TEXT_PRESETS.map(preset => (
+              <button
+                key={preset}
+                onClick={() => changeTextColor(preset)}
+                title={`Force page text to ${preset}`}
+                aria-label={`Force page text to ${preset}`}
+                data-on={textColor?.toLowerCase() === preset.toLowerCase() ? "true" : undefined}
+                style={{ background: preset }}
+              />
+            ))}
+          </span>
+          <input
+            type="color"
+            value={textColor ?? "#e8eef5"}
+            onChange={event => changeTextColor(event.target.value)}
+            title="Force a custom colour on all page text"
+            aria-label="Custom page text colour"
+          />
+          <button
+            onClick={() => changeTextColor(null)}
+            disabled={!textColor}
+            title={textColor ? "Give pages their own colours back" : "Pages are using their own colours"}
+            aria-label="Clear the text colour override"
+            className="rome-browser-textcolor-clear"
+          >
+            ✕
+          </button>
+        </span>
+
         <span style={{ flex: 1 }} />
         <span>{active?.loading ? "Traversing" : "Ready"}</span>
       </div>
@@ -732,6 +873,62 @@ function DesktopWorldBrowser() {
         .rome-browser-tab, .rome-browser-new-tab { transition: border-color 140ms ease, background 140ms ease, color 140ms ease, box-shadow 140ms ease; }
         .rome-browser-tab:hover:not([data-active="true"]) { border-color: hsl(43 24% 22%) !important; color: hsl(210 8% 58%) !important; background: hsl(222 14% 8%) !important; }
         .rome-browser-new-tab:hover { border-color: hsl(43 48% 30%) !important; background: hsl(43 35% 10%) !important; color: ${ACC} !important; }
+        /* Opacity slider — a lit hairline with a small square handle. Native
+           range styling would put a 16px pill in a 20px status bar. */
+        .rome-browser-opacity input[type="range"] {
+          -webkit-appearance: none; appearance: none;
+          width: 64px; height: 10px; background: none; cursor: pointer; outline: none;
+        }
+        .rome-browser-opacity input[type="range"]::-webkit-slider-runnable-track {
+          height: 1px; background: hsl(43 30% 26%); box-shadow: 0 0 5px hsl(43 60% 45% / .35);
+        }
+        .rome-browser-opacity input[type="range"]::-webkit-slider-thumb {
+          -webkit-appearance: none; appearance: none;
+          width: 5px; height: 9px; margin-top: -4px; border-radius: 0;
+          background: ${ACC}; box-shadow: 0 0 6px hsl(43 85% 58% / .7);
+        }
+        .rome-browser-opacity input[type="range"]:hover::-webkit-slider-thumb { box-shadow: 0 0 9px hsl(43 90% 62% / .9); }
+        .rome-browser-opacity input[type="range"]::-moz-range-track { height: 1px; background: hsl(43 30% 26%); }
+        .rome-browser-opacity input[type="range"]::-moz-range-thumb {
+          width: 5px; height: 9px; border: 0; border-radius: 0; background: ${ACC};
+        }
+        /* The readout is noise at rest and useful while dragging. */
+        /* Text-colour control. Same manners as the slider: a hairline at rest,
+           the presets only unfold when you are actually pointing at it. */
+        .rome-browser-textcolor input[type="color"] {
+          width: 11px; height: 11px; padding: 0; border: 0; background: none;
+          cursor: pointer; appearance: none; -webkit-appearance: none;
+        }
+        .rome-browser-textcolor input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+        .rome-browser-textcolor input[type="color"]::-webkit-color-swatch {
+          border: 1px solid hsl(43 30% 30%); border-radius: 50%;
+        }
+        .rome-browser-textcolor-presets {
+          display: flex; align-items: center; gap: 3; overflow: hidden;
+          max-width: 0; opacity: 0; transition: max-width 160ms ease, opacity 140ms ease;
+        }
+        .rome-browser-textcolor:hover .rome-browser-textcolor-presets,
+        .rome-browser-textcolor:focus-within .rome-browser-textcolor-presets {
+          max-width: 90px; opacity: 1; margin-right: 3px;
+        }
+        .rome-browser-textcolor-presets button {
+          width: 9px; height: 9px; margin-right: 3px; padding: 0; border-radius: 50%;
+          border: 1px solid hsl(220 12% 22%); cursor: pointer;
+        }
+        .rome-browser-textcolor-presets button:hover { border-color: hsl(43 60% 50%); }
+        .rome-browser-textcolor-presets button[data-on="true"] {
+          border-color: ${ACC}; box-shadow: 0 0 6px hsl(43 90% 60% / .7);
+        }
+        .rome-browser-textcolor-clear {
+          border: 0; background: none; padding: 0 1px; cursor: pointer;
+          color: hsl(220 8% 30%); font: 8px "DM Mono", monospace; line-height: 1;
+        }
+        .rome-browser-textcolor-clear:disabled { opacity: .25; cursor: default; }
+        .rome-browser-textcolor-clear:not(:disabled):hover { color: hsl(0 55% 58%); }
+
+        .rome-browser-opacity-value { opacity: 0; transition: opacity 120ms ease; }
+        .rome-browser-opacity:hover .rome-browser-opacity-value,
+        .rome-browser-opacity input[type="range"]:focus ~ .rome-browser-opacity-value { opacity: .85; }
         @keyframes romeBrowserSpin { to { transform: rotate(360deg); } }
         @keyframes romeBrowserProgress { from { transform: translateX(-110%); } to { transform: translateX(330%); } }
         button:disabled { cursor: default !important; }

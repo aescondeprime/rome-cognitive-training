@@ -61,6 +61,10 @@ contextBridge.exposeInMainWorld("romeDesktop", {
     setViewport: (viewport: { x: number; y: number; width: number; height: number; visible: boolean }) =>
       ipcRenderer.invoke("rome:browser:set-viewport", viewport),
     setFullscreen: (value: boolean) => ipcRenderer.invoke("rome:browser:set-fullscreen", value),
+    getOpacity: () => ipcRenderer.invoke("rome:browser:get-opacity"),
+    setOpacity: (value: number) => ipcRenderer.invoke("rome:browser:set-opacity", value),
+    getTextColor: () => ipcRenderer.invoke("rome:browser:get-text-color"),
+    setTextColor: (value: string | null) => ipcRenderer.invoke("rome:browser:set-text-color", value),
     getHistory: () => ipcRenderer.invoke("rome:browser:get-history"),
     clearHistory: () => ipcRenderer.invoke("rome:browser:clear-history"),
     getBookmarks: () => ipcRenderer.invoke("rome:browser:get-bookmarks"),

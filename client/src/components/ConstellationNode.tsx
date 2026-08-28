@@ -238,6 +238,24 @@ function SparklesShape({ color, s }: { color: string; s: number }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Shape lookup — one place, so the halo layer below can render the same icon
+// a second time without the switch being copy-pasted.
+// ─────────────────────────────────────────────────────────────────────────────
+function NodeShape({ id, color, s }: { id: string; color: string; s: number }) {
+  switch (id) {
+    case "philosophy":    return <PillarShape   color={color} s={s} />;
+    case "investigative": return <EyeShape      color={color} s={s} />;
+    case "athena":        return <SwordsShape   color={color} s={s} />;
+    case "strategic":     return <CrownShape    color={color} s={s} />;
+    case "creative":      return <SparklesShape color={color} s={s} />;
+    case "world":         return <GlobeShape    color={color} s={s} />;
+    case "financial":     return <FundingShape  color={color} s={s} />;
+    case "academia":      return <AcademiaShape color={color} s={s} />;
+    default:              return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 export default memo(function ConstellationNode({
@@ -291,6 +309,13 @@ export default memo(function ConstellationNode({
 
   const s = iconSize * 0.72; // icon inner size
 
+  // Halo (selected/zoomed only). Brighter than the resting rim and pinned to
+  // the accent rather than the ray-warmed hue — at 2.2× zoom this icon is the
+  // subject of the screen and should read as the accent colour, not as
+  // whatever the ray happens to be doing behind it.
+  const haloColor = "hsl(var(--accent-h) var(--accent-s) 66%)";
+  const haloGlow  = 10 + rayIntensity * 8;
+
   return (
     <g
       style={{
@@ -308,6 +333,25 @@ export default memo(function ConstellationNode({
       {/* Invisible hit area */}
       <circle r={hitRadius} fill="transparent" />
 
+      {/* Halo — only while this node is the one the camera flew to. A second,
+          heavily blurred copy of the same icon that breathes underneath the
+          real one. Doing it as its own layer means the icon you are reading
+          stays fixed and legible while the light around it moves. */}
+      {isSelected && (
+        <g
+          className="rome-node-halo"
+          style={{
+            filter:
+              `drop-shadow(0 0 ${haloGlow}px ${haloColor}) ` +
+              `drop-shadow(0 0 ${haloGlow * 2.4}px ${haloColor})`,
+          }}
+          pointerEvents="none"
+          aria-hidden="true"
+        >
+          <NodeShape id={node.id} color={haloColor} s={s} />
+        </g>
+      )}
+
       {/* Icon — glass-filled stroke shape, no surrounding circle */}
       <g
         style={{
@@ -319,14 +363,7 @@ export default memo(function ConstellationNode({
         }}
         pointerEvents="none"
       >
-        {node.id === "philosophy"    && <PillarShape   color={iconColor} s={s} />}
-        {node.id === "investigative" && <EyeShape      color={iconColor} s={s} />}
-        {node.id === "athena"        && <SwordsShape   color={iconColor} s={s} />}
-        {node.id === "strategic"     && <CrownShape    color={iconColor} s={s} />}
-        {node.id === "creative"      && <SparklesShape color={iconColor} s={s} />}
-        {node.id === "world"          && <GlobeShape    color={iconColor} s={s} />}
-        {node.id === "financial"      && <FundingShape  color={iconColor} s={s} />}
-        {node.id === "academia"       && <AcademiaShape color={iconColor} s={s} />}
+        <NodeShape id={node.id} color={iconColor} s={s} />
       </g>
 
       {/* Label — fades in on hover/select */}

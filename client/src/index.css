@@ -1126,3 +1126,156 @@ html[data-rome-cursor="on"] input:not([type="checkbox"]):not([type="radio"]):not
   .rome-cursor-dot > i,
   .rome-cursor-ring > i { transition-duration: .08s; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Widget chrome — printed-circuit frames
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* The five floating widgets used to be dark glass panels. They are now frames:
+   no fill of their own, a hairline perimeter, four corner brackets and a row of
+   pins down each side — the silhouette of a surface-mount chip.
+
+   Legibility is bought back two ways rather than with a background: a small
+   backdrop blur softens whatever particle is passing behind the text, and every
+   glyph inside carries an accent-matched halo. Both are cheap; a full-strength
+   blur on five always-on layers is not. */
+.rome-widget-shell {
+  position: relative;
+  background: transparent;
+  -webkit-backdrop-filter: blur(3px) saturate(112%);
+  backdrop-filter: blur(3px) saturate(112%);
+  border: 1px solid hsl(var(--accent-h) var(--accent-s) 55% / .20);
+  border-radius: 0;
+  box-shadow:
+    0 0 14px hsl(var(--accent-h) var(--accent-s) 50% / .13),
+    inset 0 0 22px hsl(var(--accent-h) var(--accent-s) 45% / .045);
+  text-shadow: 0 0 7px hsl(var(--accent-h) var(--accent-s) 46% / .40);
+  overflow: visible;
+  /* Matched to the camera's 0.55s fly-to, so the glass arrives with the zoom
+     rather than snapping in ahead of it. */
+  transition:
+    background 420ms ease,
+    -webkit-backdrop-filter 420ms ease,
+    backdrop-filter 420ms ease,
+    border-color 420ms ease,
+    box-shadow 420ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rome-widget-shell { transition-duration: .01ms; }
+}
+
+/* Four corner brackets. Drawn as background slices on one pseudo-element so no
+   widget needs extra markup — five components, one rule. */
+.rome-widget-shell::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  --trace: hsl(var(--accent-h) var(--accent-s) 64% / .92);
+  --len: 13px;
+  background:
+    linear-gradient(var(--trace), var(--trace))   0%   0%   / var(--len) 1px no-repeat,
+    linear-gradient(var(--trace), var(--trace))   0%   0%   / 1px var(--len) no-repeat,
+    linear-gradient(var(--trace), var(--trace)) 100%   0%   / var(--len) 1px no-repeat,
+    linear-gradient(var(--trace), var(--trace)) 100%   0%   / 1px var(--len) no-repeat,
+    linear-gradient(var(--trace), var(--trace))   0% 100%   / var(--len) 1px no-repeat,
+    linear-gradient(var(--trace), var(--trace))   0% 100%   / 1px var(--len) no-repeat,
+    linear-gradient(var(--trace), var(--trace)) 100% 100%   / var(--len) 1px no-repeat,
+    linear-gradient(var(--trace), var(--trace)) 100% 100%   / 1px var(--len) no-repeat;
+  filter: drop-shadow(0 0 5px hsl(var(--accent-h) var(--accent-s) 55% / .55));
+}
+
+/* Pins down both flanks. Inset vertically so they read as a component's legs
+   rather than a second border. */
+.rome-widget-shell::after {
+  content: "";
+  position: absolute;
+  top: 24%;
+  bottom: 24%;
+  left: -4px;
+  right: -4px;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(to bottom, hsl(var(--accent-h) var(--accent-s) 60% / .55) 0 1px, transparent 1px 9px) left  center / 4px 100% no-repeat,
+    repeating-linear-gradient(to bottom, hsl(var(--accent-h) var(--accent-s) 60% / .55) 0 1px, transparent 1px 9px) right center / 4px 100% no-repeat;
+  filter: drop-shadow(0 0 3px hsl(var(--accent-h) var(--accent-s) 55% / .45));
+}
+
+/* Header / body divider — a trace that fades out at both ends instead of a rule
+   that runs wall to wall. */
+.rome-widget-rule {
+  border-bottom: 0 !important;
+  position: relative;
+}
+.rome-widget-rule::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent,
+    hsl(var(--accent-h) var(--accent-s) 58% / .5) 18%,
+    hsl(var(--accent-h) var(--accent-s) 58% / .5) 82%,
+    transparent);
+  pointer-events: none;
+}
+
+/* Zoomed: the camera is flying and the starfield behind these frames is
+   parallaxing hard. With no fill of their own the widgets read as part of the
+   moving scene, so while a node is selected the blur goes up and a faint tint
+   comes in — enough that whatever is passing behind becomes texture rather than
+   recognisable content, and the widget reads as glass sitting in front of the
+   map instead of a hole in it. Widgets that actually overlap the zoomed node
+   fade out entirely; this is for the ones that do not. */
+.rome-widget-shell.is-zoomed {
+  -webkit-backdrop-filter: blur(10px) saturate(122%);
+  backdrop-filter: blur(10px) saturate(122%);
+  background: hsl(222 22% 6% / .34);
+  border-color: hsl(var(--accent-h) var(--accent-s) 58% / .32);
+  box-shadow:
+    0 0 18px hsl(var(--accent-h) var(--accent-s) 50% / .16),
+    inset 0 0 22px hsl(var(--accent-h) var(--accent-s) 45% / .05);
+}
+
+/* Editor mode: the frame lifts slightly so it is obvious which boxes can be
+   grabbed and resized. */
+.rome-widget-shell.is-editing {
+  border-color: hsl(var(--accent-h) var(--accent-s) 60% / .42);
+  box-shadow:
+    0 0 20px hsl(var(--accent-h) var(--accent-s) 55% / .22),
+    inset 0 0 22px hsl(var(--accent-h) var(--accent-s) 45% / .06);
+}
+
+.rome-widget-grip { opacity: .75; transition: opacity .15s ease, transform .15s ease; }
+.rome-widget-grip:hover { opacity: 1; transform: scale(1.15); }
+
+@media (prefers-reduced-motion: reduce) {
+  .rome-widget-grip { transition: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Selected node — breathing radiance
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* Rendered as a second copy of the icon underneath the real one. Animating the
+   halo's own opacity and scale keeps the readable icon on top perfectly steady;
+   animating the icon's `filter` directly would make the strokes themselves
+   pulse and the label swim. */
+.rome-node-halo {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: romeNodeBreathe 3.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes romeNodeBreathe {
+  0%, 100% { opacity: .30; transform: scale(1);    }
+  50%      { opacity: .92; transform: scale(1.055); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rome-node-halo { animation: none; opacity: .6; }
+}

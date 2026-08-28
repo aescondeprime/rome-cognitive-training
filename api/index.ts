@@ -375,6 +375,19 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         await sb.from("recall_items").delete().eq("id", parseInt(m[1]));
         return json(res, 200, { ok: true });
       }
+      // Content edits only. Reviewing advances the schedule and lives at
+      // /review; a rename must never be able to reach those fields.
+      if (m && method === "PATCH") {
+        const patch: Record<string, unknown> = {};
+        if (typeof body?.front === "string" && body.front.trim()) patch.front = body.front.trim();
+        if (typeof body?.back === "string" && body.back.trim()) patch.back = body.back.trim();
+        if (typeof body?.category === "string") patch.category = body.category.trim() || "general";
+        if (typeof body?.tags === "string") patch.tags = body.tags;
+        if (!Object.keys(patch).length) return json(res, 400, { error: "Nothing to change" });
+        const { data, error } = await sb.from("recall_items").update(patch).eq("id", parseInt(m[1])).select().single();
+        if (error) return json(res, 500, { error: error.message });
+        return json(res, 200, data);
+      }
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -984,19 +997,30 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       const calIds = (cals ?? []).map((c: { id: number }) => c.id);
       const items: object[] = [];
       if (calIds.length > 0) {
+        // A template (`saved`) is a library entry, not something on the
+        // calendar. A routine additionally has to fall inside its date
+        // window; an empty bound means unbounded, which is how rows written
+        // before the window existed keep behaving.
+        const placed = (row: any) => !row.saved;
+        const inWindow = (row: any) =>
+          (!row.start_date || dateStr >= row.start_date) && (!row.end_date || dateStr <= row.end_date);
+
         const { data: routines } = await sb.from("kronos_routines").select("*").in("calendar_id", calIds).eq("user_id", user.id);
         for (const r of routines ?? []) {
+          if (!placed(r) || !inWindow(r)) continue;
           const fits = r.recurrence === "daily" || (r.recurrence === "weekly" && Array.isArray(r.days_of_week) && r.days_of_week.includes(weekday));
           if (fits) items.push({ type: "routine", id: r.id, title: r.title, color: r.color, start_time: r.start_time, duration_minutes: r.duration_minutes });
         }
         const { data: assignments } = await sb.from("kronos_assignments").select("*").in("calendar_id", calIds).eq("user_id", user.id).eq("due_date", dateStr);
-        for (const a of assignments ?? []) items.push({ type: "assignment", id: a.id, title: a.title, color: a.color, start_time: a.start_time, duration_minutes: a.duration_minutes });
+        for (const a of assignments ?? []) if (placed(a)) items.push({ type: "assignment", id: a.id, title: a.title, color: a.color, start_time: a.start_time, duration_minutes: a.duration_minutes });
         const { data: events } = await sb.from("kronos_events").select("*").in("calendar_id", calIds).eq("user_id", user.id).eq("event_date", dateStr);
-        for (const e of events ?? []) items.push({ type: "event", id: e.id, title: e.title, color: e.color, start_time: e.start_time, duration_minutes: e.duration_minutes });
+        for (const e of events ?? []) if (placed(e)) items.push({ type: "event", id: e.id, title: e.title, color: e.color, start_time: e.start_time, duration_minutes: e.duration_minutes });
+        const { data: generals } = await sb.from("kronos_generals").select("*").in("calendar_id", calIds).eq("user_id", user.id).eq("item_date", dateStr);
+        for (const g of generals ?? []) if (placed(g)) items.push({ type: "general", id: g.id, title: g.title, color: g.color, start_time: g.start_time, duration_minutes: g.duration_minutes });
       }
       // Sort by start_time
       items.sort((a: any, b: any) => {
-        const toMins = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+        const toMins = (t: string) => { const [h, m] = String(t ?? "00:00").split(":").map(Number); return (h || 0) * 60 + (m || 0); };
         return toMins(a.start_time) - toMins(b.start_time);
       });
       return json(res, 200, items);
@@ -1050,7 +1074,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "POST") {
           const body = await readBody(req);
           const now = Date.now();
-          const { data: row } = await sb.from("kronos_routines").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(43 88% 60%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, recurrence: body.recurrence ?? "daily", days_of_week: body.days_of_week ?? null, notes: body.notes ?? "", saved: body.saved ?? false, created_at: now, updated_at: now }).select().single();
+          const { data: row } = await sb.from("kronos_routines").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(43 88% 60%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, recurrence: body.recurrence ?? "daily", days_of_week: body.days_of_week ?? null, notes: body.notes ?? "", saved: body.saved ?? false, start_date: body.start_date ?? "", end_date: body.end_date ?? "", created_at: now, updated_at: now }).select().single();
           return json(res, 200, row ?? {});
         }
       }
@@ -1063,7 +1087,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
-          ["title","color","start_time","duration_minutes","recurrence","days_of_week","notes","saved"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          ["title","color","start_time","duration_minutes","recurrence","days_of_week","notes","saved","start_date","end_date","ical_uid","ical_href","ical_etag","ical_raw","synced_at","sync_state"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
           await sb.from("kronos_routines").update(patch).eq("id", id);
           return json(res, 200, { ok: true });
         }
@@ -1099,7 +1123,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
-          ["title","color","start_time","duration_minutes","due_date","instructions","saved"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          ["title","color","start_time","duration_minutes","due_date","instructions","saved","ical_uid","ical_href","ical_etag","ical_raw","synced_at","sync_state"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
           await sb.from("kronos_assignments").update(patch).eq("id", id);
           return json(res, 200, { ok: true });
         }
@@ -1135,12 +1159,50 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
-          ["title","color","start_time","duration_minutes","event_date","preparations","saved"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          ["title","color","start_time","duration_minutes","event_date","preparations","saved","ical_uid","ical_href","ical_etag","ical_raw","synced_at","sync_state"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
           await sb.from("kronos_events").update(patch).eq("id", id);
           return json(res, 200, { ok: true });
         }
         if (method === "DELETE") {
           await sb.from("kronos_events").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ── Generals ──
+    // The neutral fourth type: a one-shot with a date, a time and notes.
+    {
+      const m = route.match(/^\/kronos\/calendars\/(\d+)\/generals$/);
+      if (m) {
+        const calId = parseInt(m[1]);
+        const user = await getActiveUser(req, sb);
+        if (method === "GET") {
+          const { data } = await sb.from("kronos_generals").select("*").eq("calendar_id", calId).eq("user_id", user.id);
+          return json(res, 200, data ?? []);
+        }
+        if (method === "POST") {
+          const body = await readBody(req);
+          const now = Date.now();
+          const { data: row } = await sb.from("kronos_generals").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(145 55% 50%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, item_date: body.item_date ?? "", notes: body.notes ?? "", saved: body.saved ?? false, created_at: now, updated_at: now }).select().single();
+          return json(res, 200, row ?? {});
+        }
+      }
+    }
+    {
+      const m = route.match(/^\/kronos\/generals\/(\d+)$/);
+      if (m) {
+        const id = parseInt(m[1]);
+        const user = await getActiveUser(req, sb);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          ["title","color","start_time","duration_minutes","item_date","notes","saved","ical_uid","ical_href","ical_etag","ical_raw","synced_at","sync_state"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          await sb.from("kronos_generals").update(patch).eq("id", id).eq("user_id", user.id);
+          return json(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+          await sb.from("kronos_generals").delete().eq("id", id).eq("user_id", user.id);
           return json(res, 200, { ok: true });
         }
       }

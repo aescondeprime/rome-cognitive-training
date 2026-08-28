@@ -357,6 +357,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
+  /**
+   * Edit a card's content or its folder.
+   *
+   * Reviewing a card and editing one are different acts: `/review` advances the
+   * schedule and must not be reachable by a rename. This deliberately touches
+   * only front, back, category and tags — the scheduling fields stay under the
+   * SM-2 endpoint's control.
+   */
+  app.patch("/api/recall-items/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const user = await getActiveUser(req);
+      const items = await storage.getRecallItems(user.id);
+      if (!items.some(i => i.id === id)) return res.status(404).json({ error: "Not found" });
+      const { front, back, category, tags } = req.body ?? {};
+      const patch: Record<string, unknown> = {};
+      if (typeof front === "string" && front.trim()) patch.front = front.trim();
+      if (typeof back === "string" && back.trim()) patch.back = back.trim();
+      if (typeof category === "string") patch.category = category.trim() || "general";
+      if (typeof tags === "string") patch.tags = tags;
+      if (!Object.keys(patch).length) return res.status(400).json({ error: "Nothing to change" });
+      res.json(await storage.updateRecallItem(id, patch));
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
   app.delete("/api/recall-items/:id", async (req, res) => {
     try { await storage.deleteRecallItem(parseInt(req.params.id)); res.json({ success: true }); }
     catch (e: any) { res.status(500).json({ error: e.message }); }

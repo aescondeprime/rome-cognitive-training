@@ -1,14 +1,39 @@
 /**
- * TaskStabilizerWidget — particle-accelerator focus queue for the constellation.
+ * TaskStabilizerWidget — the particle-accelerator focus queue.
  *
- * Tasks are profile-specific and stored in localStorage so they survive app
- * upgrades. Launching a focus cycle creates a matching Kronos assignment;
- * completing/cancelling the cycle updates or removes that assignment.
+ * Tasks are profile-specific and live in localStorage so they survive app
+ * upgrades. Three things reach outside this file:
+ *
+ * • **Focus cycles** create a matching Kronos assignment while the timer runs,
+ *   and update or remove it when the cycle finishes or is cancelled.
+ * • **Due dates** put a task on a day in Kronos Keep, which is also what puts
+ *   it in Apple Calendar once that sync is wired. One task owns at most one
+ *   dated Kronos row (`kronosItemId`); changing the date moves that row rather
+ *   than leaving a trail of copies behind.
+ * • **Checking a task off** banks its credit in the Capability ledger that the
+ *   MIDAS dashboard reads. Un-checking it takes the credit back — a counter
+ *   that only goes up measures elapsed time, not capability.
+ *
+ * Ordering is the array's own order and is dragged by the grip on each row.
+ * Note that `activeTasks` is a *filtered view*: a drop index in that list is
+ * not an index into `tasks`, so every reorder resolves both ends by id.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronUp, CircleStop, Clock3, Plus, RotateCcw, TimerReset, Trash2, X } from "lucide-react";
+import { Check, ChevronUp, CircleStop, Clock3, GripVertical, Plus, RotateCcw, TimerReset, Trash2, X } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import {
+  addEntry, loadCapability, notifyCapabilityChanged, removeEntryForTask, saveCapability,
+} from "@/lib/capabilityStore";
+import {
+  widgetRootStyle,
+  useWidgetFit,
+  useWidgetWheelScale,
+  useWidgetYield,
+  widgetYieldStyle,
+  WidgetScaleHandle,
+  type FocusRect,
+} from "./WidgetChrome";
 
 interface FocusTimer {
   startedAt: number;
@@ -22,6 +47,12 @@ interface StabilizerTask {
   createdAt: number;
   completedAt: number | null;
   timer: FocusTimer | null;
+  /** "YYYY-MM-DD", or null for undated. Mirrored into Kronos when set. */
+  dueDate: string | null;
+  /** The Kronos assignment this task's due date owns, if any. */
+  kronosItemId: number | null;
+  /** What finishing this task is worth in the Capability ledger. */
+  credit: number;
 }
 
 interface Props {
@@ -29,21 +60,47 @@ interface Props {
   collapsed: boolean;
   onPosChange: (p: { x: number; y: number }) => void;
   onCollapsedChange: (c: boolean) => void;
+  /** Uniform scale and the editor's resize affordances. See `WidgetChrome`. */
+  scale?: number;
+  editing?: boolean;
+  onScaleChange?: (scale: number) => void;
+  /** Set while the camera has flown to a node; `focus` is the space it claims. */
+  zoomed?: boolean;
+  focus?: FocusRect | null;
 }
 
 interface Calendar { id: number; name: string }
 
 const W = 286;
 const PRESETS = [5, 15, 25, 45, 60];
+const DEFAULT_CREDIT = 10;
 
 function storageKey(profileId: number | undefined) {
   return `rome_task_stabilizer_v1:${profileId ?? "default"}`;
 }
 
+/**
+ * Read and normalise.
+ *
+ * Tasks written before due dates and credit existed are missing those fields
+ * entirely, so every read backfills them. Without this, `task.credit` is
+ * `undefined`, `clampCredit` turns that into 0, and every task you had before
+ * today silently becomes worth nothing.
+ */
 function readTasks(profileId: number | undefined): StabilizerTask[] {
   try {
     const value = JSON.parse(localStorage.getItem(storageKey(profileId)) ?? "[]");
-    return Array.isArray(value) ? value : [];
+    if (!Array.isArray(value)) return [];
+    return value.map((t: any): StabilizerTask => ({
+      id: String(t?.id ?? crypto.randomUUID()),
+      title: String(t?.title ?? ""),
+      createdAt: Number(t?.createdAt) || Date.now(),
+      completedAt: t?.completedAt ?? null,
+      timer: t?.timer ?? null,
+      dueDate: typeof t?.dueDate === "string" && t.dueDate ? t.dueDate : null,
+      kronosItemId: typeof t?.kronosItemId === "number" ? t.kronosItemId : null,
+      credit: Number.isFinite(Number(t?.credit)) ? Math.max(0, Math.round(Number(t.credit))) : DEFAULT_CREDIT,
+    }));
   } catch {
     return [];
   }
@@ -95,7 +152,7 @@ function Accelerator({ progress, active }: { progress: number; active: boolean }
   );
 }
 
-export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCollapsedChange }: Props) {
+export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCollapsedChange, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null }: Props) {
   const { data: activeProfile } = useQuery<{ id: number }>({ queryKey: ["/api/active-profile"] });
   const { data: calendars = [] } = useQuery<Calendar[]>({
     queryKey: ["/kronos/calendars"],
@@ -105,15 +162,27 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
   const profileId = activeProfile?.id;
   const [tasks, setTasks] = useState<StabilizerTask[]>(() => readTasks(profileId));
   const [title, setTitle] = useState("");
+  const [credit, setCredit] = useState(DEFAULT_CREDIT);
   const [timerTaskId, setTimerTaskId] = useState<string | null>(null);
   const [minutes, setMinutes] = useState(25);
   const [now, setNow] = useState(Date.now());
   const [syncing, setSyncing] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const skipNextPersist = useRef(false);
 
   const x = pos?.x ?? 24;
   const y = pos?.y ?? 80;
+
+  // Editor sizing and keep-on-screen. Scale is a transform, not a re-layout —
+  // see the note at the top of `WidgetChrome`. `useWidgetFit` is what stops a
+  // widget saved on a larger display from sitting past the edge of this one.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const onWheelScale = useWidgetWheelScale(editing, scale, onScaleChange);
+  useWidgetFit(rootRef, x, y, onPosChange, [scale, collapsed]);
+  // Selecting a node flies it to screen centre, straight under any widget
+  // parked there. Yielding is a fade, not a move — see `useWidgetYield`.
+  const yielding = useWidgetYield(rootRef, zoomed, focus, [x, y, scale, collapsed]);
 
   useEffect(() => {
     skipNextPersist.current = true;
@@ -145,21 +214,109 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
   const remaining = running?.timer ? Math.max(0, running.timer.durationSeconds - elapsed) : 0;
   const progress = running?.timer ? Math.min(1, elapsed / running.timer.durationSeconds) : 0;
 
+  const patchTask = useCallback((id: string, patch: Partial<StabilizerTask>) => {
+    setTasks(old => old.map(t => (t.id === id ? { ...t, ...patch } : t)));
+  }, []);
+
+  const ensureCalendar = useCallback(async () => {
+    if (calendars[0]) return calendars[0];
+    const response = await apiRequest("POST", "/api/kronos/calendars", { name: "My Calendar" });
+    const calendar = await response.json() as Calendar;
+    await qc.invalidateQueries({ queryKey: ["/kronos/calendars"] });
+    return calendar;
+  }, [calendars, qc]);
+
+  const refreshKronos = useCallback(() => {
+    qc.invalidateQueries({ queryKey: ["kronos-today"] });
+    qc.invalidateQueries({ queryKey: ["/kronos"] });
+  }, [qc]);
+
+  // ── Capability ledger ────────────────────────────────────────────────────
+  //
+  // Read-modify-write against localStorage rather than holding the ledger in
+  // React state: the MIDAS dashboard owns its own copy, and the event tells it
+  // to re-read. Two writers, one file, no shared state to get out of step.
+  const bankCredit = useCallback((task: StabilizerTask) => {
+    const next = addEntry(loadCapability(profileId), task.title, task.credit, "stabilizer", task.id);
+    saveCapability(profileId, next);
+    notifyCapabilityChanged();
+  }, [profileId]);
+
+  const refundCredit = useCallback((taskId: string) => {
+    const next = removeEntryForTask(loadCapability(profileId), taskId);
+    saveCapability(profileId, next);
+    notifyCapabilityChanged();
+  }, [profileId]);
+
+  // ── Due dates ────────────────────────────────────────────────────────────
+  //
+  // The task owns one Kronos row. Setting a date creates it, changing the date
+  // moves it, clearing the date deletes it. Anything else and a task nudged
+  // across three days leaves two ghosts on the calendar.
+  const setDueDate = useCallback(async (task: StabilizerTask, value: string) => {
+    const next = value || null;
+    patchTask(task.id, { dueDate: next });
+    try {
+      if (!next) {
+        if (task.kronosItemId) {
+          await apiRequest("DELETE", `/api/kronos/assignments/${task.kronosItemId}`);
+          patchTask(task.id, { kronosItemId: null });
+        }
+      } else if (task.kronosItemId) {
+        await apiRequest("PATCH", `/api/kronos/assignments/${task.kronosItemId}`, { due_date: next });
+      } else {
+        const calendar = await ensureCalendar();
+        const response = await apiRequest("POST", `/api/kronos/calendars/${calendar.id}/assignments`, {
+          title: task.title,
+          color: "hsl(195 60% 55%)",
+          start_time: "09:00",
+          duration_minutes: 30,
+          due_date: next,
+          instructions: "Planned from the Task Stabilizer",
+          saved: false,
+        });
+        const created = await response.json();
+        patchTask(task.id, { kronosItemId: created?.id ?? null });
+      }
+      refreshKronos();
+    } catch {
+      // The date stays set locally. Kronos catches up next time it is touched,
+      // and a widget that refused to remember a date because the server blinked
+      // would be worse than one that is briefly out of step with the calendar.
+    }
+  }, [ensureCalendar, patchTask, refreshKronos]);
+
   const completeTask = useCallback(async (task: StabilizerTask, actualSeconds?: number) => {
     const timer = task.timer;
     const seconds = actualSeconds ?? (timer ? Math.max(1, Math.floor((Date.now() - timer.startedAt) / 1000)) : 0);
     setTasks(old => old.map(item => item.id === task.id ? { ...item, completedAt: Date.now(), timer: null } : item));
+    bankCredit(task);
     if (timer?.kronosAssignmentId) {
       try {
         await apiRequest("PATCH", `/api/kronos/assignments/${timer.kronosAssignmentId}`, {
           duration_minutes: Math.max(1, Math.ceil(seconds / 60)),
           instructions: `Completed through Task Stabilizer · ${Math.max(1, Math.ceil(seconds / 60))} minute focus cycle`,
         });
-        qc.invalidateQueries({ queryKey: ["kronos-today"] });
-        qc.invalidateQueries({ queryKey: ["/kronos"] });
+        refreshKronos();
       } catch { /* task completion remains local if calendar sync is temporarily unavailable */ }
     }
-  }, [qc]);
+  }, [bankCredit, refreshKronos]);
+
+  const restoreTask = useCallback((task: StabilizerTask) => {
+    setTasks(old => old.map(item => item.id === task.id ? { ...item, completedAt: null } : item));
+    refundCredit(task.id);
+  }, [refundCredit]);
+
+  const deleteTask = useCallback(async (task: StabilizerTask) => {
+    setTasks(old => old.filter(item => item.id !== task.id));
+    refundCredit(task.id);
+    if (task.kronosItemId) {
+      try {
+        await apiRequest("DELETE", `/api/kronos/assignments/${task.kronosItemId}`);
+        refreshKronos();
+      } catch {}
+    }
+  }, [refundCredit, refreshKronos]);
 
   useEffect(() => {
     if (running?.timer && remaining === 0 && elapsed > 0) void completeTask(running, running.timer.durationSeconds);
@@ -168,17 +325,14 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
   const addTask = () => {
     const trimmed = title.trim();
     if (!trimmed) return;
-    setTasks(old => [{ id: crypto.randomUUID(), title: trimmed, createdAt: Date.now(), completedAt: null, timer: null }, ...old]);
+    setTasks(old => [{
+      id: crypto.randomUUID(), title: trimmed, createdAt: Date.now(),
+      completedAt: null, timer: null, dueDate: null, kronosItemId: null,
+      credit: Math.max(0, Math.round(credit)),
+    }, ...old]);
     setTitle("");
+    setCredit(DEFAULT_CREDIT);
     setTimeout(() => inputRef.current?.focus(), 0);
-  };
-
-  const ensureCalendar = async () => {
-    if (calendars[0]) return calendars[0];
-    const response = await apiRequest("POST", "/api/kronos/calendars", { name: "My Calendar" });
-    const calendar = await response.json() as Calendar;
-    await qc.invalidateQueries({ queryKey: ["/kronos/calendars"] });
-    return calendar;
   };
 
   const launchTimer = async () => {
@@ -199,8 +353,7 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
       });
       const assignment = await response.json();
       assignmentId = assignment.id;
-      qc.invalidateQueries({ queryKey: ["kronos-today"] });
-      qc.invalidateQueries({ queryKey: ["/kronos"] });
+      refreshKronos();
     } catch { /* timer remains usable offline */ }
     setTasks(old => old.map(item => item.id === task.id ? {
       ...item,
@@ -218,11 +371,27 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
     if (assignmentId) {
       try {
         await apiRequest("DELETE", `/api/kronos/assignments/${assignmentId}`);
-        qc.invalidateQueries({ queryKey: ["kronos-today"] });
-        qc.invalidateQueries({ queryKey: ["/kronos"] });
+        refreshKronos();
       } catch {}
     }
   };
+
+  // ── Reorder ──────────────────────────────────────────────────────────────
+  //
+  // Both ends resolved by id against the full array, because the list on
+  // screen is `activeTasks` — a filter — and its indices mean nothing here.
+  const moveTask = useCallback((fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    setTasks(old => {
+      const from = old.findIndex(t => t.id === fromId);
+      const to = old.findIndex(t => t.id === toId);
+      if (from < 0 || to < 0 || from === to) return old;
+      const next = old.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  }, []);
 
   const dragging = useRef(false);
   const dragOffset = useRef({ dx: 0, dy: 0 });
@@ -245,12 +414,26 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
 
   const activeTasks = useMemo(() => tasks.filter(task => !task.completedAt), [tasks]);
   const completedTasks = useMemo(() => tasks.filter(task => task.completedAt), [tasks]);
+  const queuedCredit = useMemo(() => activeTasks.reduce((s, t) => s + t.credit, 0), [activeTasks]);
 
   return (
-    <div onMouseDown={onMouseDown} style={{ position: "fixed", left: x, top: y, width: W, zIndex: 202, cursor: "grab", userSelect: "none", fontFamily: "DM Mono, monospace" }}>
-      <div style={{ background: "hsl(222 18% 7% / .9)", backdropFilter: "blur(16px)", border: "1px solid hsl(var(--accent-h) 35% 25% / .55)", borderRadius: 2, overflow: "hidden", boxShadow: "0 10px 40px hsl(222 35% 3% / .75), inset 0 1px 0 hsl(var(--accent-h) 60% 50% / .08)" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 10px", borderBottom: collapsed ? "none" : "1px solid hsl(var(--accent-h) 20% 16% / .6)", background: "linear-gradient(90deg, hsl(var(--accent-h) 30% 8% / .8), hsl(195 24% 8% / .4))" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 7 }}><Corner /><span style={{ fontSize: 9, letterSpacing: ".2em", color: "hsl(var(--accent-h) 86% 66%)", textTransform: "uppercase" }}>Task Stabilizer</span><span style={{ fontSize: 7, color: "hsl(var(--accent-h) 30% 40%)" }}>{activeTasks.length} ACTIVE</span></div>
+    <div
+      ref={rootRef}
+      onMouseDown={onMouseDown}
+      onWheel={editing ? onWheelScale : undefined}
+      style={widgetRootStyle(x, y, W, scale, widgetYieldStyle(yielding))}
+    >
+      {editing && <WidgetScaleHandle scale={scale} onScaleChange={onScaleChange} width={W} />}
+      <div className={`rome-widget-shell${editing ? " is-editing" : ""}${zoomed ? " is-zoomed" : ""}`}>
+        <div
+          className={collapsed ? undefined : "rome-widget-rule"}
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 10px" }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+            <Corner />
+            <span style={{ fontSize: 9, letterSpacing: ".2em", color: "hsl(var(--accent-h) 86% 66%)", textTransform: "uppercase" }}>Task Stabilizer</span>
+            <span style={{ fontSize: 7, color: "hsl(var(--accent-h) 30% 40%)" }} title={`${queuedCredit} credit queued`}>{activeTasks.length} ACTIVE</span>
+          </div>
           <button data-nodrag onClick={() => onCollapsedChange(!collapsed)} style={{ border: 0, background: "none", color: "hsl(var(--accent-h) 50% 50%)", cursor: "pointer", padding: 2 }}><ChevronUp size={13} style={{ transform: collapsed ? "rotate(180deg)" : undefined }} /></button>
         </div>
 
@@ -270,13 +453,35 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
 
           <div style={{ display: "flex", gap: 5, marginBottom: 8 }}>
             <input ref={inputRef} value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addTask(); }} placeholder="Add a stabilized task…" style={{ flex: 1, minWidth: 0, background: "hsl(222 20% 5%)", border: "1px solid hsl(var(--accent-h) 22% 20%)", color: "hsl(220 14% 78%)", borderRadius: 2, padding: "7px 8px", outline: "none", font: "9px DM Mono, monospace" }} />
+            <input type="number" min={0} max={10000} value={credit} onChange={e => setCredit(Math.max(0, Math.min(10000, Number(e.target.value))))} onKeyDown={e => { if (e.key === "Enter") addTask(); }} title="Credit this task is worth when you check it off"
+              style={{ width: 40, background: "hsl(222 20% 5%)", border: "1px solid hsl(var(--accent-h) 22% 20%)", color: "hsl(var(--accent-h) 70% 62%)", borderRadius: 2, padding: "7px 4px", outline: "none", font: "9px DM Mono, monospace", textAlign: "center" }} />
             <button onClick={addTask} disabled={!title.trim()} style={{ width: 30, borderRadius: 2, border: "1px solid hsl(var(--accent-h) 52% 36%)", background: "hsl(var(--accent-h) 42% 13%)", color: "hsl(var(--accent-h) 88% 70%)", opacity: title.trim() ? 1 : .35, cursor: "pointer" }}><Plus size={13} /></button>
           </div>
 
-          <div style={{ maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
-            {activeTasks.map(task => <TaskRow key={task.id} task={task} running={running?.id === task.id} onTimer={() => { setTimerTaskId(task.id); setMinutes(25); }} onComplete={() => void completeTask(task, 0)} onDelete={() => setTasks(old => old.filter(item => item.id !== task.id))} />)}
+          <div style={{ maxHeight: 250, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+            {activeTasks.map(task => (
+              <TaskRow key={task.id} task={task} running={running?.id === task.id}
+                dragActive={dragId === task.id}
+                onDragStart={() => setDragId(task.id)}
+                onDragEnd={() => setDragId(null)}
+                onDropOn={() => { if (dragId) moveTask(dragId, task.id); setDragId(null); }}
+                onTimer={() => { setTimerTaskId(task.id); setMinutes(25); }}
+                onComplete={() => void completeTask(task, 0)}
+                onDelete={() => void deleteTask(task)}
+                onDue={value => void setDueDate(task, value)}
+                onCredit={value => patchTask(task.id, { credit: value })} />
+            ))}
             {activeTasks.length === 0 && <div style={{ padding: "12px 8px", textAlign: "center", fontSize: 8, color: "hsl(var(--accent-h) 20% 34%)", letterSpacing: ".14em" }}>QUEUE STABLE · NO TASKS</div>}
-            {completedTasks.slice(0, 4).map(task => <TaskRow key={task.id} task={task} running={false} onTimer={() => { setTasks(old => old.map(item => item.id === task.id ? { ...item, completedAt: null } : item)); setTimerTaskId(task.id); }} onComplete={() => setTasks(old => old.map(item => item.id === task.id ? { ...item, completedAt: null } : item))} onDelete={() => setTasks(old => old.filter(item => item.id !== task.id))} />)}
+            {completedTasks.slice(0, 4).map(task => (
+              <TaskRow key={task.id} task={task} running={false}
+                dragActive={false}
+                onDragStart={() => {}} onDragEnd={() => {}} onDropOn={() => {}}
+                onTimer={() => { restoreTask(task); setTimerTaskId(task.id); }}
+                onComplete={() => restoreTask(task)}
+                onDelete={() => void deleteTask(task)}
+                onDue={value => void setDueDate(task, value)}
+                onCredit={value => patchTask(task.id, { credit: value })} />
+            ))}
           </div>
         </div>}
       </div>
@@ -292,14 +497,73 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
   );
 }
 
-function TaskRow({ task, running, onTimer, onComplete, onDelete }: { task: StabilizerTask; running: boolean; onTimer: () => void; onComplete: () => void; onDelete: () => void }) {
+function TaskRow({ task, running, dragActive, onDragStart, onDragEnd, onDropOn, onTimer, onComplete, onDelete, onDue, onCredit }: {
+  task: StabilizerTask;
+  running: boolean;
+  dragActive: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDropOn: () => void;
+  onTimer: () => void;
+  onComplete: () => void;
+  onDelete: () => void;
+  onDue: (value: string) => void;
+  onCredit: (value: number) => void;
+}) {
   const done = Boolean(task.completedAt);
+  const [over, setOver] = useState(false);
+
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "6px 7px", background: running ? "hsl(var(--accent-h) 35% 11%)" : "hsl(222 18% 5% / .72)", border: `1px solid ${running ? "hsl(var(--accent-h) 48% 27%)" : "hsl(220 16% 13%)"}`, borderLeft: `2px solid ${done ? "hsl(145 50% 42%)" : running ? "hsl(var(--accent-h) 85% 60%)" : "hsl(195 55% 42%)"}` }}>
-      <button onClick={onComplete} title={done ? "Restore task" : "Complete task"} style={{ ...iconButton, color: done ? "hsl(145 58% 54%)" : "hsl(220 12% 38%)" }}>{done ? <RotateCcw size={11} /> : <Check size={11} />}</button>
-      <span title={task.title} style={{ flex: 1, minWidth: 0, fontSize: 9.5, color: done ? "hsl(220 10% 38%)" : "hsl(220 13% 74%)", textDecoration: done ? "line-through" : undefined, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{task.title}</span>
-      {!done && !running && <button onClick={onTimer} title="Set focus timer" style={{ ...iconButton, color: "hsl(var(--accent-h) 62% 57%)" }}><Clock3 size={11} /></button>}
-      <button onClick={onDelete} title="Remove task" style={{ ...iconButton, color: "hsl(0 48% 48%)" }}><Trash2 size={10} /></button>
+    <div
+      // `draggable` on the row, but the grip is the only thing that starts it —
+      // otherwise selecting the title text drags the task instead.
+      onDragOver={e => { e.preventDefault(); setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={e => { e.preventDefault(); setOver(false); onDropOn(); }}
+      style={{
+        display: "flex", flexDirection: "column", gap: 3, padding: "6px 7px",
+        background: running ? "hsl(var(--accent-h) 35% 11%)" : "hsl(222 18% 5% / .72)",
+        border: `1px solid ${running ? "hsl(var(--accent-h) 48% 27%)" : "hsl(220 16% 13%)"}`,
+        borderTop: over ? "2px solid hsl(var(--accent-h) 80% 60%)" : undefined,
+        borderLeft: `2px solid ${done ? "hsl(145 50% 42%)" : running ? "hsl(var(--accent-h) 85% 60%)" : "hsl(195 55% 42%)"}`,
+        opacity: dragActive ? 0.4 : 1,
+      }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {!done && (
+          <span draggable onDragStart={onDragStart} onDragEnd={onDragEnd}
+            title="Drag to reorder"
+            style={{ cursor: "grab", color: "hsl(220 12% 32%)", display: "inline-flex", flexShrink: 0 }}>
+            <GripVertical size={11} />
+          </span>
+        )}
+        <button onClick={onComplete} title={done ? "Restore task — takes its credit back" : "Complete task — banks its credit"}
+          style={{ ...iconButton, color: done ? "hsl(145 58% 54%)" : "hsl(220 12% 38%)" }}>
+          {done ? <RotateCcw size={11} /> : <Check size={11} />}
+        </button>
+        <span title={task.title} style={{ flex: 1, minWidth: 0, fontSize: 9.5, color: done ? "hsl(220 10% 38%)" : "hsl(220 13% 74%)", textDecoration: done ? "line-through" : undefined, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{task.title}</span>
+        {!done && !running && <button onClick={onTimer} title="Set focus timer" style={{ ...iconButton, color: "hsl(var(--accent-h) 62% 57%)" }}><Clock3 size={11} /></button>}
+        <button onClick={onDelete} title="Remove task" style={{ ...iconButton, color: "hsl(0 48% 48%)" }}><Trash2 size={10} /></button>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 5, paddingLeft: done ? 0 : 17 }}>
+        <input type="date" value={task.dueDate ?? ""} onChange={e => onDue(e.target.value)}
+          title={task.dueDate ? `Planned in Kronos on ${task.dueDate}` : "Give this a day in Kronos Keep"}
+          style={{
+            flex: 1, minWidth: 0, background: "transparent",
+            border: `1px solid ${task.dueDate ? "hsl(195 45% 26%)" : "hsl(220 16% 13%)"}`,
+            color: task.dueDate ? "hsl(195 55% 62%)" : "hsl(220 12% 34%)",
+            borderRadius: 2, padding: "2px 4px", outline: "none",
+            font: "8px DM Mono, monospace", colorScheme: "dark",
+          }} />
+        <input type="number" min={0} max={10000} value={task.credit} onChange={e => onCredit(Math.max(0, Math.min(10000, Number(e.target.value))))}
+          title="Credit banked when this is checked off"
+          style={{
+            width: 36, background: "transparent", border: "1px solid hsl(220 16% 13%)",
+            color: "hsl(var(--accent-h) 60% 55%)", borderRadius: 2, padding: "2px 2px",
+            outline: "none", font: "8px DM Mono, monospace", textAlign: "center",
+          }} />
+        <span style={{ fontSize: 7, color: "hsl(var(--accent-h) 25% 36%)", letterSpacing: ".1em" }}>CR</span>
+      </div>
     </div>
   );
 }
