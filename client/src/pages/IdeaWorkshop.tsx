@@ -26,6 +26,7 @@ import { createPortal } from "react-dom";
 import {
   Plus, Trash2, Link2, Link2Off, Loader2, Lightbulb, Image as ImageIcon,
   CornerDownRight, Bold, Italic, Underline, Repeat2,
+  AlignLeft, AlignCenter, AlignRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -44,6 +45,7 @@ interface IdeaCard {
   kind: "text" | "image" | null;
   parent_id: number | null;
   src: string | null;
+  align: Align | null;
   tags: string;
   energy: number;
 }
@@ -56,6 +58,12 @@ interface IdeaConnection {
 }
 
 interface CardSize { w: number; h: number }
+
+// Centre by default: a card is a label far more often than it is a paragraph.
+type Align = "left" | "center" | "right";
+const ALIGNMENTS: readonly Align[] = ["left", "center", "right"] as const;
+const alignOf = (card: IdeaCard): Align =>
+  (ALIGNMENTS as readonly string[]).includes(card.align ?? "") ? card.align as Align : "center";
 
 // ── Palette ────────────────────────────────────────────────────────────
 // Backgrounds are translucent so the blueprint grid reads through a card the
@@ -83,7 +91,15 @@ const MIN_W       = 110;
 const MIN_H       = 44;
 const AUTO_MAX_W  = 320;
 const SUB_MAX_W   = 230;
-const IMAGE_LIMIT = 5 * 1024 * 1024;
+// Three limits, because they answer three different questions.
+//   READ  — what will be opened from disk at all.
+//   STORE — what may end up in a row and therefore in the body of every board
+//           fetch. Also keeps the request under Vercel's 4.5MB body ceiling.
+//   EDGE  — the longest side a still image is kept at. A 4K screenshot is
+//           several megabytes of pixels nobody can see on a 320px card.
+const IMAGE_READ_LIMIT  = 12 * 1024 * 1024;
+const IMAGE_STORE_LIMIT = 3 * 1024 * 1024;
+const IMAGE_MAX_EDGE    = 1600;
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif"];
 const ACCEPT      = ".png,.jpg,.jpeg,.gif,image/png,image/jpeg,image/gif";
 
@@ -136,6 +152,29 @@ function contentToHtml(content: string): string {
 /** True when an editor holds nothing but formatting scaffolding. */
 function isBlankHtml(html: string): boolean {
   return html.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim().length === 0;
+}
+
+// ── Failure reporting ──────────────────────────────────────────────────
+// Every write here was fire-and-forget: a rejected insert rolled the optimistic
+// update back and said nothing, so a schema the app had outgrown looked exactly
+// like a dead button.
+function describeError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const body = raw.replace(/^\d+:\s*/, "");   // apiRequest throws `${status}: ${body}`
+  let message = body;
+  try {
+    const parsed = JSON.parse(body);
+    message = parsed?.message || parsed?.error || body;
+  } catch { /* the server did not answer with JSON */ }
+
+  // PostgREST says PGRST204 for a payload field with no column behind it, and
+  // the whole point of naming the column is that the fix is one file away.
+  const missing = /Could not find the '([\w]+)' column|column "?([\w.]+)"? does not exist/i.exec(message);
+  if (missing) {
+    const column = missing[1] || missing[2];
+    return `Database is missing the "${column}" column — run script/sql/2026-08-idea-workshop-v2.sql in Supabase.`;
+  }
+  return message.length > 200 ? `${message.slice(0, 200)}…` : message;
 }
 
 // ── Fitted title ───────────────────────────────────────────────────────
@@ -398,7 +437,7 @@ function IdeaCardView({
     if (next !== card.content) onUpdate(card.id, { content: next });
   };
 
-  const bodyStyle: React.CSSProperties = { color: col.text };
+  const bodyStyle: React.CSSProperties = { color: col.text, textAlign: alignOf(card) };
 
   const cardBox = (
     <div
@@ -580,18 +619,27 @@ function SubIdeaTethers({
 interface MenuState { card: IdeaCard; x: number; y: number }
 
 function CardMenu({
-  state, onClose, onColor, onLink, onSubIdea, onReplaceImage, onDelete,
+  state, onClose, onColor, onAlign, onLink, onSubIdea, onReplaceImage, onDelete,
 }: {
   state: MenuState;
   onClose: () => void;
   onColor: (color: ColorId) => void;
+  onAlign: (align: Align) => void;
   onLink: () => void;
   onSubIdea: () => void;
   onReplaceImage: () => void;
   onDelete: () => void;
 }) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    const dismiss = () => onClose();
+    // Capture phase, so a card that stops mousedown from bubbling cannot trap
+    // the menu open — which means the menu has to exclude itself by hit test
+    // rather than by relying on its own handler running first. It does not.
+    const dismiss = (e: MouseEvent) => {
+      if (menuRef.current?.contains(e.target as Node)) return;
+      onClose();
+    };
     const escape = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("mousedown", dismiss, true);
     window.addEventListener("keydown", escape);
@@ -601,6 +649,7 @@ function CardMenu({
   const isImage = state.card.kind === "image";
   const isSub   = state.card.parent_id != null;
   const col     = colorFor(state.card.color);
+  const align   = alignOf(state.card);
 
   const item = (label: string, Icon: typeof Link2, action: () => void, danger = false) => (
     <button
@@ -617,6 +666,7 @@ function CardMenu({
 
   return createPortal(
     <div
+      ref={menuRef}
       // Position is clamped so a card near the right or bottom edge still gets
       // a whole menu.
       style={{
@@ -646,6 +696,26 @@ function CardMenu({
           />
         ))}
       </div>
+      {/* Alignment is a property of the card, not of a selection, which is why
+          it lives here rather than in the format bar. */}
+      {!isImage && (
+        <div className="flex items-center gap-1 border-b px-2.5 py-1.5" style={{ borderColor: col.border }}>
+          {([["left", AlignLeft], ["center", AlignCenter], ["right", AlignRight]] as const).map(([value, Icon]) => (
+            <button
+              key={value}
+              onClick={() => { onAlign(value); onClose(); }}
+              className={cn(
+                "p-1 transition-colors",
+                align === value ? "text-foreground" : "text-muted-foreground/50 hover:text-foreground",
+              )}
+              style={align === value ? { background: `${col.border}55` } : undefined}
+              title={`Align ${value}`}
+            >
+              <Icon className="h-3 w-3" />
+            </button>
+          ))}
+        </div>
+      )}
       {!isSub && item("Link to…", Link2, onLink)}
       {!isSub && item("Add sub-idea", CornerDownRight, onSubIdea)}
       {isImage && item("Replace image", Repeat2, onReplaceImage)}
@@ -666,6 +736,17 @@ function WorkshopView({ board }: { board: Board }) {
   const [sizeTick, setSizeTick] = useState(0);
   const rafRef    = useRef<number | null>(null);
 
+  const [linkSource, setLinkSource] = useState<number | null>(null);
+  const [menu,       setMenu]       = useState<MenuState | null>(null);
+  const [notice,     setNotice]     = useState<string | null>(null);
+
+  // Long enough to read a sentence naming a file to run.
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 9000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   const cardQKey = ["/boards", board.id, "ideas"];
   const connQKey = ["/boards", board.id, "idea-connections"];
 
@@ -684,6 +765,7 @@ function WorkshopView({ board }: { board: Board }) {
   const createCard = useMutation({
     mutationFn: (body: object) => apiRequest("POST", `/api/boards/${board.id}/ideas`, body).then(r => r.json()),
     onSuccess: invalidateCards,
+    onError: (error) => setNotice(describeError(error)),
   });
 
   const updateCard = useMutation({
@@ -694,7 +776,10 @@ function WorkshopView({ board }: { board: Board }) {
       qc.setQueryData<IdeaCard[]>(cardQKey, old => (old ?? []).map(c => (c.id === id ? { ...c, ...patch as IdeaCard } : c)));
       return { prev };
     },
-    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(cardQKey, ctx.prev); },
+    onError: (error, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(cardQKey, ctx.prev);
+      setNotice(describeError(error));
+    },
     onSettled: invalidateCards,
   });
 
@@ -708,13 +793,17 @@ function WorkshopView({ board }: { board: Board }) {
       qc.setQueryData<IdeaCard[]>(cardQKey, old => (old ?? []).filter(c => c.id !== id && c.parent_id !== id));
       return { prev };
     },
-    onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(cardQKey, ctx.prev); },
+    onError: (error, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(cardQKey, ctx.prev);
+      setNotice(describeError(error));
+    },
     onSettled: invalidateCards,
   });
 
   const createConn = useMutation({
     mutationFn: (body: object) => apiRequest("POST", `/api/boards/${board.id}/idea-connections`, body).then(r => r.json()),
     onSuccess: invalidateConns,
+    onError: (error) => setNotice(describeError(error)),
   });
 
   const deleteConn = useMutation({
@@ -728,16 +817,6 @@ function WorkshopView({ board }: { board: Board }) {
     onError: (_e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(connQKey, ctx.prev); },
     onSettled: invalidateConns,
   });
-
-  const [linkSource, setLinkSource] = useState<number | null>(null);
-  const [menu,       setMenu]       = useState<MenuState | null>(null);
-  const [notice,     setNotice]     = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 4200);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
 
   // Measurements arrive one card at a time during layout; coalescing them into
   // a single frame keeps a fifty-card board from re-rendering fifty times.
@@ -783,7 +862,7 @@ function WorkshopView({ board }: { board: Board }) {
   const addIdea = useCallback(() => {
     const spot = nextSpot();
     const color = COLORS[topCards.length % COLORS.length].id;
-    createCard.mutate({ content: "", color, pos_x: spot.x, pos_y: spot.y, width: 0, height: 0, kind: "text" });
+    createCard.mutate({ content: "", color, pos_x: spot.x, pos_y: spot.y, width: 0, height: 0, kind: "text", align: "center" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createCard, topCards.length]);
 
@@ -791,7 +870,7 @@ function WorkshopView({ board }: { board: Board }) {
     const parentSize = sizesRef.current.get(parent.id) ?? { w: 180, h: 80 };
     const existing = childrenOf.get(parent.id)?.length ?? 0;
     createCard.mutate({
-      content: "", color: parent.color, kind: "text",
+      content: "", color: parent.color, kind: "text", align: "center",
       parent_id: parent.id,
       pos_x: Math.round(parentSize.w + 34),
       pos_y: Math.round(existing * 46),
@@ -800,19 +879,54 @@ function WorkshopView({ board }: { board: Board }) {
   };
 
   // ── Images ──
+  const megabytes = (bytes: number) => `${(bytes / 1048576).toFixed(1)}MB`;
+
   const readImage = (file: File) => new Promise<{ src: string; width: number }>((resolve, reject) => {
     if (!IMAGE_TYPES.includes(file.type)) { reject(new Error(`${file.name}: only PNG, JPG and GIF are supported.`)); return; }
-    if (file.size > IMAGE_LIMIT)          { reject(new Error(`${file.name} is ${(file.size / 1048576).toFixed(1)}MB — the limit is 5MB.`)); return; }
+    if (file.size > IMAGE_READ_LIMIT)     { reject(new Error(`${file.name} is ${megabytes(file.size)} — too large to open.`)); return; }
+
     const reader = new FileReader();
     reader.onerror = () => reject(new Error(`${file.name} could not be read.`));
     reader.onload = () => {
-      const src = String(reader.result);
+      const original = String(reader.result);
       const probe = new Image();
-      // Natural width decides the starting size: a 64px icon and a screenshot
-      // should not both open at the same box.
-      probe.onload  = () => resolve({ src, width: Math.max(MIN_W, Math.min(360, probe.naturalWidth)) });
       probe.onerror = () => reject(new Error(`${file.name} is not a readable image.`));
-      probe.src = src;
+      probe.onload = () => {
+        // A GIF is never re-encoded: a canvas keeps one frame, and an animation
+        // silently reduced to a still is worse than a refusal.
+        const animated = file.type === "image/gif";
+        const scale = Math.min(1, IMAGE_MAX_EDGE / Math.max(probe.naturalWidth, probe.naturalHeight));
+        let src = original;
+
+        if (!animated && (scale < 1 || original.length > IMAGE_STORE_LIMIT)) {
+          const canvas = document.createElement("canvas");
+          canvas.width  = Math.max(1, Math.round(probe.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(probe.naturalHeight * scale));
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(probe, 0, 0, canvas.width, canvas.height);
+            // Same mime out as in, so a PNG keeps its transparency rather than
+            // gaining a black background on the way through JPEG.
+            const shrunk = canvas.toDataURL(file.type, 0.9);
+            if (shrunk.length < src.length) src = shrunk;
+          }
+        }
+
+        if (src.length > IMAGE_STORE_LIMIT) {
+          reject(new Error(
+            animated
+              ? `${file.name} is ${megabytes(src.length)} — animated GIFs cannot be shrunk, and the limit is 3MB.`
+              : `${file.name} is still ${megabytes(src.length)} after resizing — the limit is 3MB.`,
+          ));
+          return;
+        }
+
+        // Natural width decides the starting size: a 64px icon and a screenshot
+        // should not both open at the same box.
+        const naturalWidth = scale < 1 && src !== original ? probe.naturalWidth * scale : probe.naturalWidth;
+        resolve({ src, width: Math.max(MIN_W, Math.min(360, Math.round(naturalWidth))) });
+      };
+      probe.src = original;
     };
     reader.readAsDataURL(file);
   });
@@ -1044,6 +1158,7 @@ function WorkshopView({ board }: { board: Board }) {
           state={menu}
           onClose={() => setMenu(null)}
           onColor={color => handleUpdate(menu.card.id, { color })}
+          onAlign={align => handleUpdate(menu.card.id, { align })}
           onLink={() => setLinkSource(menu.card.id)}
           onSubIdea={() => addSubIdea(menu.card)}
           onReplaceImage={() => pickImage(menu.card.id)}

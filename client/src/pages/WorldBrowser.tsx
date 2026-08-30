@@ -33,7 +33,30 @@ import { motion, AnimatePresence } from "framer-motion";
 import AmbientBackdrop from "@/components/AmbientBackdrop";
 
 // ── Accent colour (matches ROME theme) ──────────────────────────────────────
-const ACC = "hsl(43 88% 60%)";
+// The constellation editor writes --accent-h/-s/-l onto documentElement.
+// Reading them here rather than hard-coding gold means recolouring the
+// constellation recolours the browser with it.
+const ACC = "hsl(var(--accent-h) var(--accent-s) var(--accent-l))";
+
+// The address bar shows a name, not a URL: hostname minus `www.` and minus the
+// public suffix, leaving the registrable label — `en.wikipedia.org` → WIKIPEDIA,
+// `docs.github.com` → GITHUB. Two-part suffixes are checked against a short list
+// rather than the full public-suffix list; the whole list is 200KB and the cost
+// of missing one is reading `co` for one session, not a bug.
+const TWO_PART_SUFFIX = /\.(co|com|net|org|gov|edu|ac|or|ne)\.[a-z]{2}$/i;
+function siteLabel(rawUrl: string): string {
+  if (!rawUrl) return "";
+  let host = "";
+  try { host = new URL(rawUrl).hostname; } catch { return ""; }
+  // An IP address has no name to show; give it back whole.
+  if (!host || /^\d+(\.\d+){3}$/.test(host)) return host;
+  host = host.replace(/^www\./i, "");
+  const stripped = TWO_PART_SUFFIX.test(host)
+    ? host.replace(TWO_PART_SUFFIX, "")
+    : host.replace(/\.[^.]+$/, "");
+  const parts = stripped.split(".").filter(Boolean);
+  return parts[parts.length - 1] ?? host;
+}
 
 // ── Surface opacity ─────────────────────────────────────────────────────────
 // How solid the browser is over the rest of ROME. The main process owns the
@@ -666,7 +689,7 @@ function DesktopWorldBrowser() {
           <span className="rome-browser-lattice-node" />
           <Globe size={13} color={ACC} style={{ position: "relative", zIndex: 1 }} />
         </div>
-        <div className="rome-browser-tab-strip" style={{ display: "flex", flex: 1, minWidth: 0, gap: 4, overflowX: "auto", overflowY: "hidden", position: "relative", zIndex: 1 }}>
+        <div className="rome-browser-tab-strip" style={{ display: "flex", flex: 1, minWidth: 0, gap: 2, overflowX: "auto", overflowY: "hidden", position: "relative", zIndex: 1 }}>
           {tabs.map(tab => (
             <button
               key={tab.id}
@@ -675,39 +698,57 @@ function DesktopWorldBrowser() {
               className="rome-browser-tab"
               style={{
                 height: 33, minWidth: 120, maxWidth: 210, flex: "0 1 190px",
-                border: `1px solid ${tab.active ? "hsl(43 45% 25%)" : "hsl(215 14% 13%)"}`,
-                borderTopColor: tab.active ? "hsl(43 62% 42%)" : "hsl(215 14% 15%)",
-                borderBottom: tab.active ? `1px solid ${surface}` : `1px solid ${border}`,
-                background: tab.active ? "linear-gradient(180deg, hsl(43 30% 10% / .72), hsl(222 15% 8%))" : "hsl(222 15% 6.5% / .92)",
-                color: tab.active ? "hsl(210 10% 76%)" : dim,
-                borderRadius: "4px 4px 0 0", padding: "0 8px", display: "flex",
+                // The trapezoid, its 1px outline and the active glow are all in
+                // CSS: the shape is a clip-path, and a clip-path cannot be
+                // expressed as a border. Only the type-dependent colour is here.
+                color: tab.active ? "hsl(var(--accent-h) 26% 82%)" : dim,
+                padding: "0 10px", display: "flex", position: "relative",
                 alignItems: "center", gap: 7, cursor: "pointer", minInlineSize: 0,
-                boxShadow: tab.active ? "inset 0 1px hsl(43 70% 55% / .08), 0 -5px 18px hsl(43 70% 45% / .035)" : "none",
               }}
               title={tab.title}
             >
+              {/* The fill, inset 1px inside the clipped parent. The 1px of
+                  parent showing around it IS the outline — a real border would
+                  be clipped away with the corners it is meant to draw. */}
+              <span className="rome-browser-tab-face" aria-hidden="true" />
               {tab.incognito ? <Shield size={11} color={cyan} /> : tab.favicon ? (
-                <img src={tab.favicon} alt="" style={{ width: 12, height: 12 }} />
-              ) : <Globe size={11} />}
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10, flex: 1, textAlign: "left" }}>
+                <img src={tab.favicon} alt="" style={{ width: 12, height: 12, position: "relative", zIndex: 1 }} />
+              ) : <Globe size={11} style={{ position: "relative", zIndex: 1 }} />}
+              <span className="rome-browser-tab-trace" aria-hidden="true" />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10, flex: 1, textAlign: "left", position: "relative", zIndex: 1 }}>
                 {tab.title || "New Tab"}
               </span>
-              {tab.loading && <Loader2 size={10} style={{ animation: "romeBrowserSpin 1s linear infinite" }} />}
+              {tab.loading && <Loader2 size={10} style={{ animation: "romeBrowserSpin 1s linear infinite", position: "relative", zIndex: 1 }} />}
               <span
                 role="button"
                 title="Close tab"
+                className="rome-browser-tab-close"
                 onClick={event => { event.stopPropagation(); run(bridge.closeTab(tab.id)); }}
-                style={{ width: 16, height: 16, display: "grid", placeItems: "center", borderRadius: 3 }}
+                style={{ width: 16, height: 16, display: "grid", placeItems: "center", borderRadius: 0, position: "relative", zIndex: 1 }}
               ><X size={10} /></span>
             </button>
           ))}
+          {/* Inside the strip, so the + always sits immediately right of the
+              last tab — exactly where the tab it creates will appear. */}
+          <button
+            title="New tab (⌘/Ctrl+T)"
+            onClick={() => run(bridge.createTab())}
+            className="rome-browser-new-tab"
+            style={{ width: 26, height: 33, flexShrink: 0, display: "grid", placeItems: "center", border: "1px solid transparent", borderRadius: 0, background: "transparent", color: ACC, cursor: "pointer" }}
+          ><Plus size={13} /></button>
+          {/* The rest of the strip is the new-tab target. It carries no visible
+              affordance of its own; hovering it lights the + to its left, which
+              is what names the action. Not a <button>: the + already is one, and
+              a second focusable control for the same command is noise in the tab
+              order. Aria-hidden for the same reason. */}
+          <div
+            className="rome-browser-tab-void"
+            aria-hidden="true"
+            title="New tab (⌘/Ctrl+T)"
+            onClick={() => run(bridge.createTab())}
+            style={{ flex: "1 1 auto", minWidth: 0, height: 33, cursor: "pointer" }}
+          />
         </div>
-        <button
-          title="New tab (⌘/Ctrl+T)"
-          onClick={() => run(bridge.createTab())}
-          className="rome-browser-new-tab"
-          style={{ ...iconButton, width: 62, height: 33, marginBottom: 0, gap: 5, display: "flex", borderColor: "hsl(43 35% 18%)", color: "hsl(43 48% 55%)", font: "8px DM Mono, monospace", letterSpacing: "0.11em", position: "relative", zIndex: 1 }}
-        ><Plus size={12} /> NEW</button>
         <button title="New incognito tab" onClick={() => run(bridge.createTab(undefined, "incognito"))} style={{ ...iconButton, height: 33, marginBottom: 0, position: "relative", zIndex: 1 }}><Shield size={12} /></button>
       </div>
 
@@ -720,8 +761,11 @@ function DesktopWorldBrowser() {
         </button>
         <button title="Home" onClick={() => active && run(bridge.home(active.id))} style={iconButton}><Home size={13} /></button>
 
-        <form onSubmit={submitAddress} style={{ flex: 1, minWidth: 160, height: 30, position: "relative", display: "flex", alignItems: "center" }}>
-          <div style={{ position: "absolute", left: 10, zIndex: 1, color: active?.url.startsWith("https://") ? "hsl(142 45% 48%)" : dim, display: "grid" }}>
+        {/* Address bar. At rest: the site's name, centred, in the accent. The
+            field itself only surfaces on hover or focus (see .rome-browser-omni). */}
+        <form onSubmit={submitAddress} className="rome-browser-omni" data-open={editingAddress ? "true" : "false"} style={{ flex: 1, minWidth: 160, height: 30, position: "relative", display: "flex", alignItems: "center" }}>
+          <span className="rome-browser-omni-name" aria-hidden="true">{siteLabel(active?.url ?? "") || "traverse"}</span>
+          <div className="rome-browser-omni-chrome" style={{ position: "absolute", left: 10, zIndex: 2, color: active?.url.startsWith("https://") ? "hsl(142 45% 48%)" : dim, display: "grid" }}>
             {active?.url.startsWith("https://") ? <LockKeyhole size={11} /> : <Search size={11} />}
           </div>
           <input
@@ -733,9 +777,10 @@ function DesktopWorldBrowser() {
             spellCheck={false}
             aria-label="Address or search"
             placeholder="Traverse the web…"
-            style={{ width: "100%", height: "100%", borderRadius: 4, border: `1px solid ${editingAddress ? "hsl(43 45% 28%)" : border}`, background: "hsl(222 18% 5.5%)", color: "hsl(210 10% 68%)", outline: "none", padding: "0 34px 0 30px", fontSize: 11, fontFamily: "DM Mono, monospace" }}
+            className="rome-browser-omni-input"
+            style={{ width: "100%", height: "100%", borderRadius: 0, border: `1px solid ${editingAddress ? "hsl(var(--accent-h) 88% 60% / .5)" : "hsl(var(--accent-h) 88% 60% / .18)"}`, background: "hsl(222 18% 5.5%)", color: "hsl(210 10% 68%)", outline: "none", padding: "0 34px 0 30px", fontSize: 11, fontFamily: "DM Mono, monospace", position: "relative", zIndex: 1 }}
           />
-          <button type="button" onClick={() => void toggleBookmark()} title={activeBookmarked ? "Remove bookmark" : "Bookmark page"} style={{ ...iconButton, position: "absolute", right: 1, width: 28, color: activeBookmarked ? ACC : dim }}>
+          <button type="button" onClick={() => void toggleBookmark()} title={activeBookmarked ? "Remove bookmark" : "Bookmark page"} className="rome-browser-omni-chrome" style={{ ...iconButton, position: "absolute", right: 1, width: 28, zIndex: 2, color: activeBookmarked ? ACC : dim }}>
             <Star size={12} fill={activeBookmarked ? ACC : "none"} />
           </button>
         </form>
@@ -782,7 +827,7 @@ function DesktopWorldBrowser() {
 
         {permission && (
           <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "hsl(222 18% 4% / 0.92)", zIndex: 20 }}>
-            <div style={{ width: 420, maxWidth: "calc(100% - 32px)", padding: 24, border: `1px solid hsl(43 38% 24%)`, background: surface, position: "relative", boxShadow: "0 18px 60px #0009" }}>
+            <div style={{ width: 420, maxWidth: "calc(100% - 32px)", padding: 24, border: `1px solid hsl(var(--accent-h) 38% 24%)`, background: surface, position: "relative", boxShadow: "0 18px 60px #0009" }}>
               <Corners />
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}><Shield size={16} color={ACC} /><span style={{ font: "11px Cinzel, serif", letterSpacing: ".13em", color: ACC, textTransform: "uppercase" }}>Site Permission</span></div>
               <div style={{ fontSize: 12, lineHeight: 1.7, color: "hsl(210 8% 65%)" }}><strong style={{ color: "hsl(210 10% 80%)" }}>{permission.origin}</strong> requests access to <strong style={{ color: cyan }}>{permission.permission}</strong>.</div>
@@ -860,19 +905,125 @@ function DesktopWorldBrowser() {
       <style>{`
         .rome-browser-lattice {
           background-image:
-            radial-gradient(circle at 18px 18px, hsl(43 70% 58% / .14) 0 1px, transparent 1.5px),
+            radial-gradient(circle at 18px 18px, hsl(var(--accent-h) 70% 58% / .14) 0 1px, transparent 1.5px),
             linear-gradient(112deg, transparent 0 13%, hsl(191 50% 45% / .025) 13.1% 13.2%, transparent 13.3% 100%);
           background-size: 88px 42px, 100% 100%;
         }
         .rome-browser-lattice-node {
           position: absolute; width: 4px; height: 4px; border-radius: 50%;
-          background: hsl(43 72% 57% / .75); box-shadow: 0 0 8px hsl(43 72% 55% / .3);
+          background: hsl(var(--accent-h) 72% 57% / .75); box-shadow: 0 0 8px hsl(var(--accent-h) 72% 55% / .3);
         }
         .rome-browser-tab-strip { scrollbar-width: none; }
         .rome-browser-tab-strip::-webkit-scrollbar { display: none; }
-        .rome-browser-tab, .rome-browser-new-tab { transition: border-color 140ms ease, background 140ms ease, color 140ms ease, box-shadow 140ms ease; }
-        .rome-browser-tab:hover:not([data-active="true"]) { border-color: hsl(43 24% 22%) !important; color: hsl(210 8% 58%) !important; background: hsl(222 14% 8%) !important; }
-        .rome-browser-new-tab:hover { border-color: hsl(43 48% 30%) !important; background: hsl(43 35% 10%) !important; color: ${ACC} !important; }
+        .rome-browser-tab, .rome-browser-new-tab, .rome-browser-tab-face { transition: background 160ms ease, background-color 160ms ease, color 160ms ease, opacity 160ms ease, filter 160ms ease; }
+        /* Trapezoid, drawn as two clipped layers. The parent is clipped to the
+           silhouette and painted the outline colour; .rome-browser-tab-face is
+           inset 1px and clipped to the same polygon, so the 1px of parent left
+           showing around it is the outline. A real border cannot do this — the
+           clip-path removes the corners the border is there to draw — and a
+           box-shadow outline is clipped away with them.
+
+           Slant is on the top edge only. Flaring the bottom instead would push
+           each tab's base into its neighbour's, and the strip scrolls, so tabs
+           cannot be given the negative margins that lets Chrome overlap them.
+
+           The two rakes are deliberately unequal. A symmetric trapezoid reads as
+           a shape someone drew; the near-vertical left edge with the raked right
+           reads as a direction — the strip runs left to right and the tabs lean
+           with it. It also keeps the favicon from being crowded by the taper. */
+        .rome-browser-tab {
+          --slant-l: 3px;
+          --slant-r: 11px;
+          border: 0; border-radius: 0;
+          clip-path: polygon(var(--slant-l) 0, calc(100% - var(--slant-r)) 0, 100% 100%, 0 100%);
+          background-color: hsl(var(--accent-h) var(--accent-s) 60% / .3);
+        }
+        /* Pin rail. Seven 1px ticks along the bottom edge, the same
+           surface-mount-chip vocabulary .rome-widget-shell uses for its flanks,
+           scaled to a 33px part. Painted as a background layer on the face so no
+           tab needs markup for it, and inside the face so the clip keeps them
+           off the slanted ends. */
+        .rome-browser-tab-face {
+          position: absolute; inset: 1px; z-index: 0; pointer-events: none;
+          clip-path: polygon(var(--slant-l) 0, calc(100% - var(--slant-r)) 0, 100% 100%, 0 100%);
+          background-color: hsl(222 16% 6% / .82);
+          background-image: repeating-linear-gradient(90deg, hsl(var(--accent-h) var(--accent-s) 60% / .3) 0 1px, transparent 1px 6px);
+          background-repeat: no-repeat;
+          background-size: 41px 3px;
+          background-position: 6px 100%;
+        }
+        /* A trace between the favicon and the title, rather than a rule: it
+           fades at both ends like .rome-widget-rule, so it reads as something
+           routed through the tab instead of a divider dropped on top of it. */
+        .rome-browser-tab-trace {
+          width: 1px; height: 13px; flex-shrink: 0; position: relative; z-index: 1;
+          background: linear-gradient(180deg, transparent, hsl(var(--accent-h) var(--accent-s) 60% / .45), transparent);
+        }
+        .rome-browser-tab:hover:not([data-active="true"]) { background-color: hsl(var(--accent-h) var(--accent-s) 60% / .5); }
+        .rome-browser-tab:hover:not([data-active="true"]) .rome-browser-tab-face { background-color: hsl(222 14% 8% / .86); }
+        /* The glow says "this tab is the page you are looking at". drop-shadow,
+           not box-shadow: box-shadow is painted on the border box and then
+           clipped off with the corners, while drop-shadow follows the element's
+           rendered alpha and so traces the trapezoid. It breathes rather than
+           sitting still so it reads as live without being loud; the period is
+           deliberately off the selected-node breath (3.8s) so the two never lock
+           into a beat. */
+        .rome-browser-tab[data-active="true"] {
+          background-color: hsl(var(--accent-h) var(--accent-s) 62% / .7);
+          animation: romeTabBreathe 3.6s ease-in-out infinite;
+        }
+        /* Active face: pins lit, plus a bus trace running off the top-left edge
+           and fading out — the tab is the one carrying signal. Layer order is
+           paint order, first on top: pins, trace, fill. */
+        .rome-browser-tab[data-active="true"] .rome-browser-tab-face {
+          background-color: hsl(var(--accent-h) 26% 10% / .96);
+          background-image:
+            repeating-linear-gradient(90deg, hsl(var(--accent-h) var(--accent-s) 66% / .8) 0 1px, transparent 1px 6px),
+            linear-gradient(90deg, hsl(var(--accent-h) var(--accent-s) 72% / .9), hsl(var(--accent-h) var(--accent-s) 72% / 0)),
+            linear-gradient(180deg, hsl(var(--accent-h) 26% 10% / .96), hsl(222 16% 6% / .9));
+          background-size: 41px 3px, 64px 1px, 100% 100%;
+          background-position: 6px 100%, 5px 0, 0 0;
+        }
+        @keyframes romeTabBreathe {
+          0%, 100% { filter: drop-shadow(0 0 4px hsl(var(--accent-h) var(--accent-s) 58% / .26)); }
+          50%      { filter: drop-shadow(0 0 10px hsl(var(--accent-h) var(--accent-s) 62% / .5)); }
+        }
+        .rome-browser-tab-close:hover { background: hsl(var(--accent-h) var(--accent-s) 60% / .2); color: ${ACC}; }
+        /* New tab: nothing at rest, so the lattice is only tabs. The empty strip
+           to its right is the click target (.rome-browser-tab-void), and hovering
+           that is what lights the + — the affordance names the action without
+           the pointer ever having to find a 26px button. :has() reaches back to
+           an earlier sibling, which no combinator can do. */
+        .rome-browser-new-tab { opacity: 0; }
+        .rome-browser-tab-strip:hover .rome-browser-new-tab { opacity: .42; }
+        .rome-browser-tab-strip:has(.rome-browser-tab-void:hover) .rome-browser-new-tab,
+        .rome-browser-new-tab:hover, .rome-browser-new-tab:focus-visible {
+          opacity: 1; color: ${ACC};
+          filter: drop-shadow(0 0 7px hsl(var(--accent-h) var(--accent-s) 62% / .75));
+        }
+        /* Address bar. At rest it is only the site's name; the field, the URL
+           and the controls are held at zero opacity. The name sits above the
+           input with pointer-events off, so hovering anywhere in the row still
+           reaches the input underneath. */
+        .rome-browser-omni-name {
+          position: absolute; inset: 0; z-index: 3; pointer-events: none;
+          display: grid; place-items: center;
+          font-family: 'Zen Dots', 'DM Mono', monospace;
+          font-size: 11px; letter-spacing: .2em; text-transform: uppercase;
+          color: hsl(var(--accent-h) 88% 60% / .84); text-shadow: 0 0 10px hsl(var(--accent-h) 85% 55% / .3);
+          overflow: hidden; white-space: nowrap; padding: 0 12px;
+          transition: opacity 170ms ease;
+        }
+        .rome-browser-omni-input, .rome-browser-omni-chrome { opacity: 0; transition: opacity 170ms ease; }
+        .rome-browser-omni:hover .rome-browser-omni-input,
+        .rome-browser-omni:focus-within .rome-browser-omni-input,
+        .rome-browser-omni[data-open="true"] .rome-browser-omni-input,
+        .rome-browser-omni:hover .rome-browser-omni-chrome,
+        .rome-browser-omni:focus-within .rome-browser-omni-chrome,
+        .rome-browser-omni[data-open="true"] .rome-browser-omni-chrome { opacity: 1; }
+        .rome-browser-omni:hover .rome-browser-omni-name,
+        .rome-browser-omni:focus-within .rome-browser-omni-name,
+        .rome-browser-omni[data-open="true"] .rome-browser-omni-name { opacity: 0; }
         /* Opacity slider — a lit hairline with a small square handle. Native
            range styling would put a 16px pill in a 20px status bar. */
         .rome-browser-opacity input[type="range"] {
@@ -880,15 +1031,15 @@ function DesktopWorldBrowser() {
           width: 64px; height: 10px; background: none; cursor: pointer; outline: none;
         }
         .rome-browser-opacity input[type="range"]::-webkit-slider-runnable-track {
-          height: 1px; background: hsl(43 30% 26%); box-shadow: 0 0 5px hsl(43 60% 45% / .35);
+          height: 1px; background: hsl(var(--accent-h) 30% 26%); box-shadow: 0 0 5px hsl(var(--accent-h) 60% 45% / .35);
         }
         .rome-browser-opacity input[type="range"]::-webkit-slider-thumb {
           -webkit-appearance: none; appearance: none;
           width: 5px; height: 9px; margin-top: -4px; border-radius: 0;
-          background: ${ACC}; box-shadow: 0 0 6px hsl(43 85% 58% / .7);
+          background: ${ACC}; box-shadow: 0 0 6px hsl(var(--accent-h) 85% 58% / .7);
         }
-        .rome-browser-opacity input[type="range"]:hover::-webkit-slider-thumb { box-shadow: 0 0 9px hsl(43 90% 62% / .9); }
-        .rome-browser-opacity input[type="range"]::-moz-range-track { height: 1px; background: hsl(43 30% 26%); }
+        .rome-browser-opacity input[type="range"]:hover::-webkit-slider-thumb { box-shadow: 0 0 9px hsl(var(--accent-h) 90% 62% / .9); }
+        .rome-browser-opacity input[type="range"]::-moz-range-track { height: 1px; background: hsl(var(--accent-h) 30% 26%); }
         .rome-browser-opacity input[type="range"]::-moz-range-thumb {
           width: 5px; height: 9px; border: 0; border-radius: 0; background: ${ACC};
         }
@@ -901,7 +1052,7 @@ function DesktopWorldBrowser() {
         }
         .rome-browser-textcolor input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
         .rome-browser-textcolor input[type="color"]::-webkit-color-swatch {
-          border: 1px solid hsl(43 30% 30%); border-radius: 50%;
+          border: 1px solid hsl(var(--accent-h) 30% 30%); border-radius: 50%;
         }
         .rome-browser-textcolor-presets {
           display: flex; align-items: center; gap: 3; overflow: hidden;
@@ -915,9 +1066,9 @@ function DesktopWorldBrowser() {
           width: 9px; height: 9px; margin-right: 3px; padding: 0; border-radius: 50%;
           border: 1px solid hsl(220 12% 22%); cursor: pointer;
         }
-        .rome-browser-textcolor-presets button:hover { border-color: hsl(43 60% 50%); }
+        .rome-browser-textcolor-presets button:hover { border-color: hsl(var(--accent-h) 60% 50%); }
         .rome-browser-textcolor-presets button[data-on="true"] {
-          border-color: ${ACC}; box-shadow: 0 0 6px hsl(43 90% 60% / .7);
+          border-color: ${ACC}; box-shadow: 0 0 6px hsl(var(--accent-h) 90% 60% / .7);
         }
         .rome-browser-textcolor-clear {
           border: 0; background: none; padding: 0 1px; cursor: pointer;
@@ -951,7 +1102,7 @@ function BrowserCenterState({ icon, title, detail, actionLabel, onAction }: { ic
 }
 
 function BrowserTextButton({ label, onClick, accent = false }: { label: string; onClick: () => void; accent?: boolean }) {
-  return <button onClick={onClick} style={{ height: 30, padding: "0 13px", border: `1px solid ${accent ? "hsl(43 45% 30%)" : "hsl(220 12% 18%)"}`, borderRadius: 3, background: accent ? "hsl(43 40% 12%)" : "hsl(222 15% 7%)", color: accent ? ACC : "hsl(220 8% 55%)", cursor: "pointer", font: "9px DM Mono, monospace", letterSpacing: ".08em", textTransform: "uppercase" }}>{label}</button>;
+  return <button onClick={onClick} style={{ height: 30, padding: "0 13px", border: `1px solid ${accent ? "hsl(var(--accent-h) 45% 30%)" : "hsl(220 12% 18%)"}`, borderRadius: 3, background: accent ? "hsl(var(--accent-h) 40% 12%)" : "hsl(222 15% 7%)", color: accent ? ACC : "hsl(220 8% 55%)", cursor: "pointer", font: "9px DM Mono, monospace", letterSpacing: ".08em", textTransform: "uppercase" }}>{label}</button>;
 }
 
 function BrowserPanel({ kind, history, bookmarks, downloads, onNavigate, onClearHistory, onOpenDownload, onShowDownload, onClose }: {

@@ -6,7 +6,8 @@
  * and renders the active board's content as children.
  */
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Plus, Trash2, ChevronLeft, PenLine, Check, Loader2, BookOpen, FolderPlus, Folder as FolderIcon, X } from "lucide-react";
@@ -58,6 +59,83 @@ const CORE_COLORS = [
   "hsl(210 80% 66%)",
 ] as const;
 
+/** Right-click menu for a core node on the graph. */
+function CoreMenu({
+  folder, x, y, onClose, onColor, onRename, onDelete,
+}: {
+  folder: BoardFolder;
+  x: number;
+  y: number;
+  onClose: () => void;
+  onColor: (color: string) => void;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Hit-tested rather than trusting handler order: the graph stops pointer
+    // events on its nodes, so a capture-phase listener is the only one certain
+    // to run — and it would otherwise close the menu before a click landed.
+    const dismiss = (e: MouseEvent) => {
+      if (menuRef.current?.contains(e.target as Node)) return;
+      onClose();
+    };
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("mousedown", dismiss, true);
+    window.addEventListener("keydown", escape);
+    return () => { window.removeEventListener("mousedown", dismiss, true); window.removeEventListener("keydown", escape); };
+  }, [onClose]);
+
+  const item = (text: string, Icon: typeof PenLine, action: () => void, danger = false) => (
+    <button
+      onClick={() => { action(); onClose(); }}
+      className={cn(
+        "flex w-full items-center gap-2 px-2.5 py-1.5 text-left font-mono text-[9px] uppercase tracking-[0.1em] transition-colors",
+        danger ? "text-rose-400/70 hover:bg-rose-500/10 hover:text-rose-300" : "text-muted-foreground hover:bg-white/5 hover:text-foreground",
+      )}
+    >
+      <Icon className="h-3 w-3" />
+      {text}
+    </button>
+  );
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      style={{
+        position: "fixed",
+        left: Math.min(x, window.innerWidth - 190),
+        top:  Math.min(y, window.innerHeight - 150),
+        zIndex: 400,
+        background: "hsl(222 26% 6% / 0.97)",
+        border: `1px solid ${folder.color || "hsl(220 15% 22%)"}`,
+        backdropFilter: "blur(10px)",
+        minWidth: 170,
+      }}
+      onContextMenu={e => e.preventDefault()}
+    >
+      <div className="flex items-center gap-1.5 border-b px-2.5 py-2" style={{ borderColor: folder.color || "hsl(220 15% 22%)" }}>
+        {CORE_COLORS.map(color => (
+          <button
+            key={color}
+            onClick={() => { onColor(color); onClose(); }}
+            className={cn(
+              "h-3.5 w-3.5 border border-black/40 transition-transform hover:scale-125",
+              folder.color === color && "ring-1 ring-white/50",
+            )}
+            style={{ background: color }}
+            title="Core colour"
+          />
+        ))}
+      </div>
+      {item("Rename core", PenLine, onRename)}
+      {item("Delete core", Trash2, onDelete, true)}
+    </div>,
+    document.body,
+  );
+}
+
 export default function BoardShell({ type, label, emptyIcon, children }: Props) {
   const qc = useQueryClient();
   const [activeBoardId,    setActiveBoardId]    = useState<number | null>(null);
@@ -66,6 +144,7 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
   const [editingKey,       setEditingKey]       = useState<string | null>(null);
   const [editTitle,        setEditTitle]        = useState("");
   const [collapsed,        setCollapsed]        = useState(false);
+  const [coreMenu,         setCoreMenu]         = useState<{ folder: BoardFolder; x: number; y: number } | null>(null);
 
   const { data: boards = [], isLoading } = useQuery<Board[]>({
     queryKey: ["/boards", type],
@@ -114,8 +193,9 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
     },
   });
 
-  const renameFolder = useMutation({
-    mutationFn: ({ id, name }: { id: number; name: string }) => apiRequest("PATCH", `/api/board-folders/${id}`, { name }),
+  const updateFolder = useMutation({
+    mutationFn: ({ id, patch }: { id: number; patch: { name?: string; color?: string } }) =>
+      apiRequest("PATCH", `/api/board-folders/${id}`, patch),
     onSuccess: invalidateCores,
   });
 
@@ -161,8 +241,8 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
     const [kind, rawId] = key.split(":");
     const id = Number(rawId);
     if (kind === "board")  renameBoard.mutate({ id, title: value });
-    if (kind === "folder") renameFolder.mutate({ id, name: value });
-  }, [editingKey, editTitle, renameBoard, renameFolder]);
+    if (kind === "folder") updateFolder.mutate({ id, patch: { name: value } });
+  }, [editingKey, editTitle, renameBoard, updateFolder]);
 
   const activeBoard  = boards.find(b => b.id === activeBoardId) ?? null;
   const graphEnabled = type === "idea_workshop" || type === "component_board";
@@ -249,6 +329,15 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
             : activeBoardId !== null  ? `board:${activeBoardId}`
             : null
           }
+          onNodeContextMenu={(id, e) => {
+            // Unfiled is not a row: there is nothing to recolour, rename or
+            // delete, so it gets no menu rather than a menu of dead items.
+            if (!id.startsWith("folder:")) return;
+            const folder = folderById.get(Number(id.slice(7)));
+            if (!folder) return;
+            setSelectedFolderId(folder.id);
+            setCoreMenu({ folder, x: e.clientX, y: e.clientY });
+          }}
           onSelect={id => {
             if (id.startsWith("board:")) {
               setActiveBoardId(Number(id.slice(6)));
@@ -519,6 +608,18 @@ export default function BoardShell({ type, label, emptyIcon, children }: Props) 
           </div>
         )}
       </div>
+      )}
+
+      {coreMenu && (
+        <CoreMenu
+          folder={coreMenu.folder}
+          x={coreMenu.x}
+          y={coreMenu.y}
+          onClose={() => setCoreMenu(null)}
+          onColor={color => updateFolder.mutate({ id: coreMenu.folder.id, patch: { color } })}
+          onRename={() => { setEditingKey(`folder:${coreMenu.folder.id}`); setEditTitle(coreMenu.folder.name); }}
+          onDelete={() => deleteFolder.mutate(coreMenu.folder.id)}
+        />
       )}
 
       {/* ── Main content ──────────────────────────────────────────────── */}

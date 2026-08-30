@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, Focus, Loader2, RotateCcw, Search, X } from "lucide-react";
+import { ChevronLeft, Focus, Loader2, Minus, Plus, RotateCcw, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface ConstellationNavNode {
@@ -36,6 +36,7 @@ interface NavigatorProps {
   groups?: ConstellationNavGroup[];
   activeId?: string | null;
   onSelect: (id: string) => void;
+  onNodeContextMenu?: (id: string, e: React.MouseEvent) => void;
   emptyLabel?: string;
   className?: string;
 }
@@ -91,6 +92,7 @@ export function ConstellationNavigator({
   groups = [],
   activeId,
   onSelect,
+  onNodeContextMenu,
   emptyLabel = "No nodes yet",
   className,
 }: NavigatorProps) {
@@ -343,10 +345,8 @@ export function ConstellationNavigator({
     e.currentTarget.releasePointerCapture(e.pointerId);
   };
 
-  const wheelCanvas = (e: React.WheelEvent<SVGSVGElement>) => {
-    e.preventDefault();
-    const next = Math.max(0.62, Math.min(2.2, zoom * (e.deltaY > 0 ? 0.9 : 1.1)));
-    setZoom(next);
+  const stepZoom = (direction: 1 | -1) => {
+    setZoom(current => Math.max(0.62, Math.min(2.2, current * (direction > 0 ? 1.18 : 1 / 1.18))));
   };
 
   const toggleGroup = (id: string) => {
@@ -386,6 +386,25 @@ export function ConstellationNavigator({
           <Focus className="mr-1 h-3 w-3" />
           {DEPTHS[depthIndex] === Infinity ? "ALL" : DEPTHS[depthIndex]}
         </button>
+        <div className="flex h-7 items-center rounded-sm border border-[hsl(220_18%_15%)] bg-[hsl(222_20%_7%/0.9)]">
+          <button
+            onClick={() => stepZoom(-1)}
+            disabled={zoom <= 0.63}
+            className="flex h-full w-6 items-center justify-center text-muted-foreground transition-colors hover:text-gold-400 disabled:opacity-25"
+            title="Zoom out"
+          >
+            <Minus className="h-3 w-3" />
+          </button>
+          <span className="w-px self-stretch bg-[hsl(220_18%_15%)]" />
+          <button
+            onClick={() => stepZoom(1)}
+            disabled={zoom >= 2.19}
+            className="flex h-full w-6 items-center justify-center text-muted-foreground transition-colors hover:text-gold-400 disabled:opacity-25"
+            title="Zoom in"
+          >
+            <Plus className="h-3 w-3" />
+          </button>
+        </div>
         <button
           onClick={resetView}
           className="flex h-7 w-7 items-center justify-center rounded-sm border border-[hsl(220_18%_15%)] bg-[hsl(222_20%_7%/0.9)] text-muted-foreground hover:border-gold-500/30 hover:text-gold-400"
@@ -409,7 +428,6 @@ export function ConstellationNavigator({
           onPointerMove={pointerMoveCanvas}
           onPointerUp={pointerUpCanvas}
           onPointerCancel={pointerUpCanvas}
-          onWheel={wheelCanvas}
           role="tree"
           aria-label="Constellation navigation graph"
         >
@@ -476,6 +494,15 @@ export function ConstellationNavigator({
                   onPointerCancel={() => { dragRef.current = null; }}
                   onMouseEnter={() => setHoveredId(node.id)}
                   onMouseLeave={() => setHoveredId(null)}
+                  onContextMenu={e => {
+                    if (!onNodeContextMenu) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    // A right-press already fixed this node under the pointer;
+                    // leaving it fixed would look like the menu moved it.
+                    dragRef.current = null;
+                    onNodeContextMenu(node.id, e);
+                  }}
                   onKeyDown={e => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();

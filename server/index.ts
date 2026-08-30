@@ -12,8 +12,14 @@ declare module "http" {
   }
 }
 
+// Idea Workshop image cards carry a data: URL in the request body, and the
+// body-parser default of 100kb rejected every screenshot with "request entity
+// too large". The ceiling is deliberately above the client's own store limit so
+// the message a user sees comes from the app, naming the file and its size,
+// rather than from Express.
 app.use(
   express.json({
+    limit: "12mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
