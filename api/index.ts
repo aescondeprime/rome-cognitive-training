@@ -606,9 +606,10 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       const body = await readBody(req);
       const now  = Date.now();
       const { type = "idea_workshop", name = "New Core", color = "cyan" } = body;
-      const { data: folder } = await sb.from("board_folders")
+      const { data: folder, error } = await sb.from("board_folders")
         .insert({ user_id: user.id, type, name: String(name).trim() || "New Core", color, created_at: now, updated_at: now })
         .select().single();
+      if (error) return json(res, 500, { message: error.message });
       return json(res, 200, folder ?? {});
     }
 
@@ -708,8 +709,9 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           const user = await getActiveUser(req, sb);
           const body = await readBody(req);
           const now  = Date.now();
-          const { content = "", color = "violet", pos_x = 100, pos_y = 100, width = 0, height = 0, tags = "", energy = 3, kind = "text", parent_id = null, src = null } = body;
-          const { data: card } = await sb.from("idea_cards").insert({ board_id: boardId, user_id: user.id, content, color, pos_x, pos_y, width, height, tags, energy, kind: kind === "image" ? "image" : "text", parent_id, src, created_at: now, updated_at: now }).select().single();
+          const { content = "", color = "violet", pos_x = 100, pos_y = 100, width = 0, height = 0, tags = "", energy = 3, kind = "text", parent_id = null, src = null, align = "center" } = body;
+          const { data: card, error } = await sb.from("idea_cards").insert({ board_id: boardId, user_id: user.id, content, color, pos_x, pos_y, width, height, tags, energy, kind: kind === "image" ? "image" : "text", parent_id, src, align, created_at: now, updated_at: now }).select().single();
+          if (error) return json(res, 500, { message: error.message });
           return json(res, 200, card ?? {});
         }
       }
@@ -722,8 +724,9 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
-          ["content","color","pos_x","pos_y","width","height","tags","energy","kind","parent_id","src"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
-          await sb.from("idea_cards").update(patch).eq("id", id);
+          ["content","color","pos_x","pos_y","width","height","tags","energy","kind","parent_id","src","align"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          const { error } = await sb.from("idea_cards").update(patch).eq("id", id);
+          if (error) return json(res, 500, { message: error.message });
           return json(res, 200, { ok: true });
         }
         if (method === "DELETE") {

@@ -80,4 +80,11 @@ alter table public.idea_cards
 
 create index if not exists idea_cards_parent_idx on public.idea_cards (parent_id);
 
+-- align is a card-level property, not a property of a selection, so it lives on
+-- the row rather than inside the content HTML. Centre is the default because a
+-- card is a label far more often than it is a paragraph.
+
+alter table public.idea_cards
+  add column if not exists align text not null default 'center';
+
 commit;

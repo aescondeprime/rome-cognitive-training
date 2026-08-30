@@ -209,6 +209,7 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
       height: body.height ?? 0, tags: body.tags ?? "", energy: body.energy ?? 3,
       kind: body.kind === "image" ? "image" : "text",
       parent_id: body.parent_id ?? null, src: body.src ?? null,
+      align: body.align ?? "center",
       created_at: now, updated_at: now,
     }).select().single();
     ensureNoError(result);
@@ -217,7 +218,7 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
 
   app.patch("/api/ideas/:id", route(async (req, res) => {
     const ownerId = await userId(req);
-    const patch = { ...pick(req.body, ["content", "color", "pos_x", "pos_y", "width", "height", "tags", "energy", "kind", "parent_id", "src"]), updated_at: Date.now() };
+    const patch = { ...pick(req.body, ["content", "color", "pos_x", "pos_y", "width", "height", "tags", "energy", "kind", "parent_id", "src", "align"]), updated_at: Date.now() };
     const result = await sb.from("idea_cards").update(patch).eq("id", Number(req.params.id)).eq("user_id", ownerId);
     ensureNoError(result);
     res.json({ ok: true });
