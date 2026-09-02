@@ -20,6 +20,9 @@ const state = {
   rayColor: "43 88% 60%",
   // Ray brightness multiplier — 1.0 = default, 0.2 = dim, 2.0 = bright
   rayBrightness: 1.0,
+  // How many surfaces are currently asking the ray to stay off. A counter
+  // rather than a flag, so two of them cannot uncover each other.
+  suppressors: 0,
   started: false,
   rafHandle: 0,
 };
@@ -114,6 +117,29 @@ export function setRayBrightness(v: number) {
 /** Get current brightness multiplier */
 export function getRayBrightness(): number {
   return state.rayBrightness;
+}
+
+/**
+ * Ask the ray to stay off while something is on screen that it would sit on
+ * top of — a rendered document page, above all, where the source blob lands as
+ * a bright smear over white paper.
+ *
+ * Deliberately *not* `setRayBrightness(0)`: that is the user's own dial, saved
+ * in their constellation layout, and borrowing it would quietly overwrite a
+ * setting. Returns its own release, so a caller is an ordinary effect.
+ */
+export function suppressRay(): () => void {
+  state.suppressors += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    state.suppressors = Math.max(0, state.suppressors - 1);
+  };
+}
+
+export function rayIsSuppressed(): boolean {
+  return state.suppressors > 0;
 }
 
 /** Returns a parsed { h, s, l } object from the stored HSL string */

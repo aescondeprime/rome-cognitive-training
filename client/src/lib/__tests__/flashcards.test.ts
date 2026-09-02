@@ -18,7 +18,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   alreadyArchived, archivableFrom, cardFromQuestion, cardTags, DEFAULT_FOLDER,
-  foldersOf, isDue, type Flashcard,
+  describeInterval, foldersOf, isDue, type Flashcard,
 } from "../flashcards";
 import type { Graded, Question, Round } from "../recallRound";
 
@@ -126,8 +126,20 @@ test("tags survive a malformed column", () => {
   assert.deepEqual(cardTags(card({ tags: null })), []);
 });
 
-test("due is decided by the schedule the review endpoint owns", () => {
+test("due is decided by the schedule, and no schedule is never due", () => {
   assert.equal(isDue(card({ nextReviewAt: 500 }), 1000), true);
   assert.equal(isDue(card({ nextReviewAt: 2000 }), 1000), false);
-  assert.equal(isDue(card({ nextReviewAt: null }), 1000), true, "a card never reviewed is due");
+  // A null used to read as "never reviewed, therefore due". It now means the
+  // card has no interval at all, which is the difference between a card that
+  // waits in the Archive and one that appears over whatever you are doing.
+  assert.equal(isDue(card({ nextReviewAt: null }), 1000), false, "a card with no schedule is never due");
+});
+
+test("an interval reads as itself, in whatever unit fits", () => {
+  assert.equal(describeInterval(null), "no interval");
+  assert.equal(describeInterval(1), "daily");
+  assert.equal(describeInterval(7), "weekly");
+  assert.equal(describeInterval(14), "every 2 weeks");
+  assert.equal(describeInterval(1 / 24), "every 1h");
+  assert.equal(describeInterval(1 / 24 / 4), "every 15 min");
 });

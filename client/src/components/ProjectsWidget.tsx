@@ -13,6 +13,7 @@ import {
   useWidgetYield,
   widgetYieldStyle,
   WidgetScaleHandle,
+  WidgetPinButton,
   type FocusRect,
 } from "./WidgetChrome";
 
@@ -36,6 +37,9 @@ interface Props {
   /** Set while the camera has flown to a node; `focus` is the space it claims. */
   zoomed?: boolean;
   focus?: FocusRect | null;
+  /** Pinned widgets stay on screen away from the constellation. */
+  pinned?: boolean;
+  onPinnedChange?: (pinned: boolean) => void;
   onClose: () => void;  // closes the constellation overlay
 }
 
@@ -67,7 +71,7 @@ function HexIcon({ active }: { active?: boolean }) {
   );
 }
 
-export default function ProjectsWidget({ pos, collapsed, onPosChange, onCollapsedChange, onClose, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null }: Props) {
+export default function ProjectsWidget({ pos, collapsed, onPosChange, onCollapsedChange, onClose, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null, pinned = false, onPinnedChange }: Props) {
   const DEFAULT_X = window.innerWidth - W - 24;
   const DEFAULT_Y = 340; // below the clock widget
   const x = pos?.x ?? DEFAULT_X;
@@ -203,7 +207,9 @@ export default function ProjectsWidget({ pos, collapsed, onPosChange, onCollapse
             )}
           </div>
 
-          {/* Collapse toggle */}
+          {/* Pin + collapse */}
+          <div style={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <WidgetPinButton pinned={pinned} onPinnedChange={onPinnedChange} />
           <button
             data-nodrag="1"
             onClick={() => onCollapsedChange(!collapsed)}
@@ -220,6 +226,7 @@ export default function ProjectsWidget({ pos, collapsed, onPosChange, onCollapse
               <path d="M2 8 L6 4 L10 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
           </button>
+          </div>
         </div>
 
         {/* ── Body ─────────────────────────────────────────────────────── */}

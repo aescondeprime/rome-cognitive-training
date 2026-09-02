@@ -13,6 +13,11 @@ contextBridge.exposeInMainWorld("romeDesktop", {
   getDbPath: () => ipcRenderer.invoke("get-db-path"),
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
   isDesktop: true,
+  forge: {
+    converterStatus: () => ipcRenderer.invoke("rome:forge:converter-status"),
+    convertToPdf: (name: string, bytes: Uint8Array) =>
+      ipcRenderer.invoke("rome:forge:convert-to-pdf", name, bytes),
+  },
   akira: {
     getStatus: () => ipcRenderer.invoke("rome:akira:status"),
     activate: (viaWakeWord?: boolean) => ipcRenderer.invoke("rome:akira:activate", viaWakeWord),

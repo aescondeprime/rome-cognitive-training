@@ -1085,6 +1085,18 @@ export default function ResearchLab() {
   const [activeBoardId, setActiveBoardId] = useState<number | null>(null);
   const activeBoard = boards.find(b => b.id === activeBoardId) ?? null;
 
+  // Deep-link, the same handshake `BoardShell` uses: whoever navigated here
+  // left a board id behind, and it is consumed once so a later visit does not
+  // re-open it. The Command Center and the Projects widget both arrive this way.
+  useEffect(() => {
+    if (boards.length === 0) return;
+    const pending = sessionStorage.getItem("rome_open_board_id");
+    if (!pending) return;
+    sessionStorage.removeItem("rome_open_board_id");
+    const id = parseInt(pending, 10);
+    if (boards.some(b => b.id === id)) setActiveBoardId(id);
+  }, [boards]);
+
   // Folder state lives in Sidebar but we need it to add a board to a folder after creation
   const pendingFolder = useRef<string>("");
 

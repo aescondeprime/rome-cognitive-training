@@ -25,6 +25,14 @@
  * promise, so reading starts at once and generation runs against the reading
  * clock rather than in front of it. If the clock runs out first the passage
  * stays up and says so, rather than showing an empty question.
+ *
+ * **The corpus is the note, and only the note.** Sources are documents to read
+ * and annotate now, not material for a model, so there is nothing to choose
+ * between and no corpus tab. The note is read from the shared pointer in
+ * `activeNote` rather than handed over once on entry, which is what makes the
+ * run follow the Forge instead of naming a note you have since left. A run
+ * already in progress keeps the note it started on — swapping material under a
+ * live ledger would make coverage mean two things — and reports the drift.
  */
 
 import {
@@ -32,16 +40,14 @@ import {
 } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  academiaStore, type AcademiaNote, type AcademiaSource, type ClaimAlignment,
-  type LedgerEntry, type QuestionBank, type RecallArchive, type SourceDigest, type SourceLedger,
+  academiaStore, type AcademiaNote, type LedgerEntry, type QuestionBank, type SourceLedger,
 } from "@/lib/academiaStore";
-import { compareArchive, composeGapNote, gatherClaims, type CompareProgress } from "@/lib/recallCompare";
+import { getActiveNoteId, onActiveNoteChange } from "@/lib/activeNote";
 import { CHUNKING_VERSION, chunkSource, type Chunk } from "@/lib/textChunks";
 import { coverageOf, emptyLedger, pickNextChunk, pruneLedger, recordRound, type Coverage } from "@/lib/recallLedger";
 import {
   gradeObjective, loadRecallConfig, RoundQueue, saveRecallConfig, secondsToAnswer, secondsToRead,
-  type Answer, type Graded, type PassageAnchor, type PendingRound, type Question,
-  type RecallConfig, type Round, type Verdict,
+  type Answer, type Graded, type PendingRound, type RecallConfig, type Round, type Verdict,
 } from "@/lib/recallRound";
 import { createMockGenerator } from "@/lib/recallGenerator";
 import { createLlmGenerator } from "@/lib/recallLlm";
@@ -61,22 +67,12 @@ export type RecallPhase =
   | "grading"
   | "review"
   | "summary"
-  | "archive"     // writing down what you can recall, untimed, sources hidden
-  | "comparing"   // holding each claim up against what you wrote
-  | "compare"     // the result, with the gaps to confirm
-  | "manual"      // no read to compare against: the material beside what you wrote
   | "error";
-
-export type Corpus = "sources" | "note";
-
-export interface RecallHandoff { sourceIds: string[]; noteId?: string }
 
 /** A note is chunked under its own id, so it gets its own ledger. */
 export function noteCorpusId(noteId: string): string {
   return `note:${noteId}`;
 }
-
-export const RECALL_SESSION_KEY = "rome.academia.recall.session";
 
 interface RoundRecord { round: Round; graded: Graded[] }
 
@@ -89,20 +85,27 @@ export interface RecallSessionApi {
   config: RecallConfig;
   setConfig: (config: RecallConfig) => void;
 
-  corpus: Corpus;
-  setCorpus: (corpus: Corpus) => void;
-  sources: AcademiaSource[];
+  /** The note the run is over. Null until the material has loaded. */
   note: AcademiaNote | null;
   chunks: Chunk[];
   corpusLabel: string;
   coverage: Coverage;
-  anchored: number;
   banked: number;
+  /**
+   * The Forge has moved to another note while a run is in progress.
+   *
+   * Named rather than acted on: ending someone's run because they opened a
+   * different note in another tab would be worse than saying so.
+   */
+  noteDrift: string | null;
+  /** Take the drift: end this run and start over on the note now open. */
+  followNote: () => void;
 
   engine: "model" | "mock";
   setEngine: (engine: "model" | "mock") => void;
   modelReady: boolean;
   model: string;
+  llmConfig: LocalLLMConfig;
 
   /** The passage on screen, known before its questions. */
   passage: Chunk | null;
@@ -125,21 +128,6 @@ export interface RecallSessionApi {
   endSession: () => void;
   override: (index: number) => void;
   reset: () => void;
-
-  /* The Archive, and what came of it. */
-  archiveText: string;
-  setArchiveText: (text: string) => void;
-  alignments: ClaimAlignment[];
-  compareProgress: CompareProgress | null;
-  claimCount: number;
-  gapNoteId: string | null;
-  openArchive: () => void;
-  runCompare: () => void;
-  toggleGap: (claim: string) => void;
-  makeGapNote: () => void;
-  /** Mark a passage, or a phrase from one, as something you missed. */
-  addManualGap: (claim: string, chunk: Chunk) => void;
-  removeGap: (claim: string) => void;
   /** End whatever is running and go straight back to a startable state. */
   restart: () => void;
 
@@ -160,11 +148,9 @@ export function RecallSessionProvider({ children }: { children: ReactNode }) {
   const [failures, setFailures] = useState<string[]>([]);
   const [config, setConfigState] = useState<RecallConfig>(() => loadRecallConfig());
 
-  const [sources, setSources] = useState<AcademiaSource[]>([]);
   const [note, setNote] = useState<AcademiaNote | null>(null);
-  const [corpus, setCorpusState] = useState<Corpus>("sources");
+  const [openNote, setOpenNote] = useState<AcademiaNote | null>(null);
   const [ledgers, setLedgers] = useState<Record<string, SourceLedger>>({});
-  const [digests, setDigests] = useState<SourceDigest[]>([]);
   const [banks, setBanks] = useState<QuestionBank[]>([]);
 
   const [llmCfg, setLlmCfg] = useState<LocalLLMConfig>(() => loadLLMConfig());
@@ -178,13 +164,6 @@ export function RecallSessionProvider({ children }: { children: ReactNode }) {
   const [history, setHistory] = useState<RoundRecord[]>([]);
   const [buffered, setBuffered] = useState(0);
   const [attached, setAttached] = useState(false);
-  const [archiveText, setArchiveTextState] = useState("");
-  const [alignments, setAlignments] = useState<ClaimAlignment[]>([]);
-  const [compareProgress, setCompareProgress] = useState<CompareProgress | null>(null);
-  const [gapNoteId, setGapNoteId] = useState<string | null>(null);
-  const archiveIdRef = useRef<string>("");
-  const compareAbortRef = useRef<AbortController | null>(null);
-  const saveArchiveRef = useRef<number | null>(null);
 
   const [deadlineAt, setDeadlineAt] = useState<number | null>(null);
   const [stepSeconds, setStepSeconds] = useState(0);
@@ -202,52 +181,28 @@ export function RecallSessionProvider({ children }: { children: ReactNode }) {
 
   /* ── Material ────────────────────────────────────────────────────── */
 
-  const sourceChunks = useMemo(
-    () => sources.flatMap(source => chunkSource(source.id, source.text, { targetChars: config.chunkTargetChars })),
-    [sources, config.chunkTargetChars],
-  );
-  const noteChunks = useMemo(
+  const chunks = useMemo(
     () => note?.content.trim() ? chunkSource(noteCorpusId(note.id), note.content, { targetChars: config.chunkTargetChars }) : [],
     [note, config.chunkTargetChars],
   );
-  const chunks = corpus === "sources" ? sourceChunks : noteChunks;
-  const corpusIds = useMemo(
-    () => corpus === "sources" ? sources.map(source => source.id) : note ? [noteCorpusId(note.id)] : [],
-    [corpus, sources, note],
-  );
-  const corpusLabel = corpus === "sources"
-    ? sources.map(source => source.name).join(" · ") || "—"
-    : note?.title || "Untitled Note";
+  const corpusId = note ? noteCorpusId(note.id) : "";
+  const corpusLabel = note?.title || "Untitled Note";
 
   const pooled = useMemo<SourceLedger>(() => {
-    const entries: Record<string, LedgerEntry> = {};
-    for (const id of corpusIds) {
-      const ledger = ledgers[id];
-      // A ledger measured at a different excerpt size was measuring different
-      // passages, so it is ignored rather than mixed in.
-      if (!ledger || ledger.targetChars !== config.chunkTargetChars || ledger.chunkingVersion !== CHUNKING_VERSION) continue;
-      Object.assign(entries, ledger.entries);
-    }
+    const stored = corpusId ? ledgers[corpusId] : undefined;
+    // A ledger measured at a different excerpt size was measuring different
+    // passages, so it is ignored rather than mixed in.
+    const entries: Record<string, LedgerEntry> =
+      stored && stored.targetChars === config.chunkTargetChars && stored.chunkingVersion === CHUNKING_VERSION
+        ? stored.entries
+        : {};
     return { id: "pooled", profileId: profileId ?? 0, chunkingVersion: CHUNKING_VERSION, targetChars: config.chunkTargetChars, entries, updatedAt: 0 };
-  }, [ledgers, corpusIds, profileId, config.chunkTargetChars]);
+  }, [ledgers, corpusId, profileId, config.chunkTargetChars]);
   ledgerRef.current = pooled;
 
   const coverage = useMemo(() => coverageOf(chunks, pooled), [chunks, pooled]);
 
-  const anchors = useMemo(() => {
-    const map = new Map<string, PassageAnchor>();
-    for (const digest of digests) {
-      if (!corpusIds.includes(digest.id)) continue;
-      for (const item of digest.passages) map.set(item.hash, { summary: item.summary, points: item.points, terms: item.terms });
-    }
-    return map;
-  }, [digests, corpusIds]);
-
   const bankMap = useMemo(() => new Map(banks.map(bank => [bank.id, bank])), [banks]);
-  const anchored = useMemo(
-    () => chunks.filter(chunk => anchors.has(chunk.id.slice(chunk.id.lastIndexOf(":") + 1))).length,
-    [chunks, anchors],
-  );
   const banked = useMemo(() => {
     let total = 0;
     for (const chunk of chunks) {
@@ -258,24 +213,23 @@ export function RecallSessionProvider({ children }: { children: ReactNode }) {
     return total;
   }, [chunks, bankMap, config.questionsPerRound]);
 
+  const running = phase === "reading" || phase === "waiting" || phase === "answering" || phase === "grading" || phase === "review";
+  const noteDrift = running && openNote && openNote.id !== note?.id ? openNote.title : null;
+
   const load = useCallback(() => {
     if (!profileId) return;
     setPhase("loading");
     setError(null);
     void (async () => {
       try {
-        const raw = localStorage.getItem(RECALL_SESSION_KEY);
-        const handoff: RecallHandoff = raw ? JSON.parse(raw) : { sourceIds: [] };
-        const [allSources, allNotes, allLedgers, allDigests, allBanks] = await Promise.all([
-          academiaStore.sources(profileId), academiaStore.notes(profileId),
-          academiaStore.ledgers(profileId), academiaStore.digests(profileId), academiaStore.banks(profileId),
+        const [allNotes, allLedgers, allBanks] = await Promise.all([
+          academiaStore.notes(profileId), academiaStore.ledgers(profileId), academiaStore.banks(profileId),
         ]);
 
-        const armed = handoff.sourceIds.length ? allSources.filter(source => handoff.sourceIds.includes(source.id)) : [];
-        const chosen = handoff.noteId ? allNotes.find(item => item.id === handoff.noteId) ?? null : null;
-        const usableNote = chosen?.content.trim() ? chosen : null;
-        if (!armed.length && !usableNote) {
-          setError("Nothing to draw from. Arm a source or open a note in the Knowledge Forge, then enter Recall State.");
+        const activeId = getActiveNoteId();
+        const chosen = allNotes.find(item => item.id === activeId) ?? null;
+        if (!chosen?.content.trim()) {
+          setError("Nothing to drill. Open a note in the Knowledge Forge and write something in it, then enter Recall State.");
           setPhase("error");
           return;
         }
@@ -288,21 +242,45 @@ export function RecallSessionProvider({ children }: { children: ReactNode }) {
         const status = await probeLocalLLM(cfg);
         const ready = status.state === "ready" && !!cfg.model;
 
-        setSources(armed);
-        setNote(usableNote);
-        setCorpusState(armed.length ? "sources" : "note");
+        setNote(chosen);
+        setOpenNote(chosen);
         setLedgers(byId);
-        setDigests(allDigests);
         setBanks(allBanks);
         setModelReady(ready);
         setEngineState(ready ? "model" : "mock");
         setPhase("ready");
       } catch {
-        setError("Could not load the material.");
+        setError("Could not load the note.");
         setPhase("error");
       }
     })();
   }, [profileId]);
+
+  const loadRef = useRef(load);
+  loadRef.current = load;
+
+  /**
+   * Follow the Forge's selection.
+   *
+   * Between runs the note simply changes under the ready screen, which is what
+   * "purely the current note" means. During a run the new note is remembered as
+   * drift and nothing else happens, because the ledger being written belongs to
+   * the note the run started on.
+   */
+  useEffect(() => {
+    const pick = async () => {
+      if (!profileId) return;
+      const activeId = getActiveNoteId();
+      const notes = await academiaStore.notes(profileId);
+      const chosen = notes.find(item => item.id === activeId) ?? null;
+      setOpenNote(chosen);
+      const live = phaseRef.current;
+      if (live === "reading" || live === "waiting" || live === "answering" || live === "grading" || live === "review") return;
+      if (live === "idle") return;
+      if (chosen?.id !== note?.id) loadRef.current();
+    };
+    return onActiveNoteChange(() => { void pick(); });
+  }, [note?.id, profileId]);
 
   /* ── The queue ───────────────────────────────────────────────────── */
 
@@ -331,12 +309,11 @@ export function RecallSessionProvider({ children }: { children: ReactNode }) {
       // the queue. This is the bug that cancelled generation after every round.
       pick: lastHash => pickNextChunk(chunks, ledgerRef.current ?? pooled, { reviewRatio: config.reviewRatio, lastHash }),
       siblings: chunk => chunks.filter(other => other.sourceId === chunk.sourceId && other.index !== chunk.index).slice(0, 6),
-      anchor: chunk => anchors.get(chunk.id.slice(chunk.id.lastIndexOf(":") + 1)),
       onBuffered: setBuffered,
     });
     queueRef.current = queue;
     return queue;
-  }, [anchors, bankMap, chunks, config, engine, llmCfg, modelReady, pooled]);
+  }, [bankMap, chunks, config, engine, llmCfg, modelReady, pooled]);
 
   /** Write ahead as soon as there is material, wherever the user happens to be. */
   useEffect(() => {
@@ -447,14 +424,12 @@ export function RecallSessionProvider({ children }: { children: ReactNode }) {
     await academiaStore.saveLedger(updated);
 
     const next = { ...ledgers, [current.sourceId]: updated };
-    const entries: Record<string, LedgerEntry> = {};
-    for (const id of corpusIds) if (next[id]) Object.assign(entries, next[id].entries);
     // The queue reads the ledger through this ref rather than through a
     // dependency, so recording a round informs the scheduler without
     // invalidating anything.
-    ledgerRef.current = { ...pooled, entries };
+    ledgerRef.current = { ...pooled, entries: next[current.sourceId]?.entries ?? {} };
     setLedgers(next);
-  }, [chunks, config.chunkTargetChars, corpusIds, ledgers, pooled, profileId]);
+  }, [chunks, config.chunkTargetChars, ledgers, pooled, profileId]);
 
   const finishRound = useCallback(async (current: Round) => {
     setPhase("grading");
@@ -521,180 +496,34 @@ export function RecallSessionProvider({ children }: { children: ReactNode }) {
 
   const nextRound = useCallback(() => { draw(); }, [draw]);
 
-  const endSession = useCallback(() => {
+  /** Stop the queue and release the interactive claim. Shared by every exit. */
+  const stopWork = useCallback(() => {
     setDeadlineAt(null);
     remainingRef.current = null;
-    // A comparison in flight is stopped too — ending means ending.
-    compareAbortRef.current?.abort();
-    setCompareProgress(null);
     queueRef.current?.cancel();
     queueRef.current = null;
     pendingRef.current = null;
     interactiveRef.current?.();
     interactiveRef.current = null;
-    setPhase("summary");
   }, []);
+
+  const endSession = useCallback(() => {
+    stopWork();
+    setPhase("summary");
+  }, [stopWork]);
 
   const override = useCallback((index: number) => {
     setGraded(old => old.map((item, i) => i === index ? { ...item, verdict: "correct" as Verdict, overridden: true } : item));
   }, []);
 
-  /* ── The Archive ─────────────────────────────────────────────────── */
-
-  const claims = useMemo(() => gatherClaims(digests, corpusIds), [digests, corpusIds]);
-
-  const persistArchive = useCallback(async (text: string, nextAlignments: ClaimAlignment[], compared: boolean) => {
-    if (!profileId || !archiveIdRef.current) return;
-    const now = Date.now();
-    const record: RecallArchive = {
-      id: archiveIdRef.current, profileId, corpusIds, label: corpusLabel,
-      text, alignments: nextAlignments, compared, createdAt: now, updatedAt: now,
-    };
-    await academiaStore.saveArchive(record);
-  }, [corpusIds, corpusLabel, profileId]);
-
-  /**
-   * Debounced, because this is a textarea someone is typing into and a write
-   * per keystroke would be absurd — but it is saved, because leaving mid-write
-   * should cost nothing here as it costs nothing anywhere else in this feature.
-   */
-  const setArchiveText = useCallback((text: string) => {
-    setArchiveTextState(text);
-    if (saveArchiveRef.current) clearTimeout(saveArchiveRef.current);
-    saveArchiveRef.current = window.setTimeout(() => void persistArchive(text, [], false), 500);
-  }, [persistArchive]);
-
-  const openArchive = useCallback(() => {
-    setDeadlineAt(null);
-    remainingRef.current = null;
-    queueRef.current?.cancel();
-    queueRef.current = null;
-    pendingRef.current = null;
-    interactiveRef.current?.();
-    interactiveRef.current = null;
-    if (!archiveIdRef.current) archiveIdRef.current = crypto.randomUUID();
-    setAlignments([]);
-    setGapNoteId(null);
-    setPhase("archive");
-  }, []);
-
-  const runCompare = useCallback(() => {
-    if (!archiveText.trim()) return;
-    // Nothing read means nothing to align against — but that is a reason to do
-    // the comparison by hand, not a dead end. The material goes up beside what
-    // you wrote and you mark the gaps yourself.
-    if (!claims.length) { setPhase("manual"); return; }
-    compareAbortRef.current?.abort();
-    const controller = new AbortController();
-    compareAbortRef.current = controller;
-    setPhase("comparing");
-
-    void (async () => {
-      try {
-        const result = await compareArchive({
-          cfg: llmCfg, claims, archive: archiveText,
-          signal: controller.signal,
-          onProgress: setCompareProgress,
-          onPartial: async partial => {
-            setAlignments(partial);
-            await persistArchive(archiveText, partial, false);
-          },
-        });
-        setAlignments(result);
-        await persistArchive(archiveText, result, true);
-        setCompareProgress(null);
-        setPhase("compare");
-      } catch (failure) {
-        if (controller.signal.aborted) return;
-        setError(failure instanceof Error ? failure.message : "The comparison could not be completed.");
-        setPhase("error");
-      }
-    })();
-  }, [archiveText, claims, llmCfg, persistArchive]);
-
-  /**
-   * A gap you found yourself.
-   *
-   * Confirmed on arrival, unlike a proposed one: you are the one who decided it
-   * was missing, so there is nothing to confirm. It carries its passage
-   * reference the same way, which is what lets the derived note point back at
-   * the text.
-   */
-  const addManualGap = useCallback((claim: string, chunk: Chunk) => {
-    const text = claim.trim();
-    if (!text) return;
-    setAlignments(old => {
-      if (old.some(item => item.claim === text)) return old;
-      const next: ClaimAlignment[] = [...old, {
-        claim: text,
-        sourceId: chunk.sourceId,
-        chunkIndex: chunk.index,
-        chunkHash: chunk.id.slice(chunk.id.lastIndexOf(":") + 1),
-        verdict: "missed",
-        confirmed: true,
-      }];
-      void persistArchive(archiveText, next, false);
-      return next;
-    });
-  }, [archiveText, persistArchive]);
-
-  const removeGap = useCallback((claim: string) => {
-    setAlignments(old => {
-      const next = old.filter(item => item.claim !== claim);
-      void persistArchive(archiveText, next, false);
-      return next;
-    });
-  }, [archiveText, persistArchive]);
-
-  /** The model proposes a gap; keeping it is yours. */
-  const toggleGap = useCallback((claim: string) => {
-    setAlignments(old => old.map(item => item.claim === claim ? { ...item, confirmed: !item.confirmed } : item));
-  }, []);
-
-  const makeGapNote = useCallback(() => {
-    if (!profileId) return;
-    const gaps = alignments.filter(item => item.confirmed);
-    if (!gaps.length) return;
-    setCompareProgress({ done: 0, total: 1, label: "Writing the note" });
-
-    void (async () => {
-      try {
-        const note = await composeGapNote(llmCfg, corpusLabel, gaps);
-        const now = Date.now();
-        const record: AcademiaNote = {
-          id: crypto.randomUUID(), profileId, title: note.title, content: note.content,
-          derivedFrom: { archiveId: archiveIdRef.current, sourceIds: corpusIds },
-          createdAt: now, updatedAt: now,
-        };
-        await academiaStore.saveNote(record);
-        setGapNoteId(record.id);
-      } catch (failure) {
-        setFailures(old => [...old.slice(-4), failure instanceof Error ? failure.message : "the note could not be written"]);
-      } finally {
-        setCompareProgress(null);
-      }
-    })();
-  }, [alignments, corpusIds, corpusLabel, llmCfg, profileId]);
-
   const reset = useCallback(() => {
-    queueRef.current?.cancel();
-    queueRef.current = null;
-    pendingRef.current = null;
-    interactiveRef.current?.();
-    interactiveRef.current = null;
+    stopWork();
     setPhase("idle");
     setPassage(null);
     setRound(null);
     setHistory([]);
     setGraded([]);
-    setDeadlineAt(null);
-    remainingRef.current = null;
-    compareAbortRef.current?.abort();
-    archiveIdRef.current = "";
-    setArchiveTextState("");
-    setAlignments([]);
-    setGapNoteId(null);
-  }, []);
+  }, [stopWork]);
 
   /**
    * Stop everything and come back ready to start again.
@@ -704,48 +533,40 @@ export function RecallSessionProvider({ children }: { children: ReactNode }) {
    * page and coming back. This is that, without the round trip.
    */
   const restart = useCallback(() => {
-    compareAbortRef.current?.abort();
-    queueRef.current?.cancel();
-    queueRef.current = null;
-    pendingRef.current = null;
-    interactiveRef.current?.();
-    interactiveRef.current = null;
-    setDeadlineAt(null);
-    remainingRef.current = null;
-    archiveIdRef.current = "";
-    setArchiveTextState("");
-    setAlignments([]);
-    setGapNoteId(null);
-    setCompareProgress(null);
+    stopWork();
     setHistory([]);
     setPassage(null);
     setRound(null);
     setPhase("ready");
-  }, []);
+  }, [stopWork]);
+
+  /** Take the drift: the run ends and the note now open becomes the material. */
+  const followNote = useCallback(() => {
+    stopWork();
+    setHistory([]);
+    setPassage(null);
+    setRound(null);
+    load();
+  }, [load, stopWork]);
 
   const setConfig = useCallback((next: RecallConfig) => { setConfigState(next); saveRecallConfig(next); }, []);
-  const setCorpus = useCallback((next: Corpus) => { setCorpusState(next); queueRef.current?.cancel(); queueRef.current = null; }, []);
   const setEngine = useCallback((next: "model" | "mock") => { setEngineState(next); queueRef.current?.cancel(); queueRef.current = null; }, []);
 
   const value = useMemo<RecallSessionApi>(() => ({
     phase, active: phase !== "idle" && phase !== "error", error, failures,
     config, setConfig,
-    corpus, setCorpus, sources, note, chunks, corpusLabel, coverage, anchored, banked,
-    engine, setEngine, modelReady, model: llmCfg.model,
+    note, chunks, corpusLabel, coverage, banked, noteDrift, followNote,
+    engine, setEngine, modelReady, model: llmCfg.model, llmConfig: llmCfg,
     passage, round, questionIndex, graded, history, buffered,
     deadlineAt, stepSeconds,
-    load, begin, skipReading, submit, expire, nextRound, endSession, override, reset,
+    load, begin, skipReading, submit, expire, nextRound, endSession, override, reset, restart,
     attach, detach, attached,
-    archiveText, setArchiveText, alignments, compareProgress, claimCount: claims.length,
-    gapNoteId, openArchive, runCompare, toggleGap, makeGapNote, addManualGap, removeGap, restart,
   }), [
-    phase, error, failures, config, setConfig, corpus, setCorpus, sources, note, chunks,
-    corpusLabel, coverage, anchored, banked, engine, setEngine, modelReady, llmCfg.model,
+    phase, error, failures, config, setConfig, note, chunks, corpusLabel, coverage, banked,
+    noteDrift, followNote, engine, setEngine, modelReady, llmCfg,
     passage, round, questionIndex, graded, history, buffered, deadlineAt, stepSeconds,
-    load, begin, skipReading, submit, expire, nextRound, endSession, override, reset,
+    load, begin, skipReading, submit, expire, nextRound, endSession, override, reset, restart,
     attach, detach, attached,
-    archiveText, setArchiveText, alignments, compareProgress, claims.length,
-    gapNoteId, openArchive, runCompare, toggleGap, makeGapNote, addManualGap, removeGap, restart,
   ]);
 
   return <RecallContext.Provider value={value}>{children}</RecallContext.Provider>;

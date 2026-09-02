@@ -1,5 +1,21 @@
+/**
+ * Everything the Knowledge Forge keeps, in the browser.
+ *
+ * Sources are documents you read and annotate; notes are what you write from
+ * them. Nothing here is sent to a server: the Forge is a renderer-side feature
+ * and IndexedDB is the whole of its persistence.
+ *
+ * **The model no longer reads sources.** Digests, Studio artifacts and recall
+ * archives were the three stores that existed only for that, and they are gone
+ * along with it — a source is now a document to look at, not a corpus to
+ * summarise. What survives is the note, because Recall State drills the note,
+ * and a note is short enough to hand to a model verbatim.
+ */
+
 export type AcademiaSourceKind = "pdf" | "text";
-export type StudioKind = "audio" | "slides" | "video" | "mindmap" | "report" | "flashcards" | "quiz" | "infographic" | "table";
+
+/** What the file was before it reached the Forge, which the viewer explains. */
+export type SourceFormat = "pdf" | "docx" | "pptx" | "text";
 
 export interface AcademiaSource {
   id: string;
@@ -9,7 +25,14 @@ export interface AcademiaSource {
   mimeType: string;
   size: number;
   text: string;
+  /**
+   * The bytes the viewer renders. For an office document this is the PDF it
+   * was converted to, not the original — the Analysis State has one rendering
+   * path and captures have to be exact, so conversion happens once at import
+   * rather than in front of the viewer.
+   */
   file?: Blob;
+  format?: SourceFormat;
   createdAt: number;
 }
 
@@ -18,99 +41,15 @@ export interface AcademiaNote {
   profileId: number;
   title: string;
   content: string;
-  /** Set on a note built from a comparison, so its provenance survives. */
-  derivedFrom?: { archiveId: string; sourceIds: string[] };
   createdAt: number;
   updatedAt: number;
 }
 
 /**
- * What you could recall, and what the comparison made of it.
- *
- * Written after a run, from memory, with the sources out of sight. Kept because
- * the comparison is the expensive part and because leaving mid-write should
- * cost nothing — the same reasoning as everywhere else here.
- */
-export type ClaimVerdict = "covered" | "partial" | "missed";
-
-export interface ClaimAlignment {
-  /** The claim, as the source's own digest stated it. */
-  claim: string;
-  sourceId: string;
-  /** Passage this claim came from, so a miss can point at the text. */
-  chunkIndex: number;
-  chunkHash: string;
-  verdict: ClaimVerdict;
-  note?: string;
-  /** Whether you kept this as a gap worth writing up. Model proposes, you confirm. */
-  confirmed?: boolean;
-}
-
-export interface RecallArchive {
-  id: string;
-  profileId: number;
-  /** Sources or `note:<id>` the run drew from. */
-  corpusIds: string[];
-  label: string;
-  text: string;
-  alignments: ClaimAlignment[];
-  /** False while a comparison is unfinished, so it can be resumed. */
-  compared: boolean;
-  createdAt: number;
-  updatedAt: number;
-}
-
-/**
- * One passage of a source, as the model understood it.
- *
- * The expensive half of generation is reading, and it used to be paid again for
- * every artifact — the same forty pages digested from scratch to make a quiz,
- * then again to make a slide deck. A source is read once into this record and
- * every later composition is a single fast call over it.
- *
- * `hash` is the chunk's content hash, so a re-read after an edit can keep the
- * passages whose text did not change.
- */
-export interface DigestPassage {
-  index: number;
-  hash: string;
-  summary: string;
-  points: string[];
-  terms: string[];
-}
-
-export interface SourceDigest {
-  /** The source's own id — one digest per source. */
-  id: string;
-  profileId: number;
-  /** Which model produced it. A different model makes the digest stale, not wrong. */
-  model: string;
-  chunkingVersion: number;
-  targetChars: number;
-  passages: DigestPassage[];
-  /** Chunks in the source, so a partial read can report how far it got. */
-  chunkCount: number;
-  /** False while a read is unfinished, so it can be resumed rather than restarted. */
-  complete: boolean;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface StudioArtifact {
-  id: string;
-  profileId: number;
-  kind: StudioKind;
-  title: string;
-  content: string;
-  sourceIds: string[];
-  createdAt: number;
-}
-
-/**
- * Coverage of one source, one row per chunk.
+ * Coverage of one corpus, one row per chunk.
  *
  * Sessions are disposable and this is not: what you want to resume is not the
- * sitting you were in the middle of but how much of the document you have
+ * sitting you were in the middle of but how much of the material you have
  * actually covered. Keyed by the chunk's content hash, so editing a note keeps
  * the history of every passage that did not change.
  *
@@ -134,7 +73,7 @@ export interface LedgerEntry {
 }
 
 export interface SourceLedger {
-  /** The source's own id — one ledger per source, as with digests. */
+  /** The corpus id — `note:<id>` for a note, which is now the only corpus. */
   id: string;
   profileId: number;
   chunkingVersion: number;
@@ -144,7 +83,7 @@ export interface SourceLedger {
 }
 
 /**
- * Questions already written for a source's passages.
+ * Questions already written for a corpus's passages.
  *
  * The important property: **questions belong to the passage, not to the round
  * order.** That is what makes banking them safe where banking whole scheduled
@@ -160,7 +99,7 @@ export interface SourceLedger {
  * the round machine; `recallBank` owns the shape.
  */
 export interface QuestionBank {
-  /** The source's own id, as with digests and ledgers. */
+  /** The corpus id, as with ledgers. */
   id: string;
   profileId: number;
   model: string;
@@ -168,31 +107,45 @@ export interface QuestionBank {
   targetChars: number;
   /** Passage content hash to the questions written for it. */
   pools: Record<string, unknown[]>;
-  /** Passages the source has, so a partial bank can report how far it got. */
+  /** Passages the corpus has, so a partial bank can report how far it got. */
   chunkCount: number;
   complete: boolean;
   updatedAt: number;
 }
 
-type StoreName = "sources" | "notes" | "artifacts" | "digests" | "ledgers" | "banks" | "archives";
-type AcademiaRecord = AcademiaSource | AcademiaNote | StudioArtifact | SourceDigest | SourceLedger | QuestionBank | RecallArchive;
+type StoreName = "sources" | "notes" | "ledgers" | "banks";
+type AcademiaRecord = AcademiaSource | AcademiaNote | SourceLedger | QuestionBank;
+
+const LIVE_STORES: StoreName[] = ["sources", "notes", "ledgers", "banks"];
+
+/**
+ * Stores from the generation era, deleted on upgrade.
+ *
+ * Left behind they would be invisible and permanent: a forty-page PDF's digest
+ * is megabytes, and nothing would ever read it again. Dropping them is the one
+ * destructive thing this file does, and it is safe because every one of them
+ * was derived from a source that is still there.
+ */
+const RETIRED_STORES = ["artifacts", "digests", "archives"];
 
 const DB_NAME = "rome-academia";
-// 2 added `digests`, 3 `ledgers`, 4 `banks`, 5 `archives`. The upgrade loop
-// below creates whatever is missing, so an existing library gains the store
-// without touching sources, notes, artifacts or anything already read.
-const DB_VERSION = 5;
+// 2 added `digests`, 3 `ledgers`, 4 `banks`, 5 `archives`. 6 removes the three
+// stores that belonged to source analysis.
+const DB_VERSION = 6;
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
-      for (const name of ["sources", "notes", "artifacts", "digests", "ledgers", "banks", "archives"] as StoreName[]) {
+      for (const name of LIVE_STORES) {
         if (!db.objectStoreNames.contains(name)) {
           const store = db.createObjectStore(name, { keyPath: "id" });
           store.createIndex("profileId", "profileId", { unique: false });
         }
+      }
+      for (const name of RETIRED_STORES) {
+        if (db.objectStoreNames.contains(name)) db.deleteObjectStore(name);
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -238,23 +191,14 @@ async function deleteRecord(storeName: StoreName, id: string): Promise<void> {
 export const academiaStore = {
   sources: (profileId: number) => listByProfile<AcademiaSource>("sources", profileId),
   notes: (profileId: number) => listByProfile<AcademiaNote>("notes", profileId),
-  artifacts: (profileId: number) => listByProfile<StudioArtifact>("artifacts", profileId),
-  digests: (profileId: number) => listByProfile<SourceDigest>("digests", profileId),
   ledgers: (profileId: number) => listByProfile<SourceLedger>("ledgers", profileId),
   banks: (profileId: number) => listByProfile<QuestionBank>("banks", profileId),
-  archives: (profileId: number) => listByProfile<RecallArchive>("archives", profileId),
   saveSource: (source: AcademiaSource) => putRecord("sources", source),
   saveNote: (note: AcademiaNote) => putRecord("notes", note),
-  saveArtifact: (artifact: StudioArtifact) => putRecord("artifacts", artifact),
-  saveDigest: (digest: SourceDigest) => putRecord("digests", digest),
   saveLedger: (ledger: SourceLedger) => putRecord("ledgers", ledger),
   saveBank: (bank: QuestionBank) => putRecord("banks", bank),
-  saveArchive: (archive: RecallArchive) => putRecord("archives", archive),
   deleteSource: (id: string) => deleteRecord("sources", id),
   deleteNote: (id: string) => deleteRecord("notes", id),
-  deleteArtifact: (id: string) => deleteRecord("artifacts", id),
-  deleteDigest: (id: string) => deleteRecord("digests", id),
   deleteLedger: (id: string) => deleteRecord("ledgers", id),
   deleteBank: (id: string) => deleteRecord("banks", id),
-  deleteArchive: (id: string) => deleteRecord("archives", id),
 };

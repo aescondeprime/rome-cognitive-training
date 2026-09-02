@@ -17,6 +17,7 @@
  * and simply makes it bigger or smaller.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Pin } from "lucide-react";
 import {
   clampWidgetScale,
   MAX_WIDGET_SCALE,
@@ -33,6 +34,53 @@ export interface WidgetSizingProps {
   zoomed?: boolean;
   /** The screen rectangle the zoomed node and its branches occupy. */
   focus?: FocusRect | null;
+  /** Pinned widgets stay on screen away from the constellation. */
+  pinned?: boolean;
+  onPinnedChange?: (pinned: boolean) => void;
+}
+
+/**
+ * The pin. Sits beside each widget's collapse chevron.
+ *
+ * Deliberately a per-widget control rather than a setting in the editor: which
+ * widgets you want following you around changes with what you are doing that
+ * afternoon, and walking to the editor to change it would mean it never got
+ * changed. Unpinned draws as an outline at an angle — a pin resting on the
+ * surface rather than pushed into it — so the two states read at a glance at
+ * 11px without needing colour to carry the difference alone.
+ */
+export function WidgetPinButton({
+  pinned = false,
+  onPinnedChange,
+  size = 11,
+}: {
+  pinned?: boolean;
+  onPinnedChange?: (pinned: boolean) => void;
+  size?: number;
+}) {
+  if (!onPinnedChange) return null;
+  return (
+    <button
+      data-nodrag="1"
+      onClick={e => { e.stopPropagation(); onPinnedChange(!pinned); }}
+      title={pinned ? "Unpin — leaves with the constellation" : "Pin to every page"}
+      style={{
+        background: "none", border: 0, cursor: "pointer", padding: "2px 3px",
+        lineHeight: 0,
+        color: pinned ? "hsl(var(--accent-h) var(--accent-s) var(--accent-l))" : "hsl(var(--accent-h) 30% 38%)",
+        opacity: pinned ? 1 : 0.65,
+        transition: "color 150ms ease, opacity 150ms ease",
+      }}
+      onMouseEnter={e => (e.currentTarget.style.opacity = "1")}
+      onMouseLeave={e => (e.currentTarget.style.opacity = pinned ? "1" : "0.65")}
+    >
+      <Pin
+        size={size}
+        fill={pinned ? "currentColor" : "none"}
+        style={{ transform: pinned ? undefined : "rotate(38deg)", transition: "transform 180ms ease" }}
+      />
+    </button>
+  );
 }
 
 /** A screen-space rectangle, in CSS pixels from the top-left of the viewport. */

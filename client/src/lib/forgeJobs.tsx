@@ -1,43 +1,41 @@
 /**
  * Long Knowledge Forge work that outlives the page that started it.
  *
- * Reading a source is minutes of model time, and it used to be owned by the
- * Academia component: navigating to another node unmounted the page, the
- * cleanup aborted the controller, and the read died — silently, having thrown
- * away everything after the last partial save. That is the wrong owner. A read
- * belongs to the *library*, not to the screen you happened to start it from.
+ * Writing a note's questions is minutes of model time, and work like that used
+ * to be owned by the Academia component: navigating to another node unmounted
+ * the page, the cleanup aborted the controller, and the job died — silently,
+ * having thrown away everything after the last partial save. That is the wrong
+ * owner. Preparation belongs to the *library*, not to the screen you happened
+ * to start it from.
  *
  * So the queue lives here, mounted above the router, and the only thing the
  * page does is add to it. Progress surfaces in the utility rail above the
  * constellation, which is the one piece of chrome present on every node.
  *
- * **Jobs run one at a time, deliberately.** Two reads in parallel do not finish
+ * **Jobs run one at a time, deliberately.** Two jobs in parallel do not finish
  * sooner — they contend for the same model — and they double the memory the
  * runner holds. Serial is both faster and calmer.
  *
- * What this does *not* fix is the machine feeling slow while a large model
- * works. That contention is outside the app: Ollama saturating the GPU makes
- * every other process wait, and no amount of scheduling in the renderer changes
- * it. The levers that do are a smaller model, a smaller context window per call
- * (see `localLLM`), and releasing the model when the queue drains, which is
- * done below.
+ * Reads used to live here too, digesting a PDF passage by passage so the
+ * Studio could compose from it. Sources are no longer read by a model at all,
+ * so the only job left is preparation, and its subject is a note.
  */
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
-import { academiaStore, type AcademiaSource, type QuestionBank } from "@/lib/academiaStore";
-import { readSource } from "@/lib/academiaGen";
+import { academiaStore, type QuestionBank } from "@/lib/academiaStore";
 import { awaitIdle, describeFailure, unloadModel, type LocalLLMConfig } from "@/lib/localLLM";
 import { CHUNKING_VERSION, chunkSource } from "@/lib/textChunks";
 import { emptyBank, hashOfChunk, poolConfig, POOL_SIZE } from "@/lib/recallBank";
 import { createLlmGenerator } from "@/lib/recallLlm";
-import { loadRecallConfig, type PassageAnchor } from "@/lib/recallRound";
+import { loadRecallConfig } from "@/lib/recallRound";
 
 export type ForgeJobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
 export interface ForgeJob {
   id: string;
-  kind: "read" | "prepare";
-  sourceId: string;
+  kind: "prepare";
+  /** The corpus the job is about — `note:<id>` today. */
+  corpusId: string;
   label: string;
   status: ForgeJobStatus;
   done: number;
@@ -46,16 +44,22 @@ export interface ForgeJob {
   error?: string;
 }
 
+/** What a job needs to know about its material, without knowing where it came from. */
+export interface ForgeCorpus {
+  id: string;
+  name: string;
+  text: string;
+}
+
 interface ForgeJobsApi {
   jobs: ForgeJob[];
   active: ForgeJob | null;
   queued: number;
   /** Bumped whenever a job writes to the store, so pages can reload. */
   revision: number;
-  enqueueRead: (input: { profileId: number; source: AcademiaSource; cfg: LocalLLMConfig }) => void;
   /** Write a pool of questions for every passage, so studying costs no model time. */
-  enqueuePrepare: (input: { profileId: number; source: AcademiaSource; cfg: LocalLLMConfig }) => void;
-  isPending: (sourceId: string) => boolean;
+  enqueuePrepare: (input: { profileId: number; corpus: ForgeCorpus; cfg: LocalLLMConfig }) => void;
+  isPending: (corpusId: string) => boolean;
   cancel: (id: string) => void;
   cancelAll: () => void;
   dismiss: (id: string) => void;
@@ -66,12 +70,12 @@ const ForgeJobsContext = createContext<ForgeJobsApi | null>(null);
 interface Pending {
   job: ForgeJob;
   profileId: number;
-  source: AcademiaSource;
+  corpus: ForgeCorpus;
   cfg: LocalLLMConfig;
 }
 
 /**
- * Write questions for every passage of one source.
+ * Write questions for every passage of one corpus.
  *
  * The expensive half of Quantum Recall, moved out of study time entirely. Saved
  * passage by passage, so cancelling costs the one in flight; a passage that the
@@ -79,27 +83,23 @@ interface Pending {
  * because Recall State falls back to generating on the spot for anything the
  * bank is missing.
  */
-async function prepareSource(
+async function prepareCorpus(
   pending: Pending,
   signal: AbortSignal,
   onProgress: (done: number, total: number, label: string) => void,
   onPartial: (bank: QuestionBank) => Promise<void>,
 ): Promise<QuestionBank> {
   const config = poolConfig(loadRecallConfig());
-  const chunks = chunkSource(pending.source.id, pending.source.text, { targetChars: config.chunkTargetChars });
+  const chunks = chunkSource(pending.corpus.id, pending.corpus.text, { targetChars: config.chunkTargetChars });
 
-  const digest = (await academiaStore.digests(pending.profileId)).find(item => item.id === pending.source.id);
-  const anchors = new Map<string, PassageAnchor>();
-  for (const passage of digest?.passages ?? []) {
-    anchors.set(passage.hash, { summary: passage.summary, points: passage.points, terms: passage.terms });
-  }
-
-  const existing = (await academiaStore.banks(pending.profileId)).find(item => item.id === pending.source.id);
+  const existing = (await academiaStore.banks(pending.profileId)).find(item => item.id === pending.corpus.id);
   const bank = emptyBank(
-    pending.source.id, pending.profileId, pending.cfg.model,
+    pending.corpus.id, pending.profileId, pending.cfg.model,
     CHUNKING_VERSION, config.chunkTargetChars, chunks.length,
   );
-  // Reuse whatever a previous run of this job already wrote.
+  // Reuse whatever a previous run of this job already wrote. Pools are keyed by
+  // content hash, so an edited note keeps the questions for every passage whose
+  // text did not change.
   if (existing && existing.model === bank.model && existing.chunkingVersion === CHUNKING_VERSION && existing.targetChars === bank.targetChars) {
     bank.pools = { ...existing.pools };
   }
@@ -113,7 +113,7 @@ async function prepareSource(
     await awaitIdle(signal);
     const chunk = chunks[i];
     const hash = hashOfChunk(chunk);
-    onProgress(i, chunks.length, `${pending.source.name} — questions for passage ${i + 1} of ${chunks.length}`);
+    onProgress(i, chunks.length, `${pending.corpus.name} — questions for passage ${i + 1} of ${chunks.length}`);
 
     const already = bank.pools[hash];
     if (Array.isArray(already) && already.length >= POOL_SIZE) continue;
@@ -122,7 +122,6 @@ async function prepareSource(
       const round = await generator.generate({
         chunk,
         siblings: chunks.filter(other => other.index !== chunk.index).slice(0, 6),
-        anchor: anchors.get(hash),
         config,
         signal,
       });
@@ -138,7 +137,7 @@ async function prepareSource(
 
   bank.complete = true;
   bank.updatedAt = Date.now();
-  onProgress(chunks.length, chunks.length, `${pending.source.name} prepared`);
+  onProgress(chunks.length, chunks.length, `${pending.corpus.name} prepared`);
   return bank;
 }
 
@@ -179,48 +178,18 @@ export function ForgeJobProvider({ children }: { children: ReactNode }) {
         patch(next.job.id, { status: "running", message: "Starting" });
 
         try {
-          if (next.job.kind === "prepare") {
-            const bank = await prepareSource(
-              next,
-              controller.signal,
-              (done, total, label) => patch(next.job.id, { done, total, message: label }),
-              async partial => { await academiaStore.saveBank(partial); setRevision(value => value + 1); },
-            );
-            await academiaStore.saveBank(bank);
-            setRevision(value => value + 1);
-            const written = Object.keys(bank.pools).length;
-            patch(next.job.id, {
-              status: "done", done: written, total: bank.chunkCount,
-              message: `${written}/${bank.chunkCount} passages ready`,
-            });
-            continue;
-          }
-
-          const digest = await readSource({
-            cfg: next.cfg,
-            profileId: next.profileId,
-            source: next.source,
-            existing: (await academiaStore.digests(next.profileId)).find(d => d.id === next.source.id),
-            signal: controller.signal,
-            onProgress: progress => patch(next.job.id, {
-              done: progress.done,
-              total: progress.total,
-              message: progress.label,
-            }),
-            // Partial digests are saved as the read proceeds, so a cancel or a
-            // quit costs the passages in flight rather than the document.
-            onPartial: async partial => {
-              await academiaStore.saveDigest(partial);
-              setRevision(value => value + 1);
-            },
-          });
-          await academiaStore.saveDigest(digest);
+          const bank = await prepareCorpus(
+            next,
+            controller.signal,
+            (done, total, label) => patch(next.job.id, { done, total, message: label }),
+            async partial => { await academiaStore.saveBank(partial); setRevision(value => value + 1); },
+          );
+          await academiaStore.saveBank(bank);
           setRevision(value => value + 1);
+          const written = Object.keys(bank.pools).length;
           patch(next.job.id, {
-            status: "done",
-            done: digest.passages.length,
-            total: digest.passages.length,
-            message: `${digest.passages.length} passages`,
+            status: "done", done: written, total: bank.chunkCount,
+            message: `${written}/${bank.chunkCount} passages ready`,
           });
         } catch (error) {
           const aborted = controller.signal.aborted;
@@ -236,48 +205,42 @@ export function ForgeJobProvider({ children }: { children: ReactNode }) {
       }
     } finally {
       runningRef.current = false;
-      // Nothing else is queued, and the next read may be an hour away. Holding
+      // Nothing else is queued, and the next job may be an hour away. Holding
       // several gigabytes resident until the keep-alive lapses is a large part
       // of why a machine that is doing nothing still feels slow.
       if (lastCfgRef.current) void unloadModel(lastCfgRef.current);
     }
   }, [patch]);
 
-  // `drain` closes over fresh state each render; the ref keeps `enqueueRead`
+  // `drain` closes over fresh state each render; the ref keeps `enqueuePrepare`
   // stable without re-queuing anything.
   const drainRef = useRef(drain);
   drainRef.current = drain;
 
-  const enqueue = useCallback((kind: ForgeJob["kind"], profileId: number, source: AcademiaSource, cfg: LocalLLMConfig) => {
+  const enqueuePrepare = useCallback<ForgeJobsApi["enqueuePrepare"]>(({ profileId, corpus, cfg }) => {
     // The same work queued twice would produce the same result twice.
     const alreadyPending =
-      pendingRef.current.some(item => item.source.id === source.id && item.job.kind === kind) ||
-      jobs.some(job => job.sourceId === source.id && job.kind === kind && job.status === "running");
+      pendingRef.current.some(item => item.corpus.id === corpus.id) ||
+      jobs.some(job => job.corpusId === corpus.id && job.status === "running");
     if (alreadyPending) return;
 
     const job: ForgeJob = {
       id: `job-${++jobSeq}`,
-      kind,
-      sourceId: source.id,
-      label: kind === "prepare" ? `${source.name} · questions` : source.name,
+      kind: "prepare",
+      corpusId: corpus.id,
+      label: `${corpus.name} · questions`,
       status: "queued",
       done: 0,
       total: 0,
       message: "Queued",
     };
     setJobs(old => [
-      ...old.filter(item => item.sourceId !== source.id || item.kind !== kind || item.status === "running"),
+      ...old.filter(item => item.corpusId !== corpus.id || item.status === "running"),
       job,
     ]);
-    pendingRef.current.push({ job, profileId, source, cfg });
+    pendingRef.current.push({ job, profileId, corpus, cfg });
     void drainRef.current();
   }, [jobs]);
-
-  const enqueueRead = useCallback<ForgeJobsApi["enqueueRead"]>(
-    ({ profileId, source, cfg }) => enqueue("read", profileId, source, cfg), [enqueue]);
-
-  const enqueuePrepare = useCallback<ForgeJobsApi["enqueuePrepare"]>(
-    ({ profileId, source, cfg }) => enqueue("prepare", profileId, source, cfg), [enqueue]);
 
   const cancel = useCallback((id: string) => {
     cancelledRef.current.add(id);
@@ -304,14 +267,13 @@ export function ForgeJobProvider({ children }: { children: ReactNode }) {
       active,
       queued: jobs.filter(job => job.status === "queued").length,
       revision,
-      enqueueRead,
       enqueuePrepare,
-      isPending: sourceId => jobs.some(job => job.sourceId === sourceId && (job.status === "queued" || job.status === "running")),
+      isPending: corpusId => jobs.some(job => job.corpusId === corpusId && (job.status === "queued" || job.status === "running")),
       cancel,
       cancelAll,
       dismiss,
     };
-  }, [jobs, revision, enqueueRead, enqueuePrepare, cancel, cancelAll, dismiss]);
+  }, [jobs, revision, enqueuePrepare, cancel, cancelAll, dismiss]);
 
   return <ForgeJobsContext.Provider value={value}>{children}</ForgeJobsContext.Provider>;
 }
@@ -330,6 +292,6 @@ export function useForgeJobs(): ForgeJobsApi {
 
 const IDLE: ForgeJobsApi = {
   jobs: [], active: null, queued: 0, revision: 0,
-  enqueueRead: () => {}, enqueuePrepare: () => {}, isPending: () => false,
+  enqueuePrepare: () => {}, isPending: () => false,
   cancel: () => {}, cancelAll: () => {}, dismiss: () => {},
 };

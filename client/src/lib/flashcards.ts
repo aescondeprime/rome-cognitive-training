@@ -49,6 +49,14 @@ export interface NewFlashcard {
   back: string;
   category: string;
   tags: string;
+  /**
+   * Days between showings, or null for a card with no schedule.
+   *
+   * Null is the default for a card written by hand: it exists in the Archive
+   * and comes up when you go looking for it, and never interrupts. A number
+   * means the card surfaces on its own, one interval from now.
+   */
+  intervalDays?: number | null;
 }
 
 /* ── Reading ─────────────────────────────────────────────────────────── */
@@ -86,6 +94,20 @@ export async function deleteFlashcard(id: number): Promise<void> {
   await apiRequest("DELETE", `/api/recall-items/${id}`);
 }
 
+/**
+ * Set a card's interval, or clear it.
+ *
+ * Its own endpoint, deliberately apart from both `/review` (SM-2 deciding the
+ * next interval from how you did) and the content PATCH (which must not be
+ * able to reach the schedule at all). Passing a card's existing interval is
+ * also how the due-card overlay resets it: nothing about the schedule changes
+ * except that the clock starts again from now.
+ */
+export async function scheduleFlashcard(id: number, intervalDays: number | null): Promise<Flashcard> {
+  const response = await apiRequest("PATCH", `/api/recall-items/${id}/schedule`, { intervalDays });
+  return response.json();
+}
+
 /* ── Shaping ─────────────────────────────────────────────────────────── */
 
 export function cardTags(card: Flashcard): string[] {
@@ -113,8 +135,39 @@ export function foldersOf(cards: Flashcard[]): Array<{ name: string; count: numb
     });
 }
 
+/** A card with no next review is never due — that is what "no interval" means. */
 export function isDue(card: Flashcard, now = Date.now()): boolean {
-  return (card.nextReviewAt ?? 0) <= now;
+  return card.nextReviewAt !== null && card.nextReviewAt !== undefined && card.nextReviewAt <= now;
+}
+
+/**
+ * The intervals worth one click.
+ *
+ * Stored in days because that is what the column is, including the fractions:
+ * a card you want back in an hour is a perfectly ordinary thing to ask for and
+ * needs no second unit.
+ */
+export const INTERVAL_PRESETS: Array<{ label: string; days: number | null }> = [
+  { label: "None", days: null },
+  { label: "1 hour", days: 1 / 24 },
+  { label: "4 hours", days: 4 / 24 },
+  { label: "Daily", days: 1 },
+  { label: "3 days", days: 3 },
+  { label: "Weekly", days: 7 },
+  { label: "Monthly", days: 30 },
+];
+
+/** How an interval reads in the Archive and on the card itself. */
+export function describeInterval(days: number | null | undefined): string {
+  if (days === null || days === undefined) return "no interval";
+  if (days <= 0) return "always due";
+  if (days < 1 / 24) return `every ${Math.max(1, Math.round(days * 24 * 60))} min`;
+  if (days < 1) return `every ${Math.round(days * 24)}h`;
+  if (days === 1) return "daily";
+  if (days === 7) return "weekly";
+  if (days === 30) return "monthly";
+  if (days % 7 === 0) return `every ${days / 7} weeks`;
+  return `every ${Math.round(days)} days`;
 }
 
 /* ── From a Quantum Recall question ──────────────────────────────────── */
@@ -142,6 +195,9 @@ export function cardFromQuestion(question: Question, round: Round, folder = DEFA
     category: folder.trim() || DEFAULT_FOLDER,
     // Where it came from, so a card can be traced back to its passage.
     tags: JSON.stringify(["quantum-recall", question.type, `passage-${round.chunkIndex + 1}`]),
+    // A card kept from a round is one you have just discovered you needed, so
+    // it starts on a daily interval rather than unscheduled.
+    intervalDays: 1,
   };
 }
 

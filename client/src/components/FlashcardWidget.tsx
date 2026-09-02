@@ -9,19 +9,26 @@
  * **It draws what is due, not what exists.** ROME's `recall_items` already
  * carry SM-2 scheduling and expose a `/due` endpoint, so the widget shows the
  * cards whose interval has elapsed and answers with a quality that advances the
- * schedule. The Flashcard Archive in the Recall State writes these rows, the
- * Memory Vault lists them, and the memorization drills in Athena Trials will
- * read the same ones. One store, several surfaces.
+ * schedule. The Flashcard Archive writes these rows, the Memory Vault lists
+ * them, and the memorization drills in Athena Trials will read the same ones.
+ * One store, several surfaces.
+ *
+ * **A folder can be chosen, and the choice sticks.** Studying is usually one
+ * subject at a time, and a widget that hands you a card from whatever happened
+ * to come due makes the two subjects interleave whether you wanted that or not.
+ * The choice is stored rather than held in state because the widget unmounts
+ * every time the constellation closes.
  *
  * Drag, collapse and the corner brackets follow the other widgets exactly; the
  * accent is the Archive's amber rather than a fifth colour on the map.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import {
-  fetchDueFlashcards, fetchFlashcards, FLASHCARDS_DUE_KEY, FLASHCARDS_KEY, type Flashcard,
+  DEFAULT_FOLDER, fetchDueFlashcards, fetchFlashcards, FLASHCARDS_DUE_KEY, FLASHCARDS_KEY,
+  foldersOf, type Flashcard,
 } from "@/lib/flashcards";
 import {
   widgetRootStyle,
@@ -30,6 +37,7 @@ import {
   useWidgetYield,
   widgetYieldStyle,
   WidgetScaleHandle,
+  WidgetPinButton,
   type FocusRect,
 } from "./WidgetChrome";
 
@@ -45,10 +53,26 @@ interface Props {
   /** Set while the camera has flown to a node; `focus` is the space it claims. */
   zoomed?: boolean;
   focus?: FocusRect | null;
+  /** Pinned widgets stay on screen away from the constellation. */
+  pinned?: boolean;
+  onPinnedChange?: (pinned: boolean) => void;
 }
 
 const W = 250;
 const AMBER = "hsl(35 80% 62%)";
+/** Which folder this widget is showing. Null, or absent, means all of them. */
+const FOLDER_KEY = "rome.flashcards.widgetFolder";
+
+function storedFolder(): string | null {
+  try { return window.localStorage.getItem(FOLDER_KEY); } catch { return null; }
+}
+
+function rememberFolder(name: string | null): void {
+  try {
+    if (name) window.localStorage.setItem(FOLDER_KEY, name);
+    else window.localStorage.removeItem(FOLDER_KEY);
+  } catch { /* private mode */ }
+}
 
 /**
  * SM-2 quality, from the two answers a person can honestly give at a glance.
@@ -69,7 +93,7 @@ function Corner() {
   );
 }
 
-export default function FlashcardWidget({ pos, collapsed, onPosChange, onCollapsedChange, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null }: Props) {
+export default function FlashcardWidget({ pos, collapsed, onPosChange, onCollapsedChange, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null, pinned = false, onPinnedChange }: Props) {
   const DEFAULT_X = 24;
   const DEFAULT_Y = 560;
   const x = pos?.x ?? DEFAULT_X;
@@ -88,8 +112,9 @@ export default function FlashcardWidget({ pos, collapsed, onPosChange, onCollaps
   const qc = useQueryClient();
   const [index, setIndex] = useState(0);
   const [turned, setTurned] = useState(false);
+  const [folder, setFolder] = useState<string | null>(() => storedFolder());
 
-  const { data: due = [], isLoading } = useQuery<Flashcard[]>({
+  const { data: dueAll = [], isLoading } = useQuery<Flashcard[]>({
     queryKey: FLASHCARDS_DUE_KEY,
     queryFn: fetchDueFlashcards,
     staleTime: 30_000,
@@ -100,7 +125,20 @@ export default function FlashcardWidget({ pos, collapsed, onPosChange, onCollaps
     staleTime: 60_000,
   });
 
+  const folders = useMemo(() => foldersOf(all), [all]);
+  const inFolder = (item: Flashcard) => !folder || (item.category || DEFAULT_FOLDER) === folder;
+  const due = dueAll.filter(inFolder);
+
   const card: Flashcard | undefined = due[index];
+
+  // A folder emptied or renamed elsewhere must not leave the widget filtering
+  // on something that no longer exists and showing nothing for ever.
+  useEffect(() => {
+    if (folder && all.length && !folders.some(item => item.name === folder)) {
+      setFolder(null);
+      rememberFolder(null);
+    }
+  }, [all.length, folder, folders]);
 
   // A card answered leaves the due list, so the index would skip the one that
   // slid into its place.
@@ -185,10 +223,29 @@ export default function FlashcardWidget({ pos, collapsed, onPosChange, onCollaps
               }}>{due.length}</span>
             )}
           </div>
-          <button data-nodrag="1" onClick={() => onCollapsedChange(!collapsed)} title={collapsed ? "Expand" : "Collapse"}
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            {!collapsed && folders.length > 1 && (
+              <select
+                data-nodrag="1"
+                value={folder ?? ""}
+                onChange={event => { const next = event.target.value || null; setFolder(next); rememberFolder(next); setIndex(0); setTurned(false); }}
+                title="Which folder this widget draws from"
+                style={{
+                  maxWidth: 96, background: "hsl(222 20% 4%)", color: "hsl(35 40% 62%)",
+                  border: "1px solid hsl(35 30% 20%)", borderRadius: 2, fontSize: 7.5,
+                  letterSpacing: "0.1em", padding: "1px 3px", outline: "none",
+                  fontFamily: "DM Mono, monospace",
+                }}>
+                <option value="">ALL</option>
+                {folders.map(item => <option key={item.name} value={item.name}>{item.name.toUpperCase()}</option>)}
+              </select>
+            )}
+            <WidgetPinButton pinned={pinned} onPinnedChange={onPinnedChange} />
+            <button data-nodrag="1" onClick={() => onCollapsedChange(!collapsed)} title={collapsed ? "Expand" : "Collapse"}
             style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 4px", color: "hsl(35 30% 45%)", fontSize: 11, lineHeight: 1 }}>
             {collapsed ? "▸" : "▾"}
-          </button>
+            </button>
+          </div>
         </div>
 
         {!collapsed && (
@@ -202,8 +259,10 @@ export default function FlashcardWidget({ pos, collapsed, onPosChange, onCollaps
                 </p>
                 <p style={{ fontSize: 7.5, lineHeight: 1.5, color: "hsl(220 10% 38%)", marginTop: 5 }}>
                   {all.length === 0
-                    ? "Archive a question after a Quantum Recall round."
-                    : `${all.length} card${all.length === 1 ? "" : "s"} waiting on their interval.`}
+                    ? "Write one in the Flashcard Archive, or keep a question after a Quantum Recall round."
+                    : folder
+                      ? `Nothing due in ${folder}.`
+                      : `${all.length} card${all.length === 1 ? "" : "s"} waiting on their interval.`}
                 </p>
               </div>
             )}

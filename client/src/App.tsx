@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Switch, Route, Router, Redirect } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -19,30 +19,10 @@ import { RecallSessionProvider } from "@/lib/recallSession";
 import AkiraAmbience from "@/akira/AkiraAmbience";
 import AkiraConsole from "@/akira/AkiraConsole";
 import RomeCursor from "@/components/RomeCursor";
-
-// Core pages kept
-import PhilosophyChambers from "@/pages/PhilosophyChambers";
-import Settings from "@/pages/Settings";
-import ContingencyGarden from "@/pages/ContingencyGarden";
-import ResearchLab from "@/pages/ResearchLab";
-import KronosKeep from "@/pages/KronosKeep";
-import IdeaWorkshop from "@/pages/IdeaWorkshop";
-import ComponentBoard from "@/pages/ComponentBoard";
-import NotFound from "@/pages/not-found";
-
-// Athena Trials
-import MidasDashboard from "@/pages/MidasDashboard";
-import Arena from "@/pages/Arena";
-import SoloGame from "@/components/games/SoloGame";
-import { GAMES } from "@/lib/gamesRegistry";
-
-// Placeholder nodes
-import PlaceholderNode from "@/pages/PlaceholderNode";
-import WorldBrowser from "@/pages/WorldBrowser";
-import FundingDashboard from "@/pages/FundingDashboard";
-
-const Academia = lazy(() => import("@/pages/Academia"));
-const RecallState = lazy(() => import("@/pages/RecallState"));
+// The route table lives on its own so a split pane can render a second copy of
+// it; the widgets live at the app root so a pinned one outlives the map.
+import RomeRoutes from "@/routes";
+import WidgetLayer from "@/components/WidgetLayer";
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -143,89 +123,16 @@ export default function App() {
               </Route>
               <Route>
                 <AppShell>
-                  <Switch>
-                    {/* Athena Trials */}
-                    <Route path="/athena"       component={MidasDashboard} />
-                    <Route path="/athena/arena" component={Arena} />
-                    {/* One route per drill, generated from the catalogue, so
-                        adding a drill is a single edit in `gamesRegistry`. */}
-                    {GAMES.map(g => (
-                      <Route key={g.id} path={g.path}>
-                        <SoloGame gameId={g.id} />
-                      </Route>
-                    ))}
-
-                    {/* Philosophy */}
-                    <Route path="/philosophy" component={PhilosophyChambers} />
-
-                    {/* Strategic — Contingency Garden + Kronos Keep */}
-                    <Route path="/strategic">
-                      <PlaceholderNode
-                        title="Strategic"
-                        symbol="♛"
-                        accent="hsl(var(--accent-h) 88% 60%)"
-                        description="Planning and execution intelligence. Grow a plan in the Contingency Garden, then schedule it in Kronos Keep."
-                        subRoutes={[
-                          { label: "Contingency Garden", path: "/taskboard" },
-                          { label: "Kronos Keep", path: "/kronos-keep" },
-                        ]}
-                      />
-                    </Route>
-                    <Route path="/taskboard"    component={ContingencyGarden} />
-                    <Route path="/kronos-keep"  component={KronosKeep} />
-
-                    {/* Creative */}
-                    <Route path="/creative">
-                      <PlaceholderNode title="Creative" symbol="✦" accent="hsl(270 60% 65%)" description="Divergent thinking and ideation. Open your Idea Workshop below." subRoutes={[{ label: "Idea Workshop", path: "/idea-workshop" }]} />
-                    </Route>
-                    <Route path="/idea-workshop" component={IdeaWorkshop} />
-
-                    {/* Investigative */}
-                    <Route path="/investigative">
-                      <PlaceholderNode
-                        title="Investigative"
-                        symbol="◉"
-                        accent="hsl(175 55% 48%)"
-                        description="Pattern recognition and deep inquiry. Open your investigation tools below."
-                        subRoutes={[
-                          { label: "Component Board", path: "/component-board" },
-                          { label: "Research Lab", path: "/research-lab" },
-                        ]}
-                      />
-                    </Route>
-                    <Route path="/component-board" component={ComponentBoard} />
-                    <Route path="/research-lab" component={ResearchLab} />
-
-                    {/* World Browser */}
-                    <Route path="/world" component={WorldBrowser} />
-
-                    {/* Financial */}
-                    <Route path="/funding" component={FundingDashboard} />
-
-                    {/* Academia */}
-                    <Route path="/academia">
-                      <Suspense fallback={<div className="flex h-64 items-center justify-center font-mono text-[9px] tracking-[.18em] text-muted-foreground/40">INITIALIZING ACADEMIA…</div>}>
-                        <Academia />
-                      </Suspense>
-                    </Route>
-                    {/* Its own route rather than a sub-state: linkable, survives a
-                        reload, and gives Akira somewhere to navigate to. */}
-                    <Route path="/academia/recall">
-                      <Suspense fallback={<div className="flex h-64 items-center justify-center font-mono text-[9px] tracking-[.18em] text-muted-foreground/40">ENTERING RECALL STATE…</div>}>
-                        <RecallState />
-                      </Suspense>
-                    </Route>
-
-                    {/* Profiles + Settings */}
-                    <Route path="/settings"  component={Settings} />
-
-                    <Route component={NotFound} />
-                  </Switch>
+                  <RomeRoutes />
                 </AppShell>
               </Route>
               </Switch>
             </Router>
             <AkiraConsole />
+            {/* Widgets are app furniture now, not map furniture: the pinned
+                ones stay on screen on every page. Mounted above the router so
+                a route change never unmounts one mid-drag. */}
+            <WidgetLayer />
             <LightRay zIndex={201} />
             {/* Above everything, and self-disabling on touch input and on the
                 World Browser, where a native view paints over the DOM. */}

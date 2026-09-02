@@ -60,8 +60,9 @@ export interface RecallItem {
   back: string;
   tags: string;
   category: string;
-  nextReviewAt: number;
-  intervalDays: number;
+  /** Null when the card has no schedule at all — it never becomes due. */
+  nextReviewAt: number | null;
+  intervalDays: number | null;
   easeFactor: number;
   repetitions: number;
   lastReviewedAt: number | null;
@@ -234,8 +235,10 @@ function mapRecallItem(r: any): RecallItem {
   return {
     id: r.id, userId: r.user_id, front: r.front, back: r.back,
     tags: r.tags ?? "[]", category: r.category ?? "general",
-    nextReviewAt: r.next_review_at ?? Date.now(),
-    intervalDays: r.interval_days ?? 1,
+    // Null is meaningful here and must survive the mapping: a card with no
+    // schedule is one that only ever comes up when you go looking for it.
+    nextReviewAt: r.next_review_at ?? null,
+    intervalDays: r.interval_days ?? null,
     easeFactor: r.ease_factor ?? 2.5,
     repetitions: r.repetitions ?? 0,
     lastReviewedAt: r.last_reviewed_at ?? null,
@@ -413,8 +416,12 @@ class SupabaseStorage implements IStorage {
     const { data: r } = await this.sb.from("recall_items").insert({
       user_id: data.userId, front: data.front, back: data.back,
       tags: data.tags ?? "[]", category: data.category ?? "general",
-      next_review_at: data.nextReviewAt ?? Date.now(),
-      interval_days: data.intervalDays ?? 1, ease_factor: data.easeFactor ?? 2.5,
+      // An interval with no explicit first review starts one interval from
+      // now. Due-on-creation was the old default and, with a card that now
+      // appears over whatever you are doing, it would fire the moment you
+      // wrote it.
+      next_review_at: data.nextReviewAt ?? (data.intervalDays != null ? Date.now() + data.intervalDays * 24 * 60 * 60 * 1000 : null),
+      interval_days: data.intervalDays ?? null, ease_factor: data.easeFactor ?? 2.5,
       repetitions: data.repetitions ?? 0,
       last_reviewed_at: data.lastReviewedAt ?? null,
       created_at: Date.now(),

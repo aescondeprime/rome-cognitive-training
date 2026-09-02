@@ -11,6 +11,7 @@ import { motion } from "framer-motion";
 import ConstellationMenu from "./ConstellationMenu";
 import NanoTransition from "./NanoTransition";
 import { playCue } from "@/lib/sound";
+import { setConstellationUi, resetConstellationUi } from "@/lib/constellationUiState";
 
 /**
  * Assembly and disassembly timings, ms.
@@ -160,11 +161,30 @@ export function ConstellationPortal() {
     return window.romeDesktop?.browser.onConstellationToggle(toggleMap);
   }, [toggleMap]);
 
-  // Expose openMap so the trigger button inside AppShell can call it
+  // Expose openMap so the trigger button inside AppShell can call it, and
+  // closeMap so a widget that navigates somewhere can take the map with it —
+  // the widgets are no longer children of the menu and cannot be handed its
+  // `onClose` as a prop.
   useEffect(() => {
     (window as any).__romeOpenConstellation = openMap;
-    return () => { delete (window as any).__romeOpenConstellation; };
-  }, [openMap]);
+    (window as any).__romeCloseConstellation = closeMap;
+    return () => {
+      delete (window as any).__romeOpenConstellation;
+      delete (window as any).__romeCloseConstellation;
+    };
+  }, [openMap, closeMap]);
+
+  /**
+   * Tell the widget layer whether the map is up.
+   *
+   * `open` rather than `phase === "open"`: the widgets should be on screen
+   * through the build and the teardown, not appear once the plates have
+   * finished landing and vanish the instant they start to come apart.
+   */
+  useEffect(() => {
+    if (open) setConstellationUi({ mapOpen: true });
+    else resetConstellationUi();
+  }, [open]);
 
   const assembling = phase === "building" || phase === "deconstructing";
 

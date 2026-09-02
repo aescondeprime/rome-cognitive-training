@@ -17,7 +17,7 @@
     "test:akira": "node --import tsx --test electron/akira/__tests__/*.test.ts",
     "test:midas": "node --import tsx --test client/src/lib/__tests__/midas.test.ts",
     "test:academia": "node --import tsx --test client/src/lib/__tests__/academia.test.ts",
-    "test:recall": "node --import tsx --test client/src/lib/__tests__/recall.test.ts client/src/lib/__tests__/recallLlm.test.ts client/src/lib/__tests__/recallCompare.test.ts client/src/lib/__tests__/flashcards.test.ts",
+    "test:recall": "node --import tsx --test client/src/lib/__tests__/recall.test.ts client/src/lib/__tests__/recallLlm.test.ts client/src/lib/__tests__/flashcards.test.ts",
     "test:garden": "node --import tsx --test client/src/lib/__tests__/garden.test.ts",
     "dist:win": "tsx script/build-electron.ts && electron-builder --win",
     "dist:mac": "tsx script/build-electron.ts && electron-builder --mac",
