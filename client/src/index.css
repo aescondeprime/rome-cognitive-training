@@ -1392,3 +1392,174 @@ html[data-rome-cursor="on"] input:not([type="checkbox"]):not([type="radio"]):not
 .idea-content { white-space: pre-wrap; overflow-wrap: anywhere; }
 .idea-content b, .idea-content strong { font-weight: 700; }
 .idea-content i, .idea-content em { font-style: italic; }
+
+/* ── Command Center ────────────────────────────────────────────────────────
+   Three rules, all decorative. The grid's sweep and the alarm halo are the
+   only motion on the surface, and both are suppressed under
+   prefers-reduced-motion — a situation board that will not sit still is the
+   opposite of readable. */
+
+@keyframes cc-sweep {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to   { transform: translate(-50%, -50%) rotate(360deg); }
+}
+.cc-sweep { animation: cc-sweep 16s linear infinite; }
+
+@keyframes cc-pulse {
+  0%, 100% { opacity: 0.5;  transform: scale(1); }
+  50%      { opacity: 0.06; transform: scale(1.35); }
+}
+.cc-pulse { animation: cc-pulse 2.8s ease-in-out infinite; }
+
+.cc-marker { transition: filter .16s ease, transform .16s ease; }
+.cc-marker:hover { filter: brightness(1.16); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-sweep, .cc-pulse { animation: none; }
+  .cc-marker { transition-duration: .01ms; }
+}
+
+/* ── Top-bar navigator ─────────────────────────────────────────────────────
+   The menu itself is laid out in `TopBarNav`; what lives here is the hover
+   state, which has a resting appearance and therefore belongs to the
+   stylesheet — the same division of labour `RomeCursor` uses. */
+
+.rome-topnav-node:hover { transform: translateY(-1px); }
+.rome-topnav-node { transition: transform 150ms ease; }
+
+/* The highlight tracks the accent's saturation as well as its hue, so a
+   desaturated accent gets a desaturated highlight rather than a coloured one
+   that no longer matches anything else on screen. */
+.rome-topnav-domain:hover {
+  background: hsl(var(--accent-h) var(--accent-s) 14% / 0.55) !important;
+  border-color: hsl(var(--accent-h) var(--accent-s) 30% / 0.75) !important;
+  color: hsl(220 18% 92%) !important;
+}
+/* No `cursor` rule here, deliberately. `html[data-rome-cursor="on"] *` hides
+   the native cursor with `!important`, and a class selector with its own
+   `!important` outranks it — a `cursor: grabbing !important` on this chip put
+   the system cursor back on screen and left it there for the whole drag, which
+   is exactly the thing RomeCursor exists to prevent. The pressed state is the
+   ROME cursor's own `is-down`, which it already handles. */
+
+.rome-topnav-flyout {
+  animation: rome-topnav-in 160ms cubic-bezier(0.16, 0.9, 0.3, 1) both;
+}
+@keyframes rome-topnav-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-4px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ── Split panes ───────────────────────────────────────────────────────────
+   A divider is a hairline until you approach it, then a lit trace. It is 5px
+   wide so it can actually be grabbed, but only 1px of that is ever painted —
+   a visible 5px gutter between two panes reads as a seam in the app rather
+   than an edge between two views of it. */
+
+.rome-pane-divider {
+  background: linear-gradient(
+    to right,
+    transparent 0, transparent 2px,
+    hsl(var(--accent-h) 22% 18% / 0.75) 2px, hsl(var(--accent-h) 22% 18% / 0.75) 3px,
+    transparent 3px
+  );
+  transition: background 140ms ease;
+}
+.rome-pane-divider:hover,
+.rome-pane-divider.is-active {
+  background: linear-gradient(
+    to right,
+    transparent 0, transparent 2px,
+    hsl(var(--accent-h) var(--accent-s) 55%) 2px, hsl(var(--accent-h) var(--accent-s) 55%) 3px,
+    transparent 3px
+  );
+  box-shadow: 0 0 10px hsl(var(--accent-h) var(--accent-s) 50% / 0.4);
+}
+/* The same rule turned on its side for a horizontal split. */
+.rome-pane-divider[style*="row-resize"] {
+  background: linear-gradient(
+    to bottom,
+    transparent 0, transparent 2px,
+    hsl(var(--accent-h) 22% 18% / 0.75) 2px, hsl(var(--accent-h) 22% 18% / 0.75) 3px,
+    transparent 3px
+  );
+}
+.rome-pane-divider[style*="row-resize"]:hover,
+.rome-pane-divider[style*="row-resize"].is-active {
+  background: linear-gradient(
+    to bottom,
+    transparent 0, transparent 2px,
+    hsl(var(--accent-h) var(--accent-s) 55%) 2px, hsl(var(--accent-h) var(--accent-s) 55%) 3px,
+    transparent 3px
+  );
+}
+
+/* Every pane is outlined faintly while a domain is in flight, so it is clear
+   what can receive the drop before the pointer is over any one of them. */
+.rome-pane-host.is-dropping .rome-pane::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 25;
+  border: 1px dashed hsl(var(--accent-h) 40% 40% / 0.35);
+}
+
+.rome-pane.is-split { border: 1px solid hsl(var(--accent-h) 18% 12% / 0.6); }
+
+.rome-pane-drop { animation: rome-drop-in 140ms ease both; }
+@keyframes rome-drop-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ── Panes adapt to their own width, not the window's ──────────────────────
+   ROME's pages are laid out against the viewport: Tailwind's `md:` and `lg:`
+   are media queries, and a media query has no idea it is inside a 38%-wide
+   pane. `PaneHost` measures each pane and tags it, and these rules are what
+   the tag buys.
+
+   Two mechanisms, deliberately:
+
+   • Multi-column layouts collapse. A three-column grid in a half-width pane
+     is three unreadable columns, and no amount of scaling fixes that — the
+     layout has to change, not shrink.
+
+   • Below `sm` the pane also scales down slightly. `zoom` rather than
+     `transform: scale()` because zoom re-lays-out at the new size, so the
+     pane's own scrollbars and hit-testing stay correct; a transform would
+     leave the page believing it is still full width and put every click a few
+     pixels out. It is a Chromium property, which is fine — ROME ships on
+     Electron.
+
+   Both are scoped to `.rome-pane-body` so nothing here can reach a page that
+   is not inside a pane. */
+
+.rome-pane[data-pane-w="md"] .rome-pane-body .grid[class*="grid-cols-4"],
+.rome-pane[data-pane-w="md"] .rome-pane-body .grid[class*="grid-cols-5"],
+.rome-pane[data-pane-w="md"] .rome-pane-body .grid[class*="grid-cols-6"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+.rome-pane[data-pane-w="sm"] .rome-pane-body .grid[class*="grid-cols-"],
+.rome-pane[data-pane-w="xs"] .rome-pane-body .grid[class*="grid-cols-"] {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+/* Side-by-side flex rows become stacked. Only rows that were not already
+   allowed to wrap — a wrapping row is already doing the right thing. */
+.rome-pane[data-pane-w="sm"] .rome-pane-body .flex.gap-6:not(.flex-wrap):not(.flex-col),
+.rome-pane[data-pane-w="xs"] .rome-pane-body .flex.gap-6:not(.flex-wrap):not(.flex-col),
+.rome-pane[data-pane-w="xs"] .rome-pane-body .flex.gap-4:not(.flex-wrap):not(.flex-col) {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* The 32px page gutter is a third of an extra-narrow pane. */
+.rome-pane[data-pane-w="sm"] .rome-pane-body > .p-8 { padding: 1.25rem; }
+.rome-pane[data-pane-w="xs"] .rome-pane-body > .p-8 { padding: 0.75rem; }
+
+.rome-pane[data-pane-w="xs"]:not(.is-world) .rome-pane-body { zoom: 0.86; }
+
+/* Nothing inside a pane may set its size from the window. A `w-screen` header
+   in a half-width pane is a horizontal scrollbar and a broken layout. */
+.rome-pane-body :where(.w-screen) { width: 100% !important; }
+.rome-pane.is-split .rome-pane-body :where(.h-screen) { height: 100% !important; }
+.rome-pane.is-split .rome-pane-body :where(.min-h-screen) { min-height: 100% !important; }

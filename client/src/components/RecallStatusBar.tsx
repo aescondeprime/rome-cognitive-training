@@ -13,6 +13,11 @@
  * it. The reading clock is deliberately *not* shown here — it is not running
  * while you are elsewhere, and a frozen countdown in the corner would say the
  * opposite.
+ *
+ * **A finished run says nothing at all.** RUN COMPLETE is not news you need
+ * carried to every other node, and a bar that stays up after the work is over
+ * is the kind of chrome you stop reading. The summary is still there on the
+ * page; the rail goes quiet.
  */
 
 import { Link } from "wouter";
@@ -21,24 +26,18 @@ import { useRecallSessionOptional } from "@/lib/recallSession";
 
 export default function RecallStatusBar() {
   const session = useRecallSessionOptional();
-  if (!session || !session.active || session.phase === "loading") return null;
+  if (!session || !session.active) return null;
+  if (session.phase === "loading" || session.phase === "summary") return null;
 
-  const waiting = session.phase === "ready" || session.phase === "waiting" || session.phase === "comparing";
+  const waiting = session.phase === "ready" || session.phase === "waiting";
   const label = session.phase === "ready"
     ? (session.buffered > 0 ? "READY TO BEGIN" : "WRITING THE FIRST ROUND")
     : session.phase === "waiting" ? "WRITING QUESTIONS"
     : session.phase === "grading" ? "MARKING"
-    : session.phase === "summary" ? "RUN COMPLETE"
-    : session.phase === "archive" ? "ARCHIVE OPEN"
-    : session.phase === "comparing" ? "COMPARING"
-    : session.phase === "compare" ? "COMPARISON READY"
-    : session.phase === "manual" ? "COMPARING BY HAND"
     : session.round ? "YOUR TURN"
     : "PASSAGE WAITING";
 
-  const tone = session.phase === "summary" ? "hsl(220 12% 45%)"
-    : waiting && session.buffered === 0 ? "hsl(43 60% 60%)"
-    : "hsl(270 60% 72%)";
+  const tone = waiting && session.buffered === 0 ? "hsl(43 60% 60%)" : "hsl(270 60% 72%)";
 
   return (
     <Link href="/academia/recall">
@@ -55,10 +54,8 @@ export default function RecallStatusBar() {
             {label}
           </p>
           <p className="truncate text-[7px] tracking-widest uppercase" style={{ fontFamily: "DM Mono, monospace", color: "hsl(var(--accent-h) 20% 38%)" }}>
-            {session.phase === "comparing" && session.compareProgress
-              ? `${session.compareProgress.done}/${session.compareProgress.total} claims`
-              : `${session.coverage.seen}/${session.coverage.total} covered`}
-            {session.buffered > 0 && session.phase !== "comparing" && ` · ${session.buffered} ready`}
+            {session.coverage.seen}/{session.coverage.total} covered
+            {session.buffered > 0 && ` · ${session.buffered} ready`}
           </p>
         </div>
       </button>

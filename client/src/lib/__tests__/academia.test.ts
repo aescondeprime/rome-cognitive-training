@@ -12,11 +12,6 @@
  * UI branches on. A test that needed Ollama running would be a test that fails
  * for the wrong reasons.
  *
- * `academiaGen` is not covered here: it imports its siblings through the `@/`
- * alias, which the node test runner does not resolve, and rewriting those
- * imports to relative would break the convention every other file in `lib/`
- * follows.
- *
  * Run with `npm run test:academia`.
  */
 

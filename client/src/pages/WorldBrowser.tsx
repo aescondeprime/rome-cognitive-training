@@ -27,10 +27,12 @@ import {
   AlertTriangle, Loader2, RefreshCw,
   ArrowLeft, ArrowRight, X, Plus, Search, Home, Star,
   History, Download, Shield, ZoomIn, ZoomOut, FolderOpen,
-  LockKeyhole, Square,
+  LockKeyhole, Square, Pin,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import AmbientBackdrop from "@/components/AmbientBackdrop";
+import { useConstellationLayout } from "@/lib/layoutStore";
+import { WIDGET_KEYS, isWidgetPinned } from "@/lib/constellationLayout";
 
 // ── Accent colour (matches ROME theme) ──────────────────────────────────────
 // The constellation editor writes --accent-h/-s/-l onto documentElement.
@@ -466,10 +468,30 @@ function DesktopWorldBrowser() {
   const [akiraOpen, setAkiraOpen] = useState(
     () => document.documentElement.dataset.romeAkiraPanelOpen === "true",
   );
+  /**
+   * Let the pinned widgets through.
+   *
+   * A `WebContentsView` is composited above the React tree and swallows every
+   * pointer event inside its rectangle, so a pinned widget over the page is
+   * visible through a translucent one and completely dead to the touch. No
+   * amount of z-index fixes that — the widget is not on the same surface.
+   *
+   * The only lever is the one the constellation already pulls: detach the view.
+   * This is that lever, made explicit and reversible, so the widgets can be
+   * moved, collapsed or unpinned and the page comes straight back. It joins
+   * `overlayVisible` rather than living beside it, because "something in ROME
+   * needs the screen" is one condition with several causes.
+   */
+  const [widgetsFront, setWidgetsFront] = useState(false);
+
+  // Offered only when there is something to bring forward. A control that
+  // hides the page to reveal nothing is worse than no control.
+  const [layout] = useConstellationLayout();
+  const hasPinnedWidgets = WIDGET_KEYS.some(key => isWidgetPinned(layout, key));
 
   const active = tabs.find(tab => tab.active) ?? null;
   const activeBookmarked = Boolean(active?.url && bookmarks.some(bookmark => bookmark.url === active.url));
-  const overlayVisible = Boolean(constellationOpen || akiraOpen || panel || permission || active?.error || active?.crashed || bridgeError);
+  const overlayVisible = Boolean(widgetsFront || constellationOpen || akiraOpen || panel || permission || active?.error || active?.crashed || bridgeError);
 
   const measureViewport = () => {
     const rect = viewportRef.current?.getBoundingClientRect();
@@ -862,6 +884,29 @@ function DesktopWorldBrowser() {
           />
           <span className="rome-browser-opacity-value" style={{ width: 22, color: ACC }}>{Math.round(opacity * 100)}</span>
         </span>
+
+        {/* Pinned widgets. See `widgetsFront` above: the page steps aside rather
+            than the widget coming forward, because the page is a native view
+            and cannot be painted over. */}
+        {hasPinnedWidgets && (
+          <button
+            onClick={() => setWidgetsFront(value => !value)}
+            title={widgetsFront
+              ? "Show the page again"
+              : "Hide the page so pinned widgets can be moved"}
+            style={{
+              marginLeft: 14,
+              display: "flex", alignItems: "center", gap: 5,
+              background: "none", border: 0, cursor: "pointer", padding: 0,
+              font: "8px DM Mono, monospace", letterSpacing: ".11em", textTransform: "uppercase",
+              color: widgetsFront ? ACC : "hsl(220 8% 24%)",
+              transition: "color 140ms ease",
+            }}
+          >
+            <Pin size={9} style={{ transform: widgetsFront ? undefined : "rotate(38deg)" }} />
+            Widgets
+          </button>
+        )}
 
         {/* Text colour. The page keeps its own until you pick one — an override
             is occasionally necessary once the surfaces behind the text have

@@ -206,12 +206,28 @@ interface RomeKronosBridge {
   onSyncStatus: (listener: (status: RomeKronosSyncStatus) => void) => () => void;
 }
 
+/**
+ * Turning a document into something the Analysis State can render.
+ *
+ * Only office formats need this; a PDF is already what the viewer wants. The
+ * bridge is absent in a browser-only `npm run dev`, which reads the same as a
+ * machine with no LibreOffice — both mean "add it as a PDF instead".
+ */
+interface RomeForgeBridge {
+  converterStatus: () => Promise<{ available: boolean; path: string | null }>;
+  convertToPdf: (name: string, bytes: Uint8Array) => Promise<
+    | { ok: true; pdf: Uint8Array }
+    | { ok: false; reason: "no-converter" | "failed"; message?: string }
+  >;
+}
+
 interface Window {
   romeDesktop?: {
     getDataDir: () => Promise<string>;
     getDbPath: () => Promise<string>;
     getAppVersion: () => Promise<string>;
     isDesktop: true;
+    forge: RomeForgeBridge;
     akira: RomeAkiraBridge;
     browser: RomeBrowserBridge;
     kronos: RomeKronosBridge;

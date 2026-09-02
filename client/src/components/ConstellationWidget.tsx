@@ -3,10 +3,16 @@
  * Draggable, collapsible, geometric/futuristic design.
  * Position & collapsed state persisted via constellationLayout.
  */
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { Clock } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { kronosType, type ItemType } from "@/lib/kronosTypes";
+import {
+  clockFace, formatWallTime, zoneNow, zoneLabel, systemZone,
+  CLOCK_ZONES, DEFAULT_CLOCK_FORMAT,
+  type ClockFormat, type ClockZone,
+} from "@/lib/clockSettings";
 import {
   widgetRootStyle,
   useWidgetFit,
@@ -14,6 +20,7 @@ import {
   useWidgetYield,
   widgetYieldStyle,
   WidgetScaleHandle,
+  WidgetPinButton,
   type FocusRect,
 } from "./WidgetChrome";
 
@@ -40,21 +47,29 @@ interface Props {
   /** Set while the camera has flown to a node; `focus` is the space it claims. */
   zoomed?: boolean;
   focus?: FocusRect | null;
+  /** Pinned widgets stay on screen away from the constellation. */
+  pinned?: boolean;
+  onPinnedChange?: (pinned: boolean) => void;
+  /** 12- or 24-hour, and which zone the clock reads. See `clockSettings`. */
+  clockFormat?: ClockFormat;
+  clockTimeZone?: ClockZone;
+  onClockFormatChange?: (format: ClockFormat) => void;
+  onClockTimeZoneChange?: (zone: ClockZone) => void;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-const DAYS   = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAY_SHORT = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
 const MON_SHORT = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
 
-function fmtTime(t: string) {
-  const [h, m] = t.split(":").map(Number);
-  const ampm = h < 12 ? "AM" : "PM";
-  const hh = h % 12 === 0 ? 12 : h % 12;
-  return `${hh}:${String(m).padStart(2,"0")} ${ampm}`;
-}
-
+/**
+ * The date the agenda is fetched for.
+ *
+ * Deliberately this machine's date, not the widget's chosen zone's. The clock
+ * can be set to Tokyo to keep an eye on a colleague's afternoon; that does not
+ * mean today's schedule became tomorrow's. What you scheduled is anchored to
+ * the day you are living in.
+ */
 function localDateStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -89,8 +104,109 @@ function TypeDot({ type }: { type: ItemType | string }) {
   );
 }
 
+/**
+ * The clock's settings, folded into the widget.
+ *
+ * Inline rather than a popover: the widget is `position: fixed` and can be
+ * dragged anywhere, so a floating panel would have to work out which side of
+ * itself has room, on a surface that is already doing that for the hologram.
+ * Pushing the agenda down for as long as the panel is open costs nothing —
+ * the panel closes the moment you have made the two choices in it.
+ *
+ * `data-nodrag` on the root, because every control in here is a click on a
+ * surface whose whole job is otherwise to be dragged.
+ */
+function ClockSettings({
+  format, zone, onFormatChange, onZoneChange,
+}: {
+  format: ClockFormat;
+  zone: ClockZone;
+  onFormatChange?: (format: ClockFormat) => void;
+  onZoneChange?: (zone: ClockZone) => void;
+}) {
+  const system = useMemo(systemZone, []);
+
+  return (
+    <div
+      data-nodrag="1"
+      style={{
+        margin: "0 0 10px",
+        padding: "8px 9px 9px",
+        border: "1px solid hsl(var(--accent-h) 25% 18% / 0.8)",
+        background: "hsl(222 22% 6% / 0.7)",
+        display: "flex", flexDirection: "column", gap: 8,
+      }}
+    >
+      {/* ── 12 / 24 ─────────────────────────────────────────────────── */}
+      <div>
+        <div style={{ fontSize: 7, letterSpacing: "0.22em", color: "hsl(var(--accent-h) 35% 42%)", textTransform: "uppercase", marginBottom: 4 }}>
+          Format
+        </div>
+        <div style={{ display: "flex", gap: 3 }}>
+          {([
+            { value: "12" as ClockFormat, label: "12 HR" },
+            { value: "24" as ClockFormat, label: "24 HR" },
+          ]).map(option => {
+            const on = format === option.value;
+            return (
+              <button
+                key={option.value}
+                onClick={() => onFormatChange?.(option.value)}
+                style={{
+                  flex: 1,
+                  padding: "3px 0",
+                  cursor: "pointer",
+                  fontFamily: "DM Mono, monospace", fontSize: 8, letterSpacing: "0.16em",
+                  color: on ? "hsl(var(--accent-h) 90% 72%)" : "hsl(var(--accent-h) 25% 42%)",
+                  background: on ? "hsl(var(--accent-h) 40% 14% / 0.9)" : "transparent",
+                  border: `1px solid ${on ? "hsl(var(--accent-h) 45% 32%)" : "hsl(var(--accent-h) 20% 16%)"}`,
+                  transition: "all 140ms ease",
+                }}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Zone ────────────────────────────────────────────────────── */}
+      <div>
+        <div style={{ fontSize: 7, letterSpacing: "0.22em", color: "hsl(var(--accent-h) 35% 42%)", textTransform: "uppercase", marginBottom: 4 }}>
+          Timezone
+        </div>
+        <select
+          value={zone ?? ""}
+          onChange={e => onZoneChange?.(e.target.value || null)}
+          title={zone ? zone : `System — ${system}`}
+          style={{
+            width: "100%",
+            background: "hsl(222 20% 4%)",
+            color: "hsl(var(--accent-h) 60% 62%)",
+            border: "1px solid hsl(var(--accent-h) 25% 20%)",
+            fontFamily: "DM Mono, monospace", fontSize: 8.5, letterSpacing: "0.1em",
+            padding: "3px 4px", outline: "none", cursor: "pointer",
+          }}
+        >
+          {/* The machine's own zone is named on the option rather than left as
+              a bare "System", so the list says what choosing it will do. */}
+          <option value="">SYSTEM · {system.split("/").pop()!.replace(/_/g, " ").toUpperCase()}</option>
+          {/* A stored zone that is not on the short list still has to appear,
+              or opening this panel would silently reset it to System. */}
+          {zone && !CLOCK_ZONES.some(z => z.id === zone) && (
+            <option value={zone}>{zoneLabel(zone).toUpperCase()}</option>
+          )}
+          {CLOCK_ZONES.map(z => (
+            <option key={z.id} value={z.id}>{z.label.toUpperCase()}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
+
 // ── Main widget ────────────────────────────────────────────────────────────
-export default function ConstellationWidget({ pos, collapsed, onPosChange, onCollapsedChange, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null }: Props) {
+export default function ConstellationWidget({ pos, collapsed, onPosChange, onCollapsedChange, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null, pinned = false, onPinnedChange, clockFormat = DEFAULT_CLOCK_FORMAT, clockTimeZone = null, onClockFormatChange, onClockTimeZoneChange }: Props) {
   const W = 220;
   const DEFAULT_X = window.innerWidth  - W - 24;
   const DEFAULT_Y = 80;
@@ -108,6 +224,11 @@ export default function ConstellationWidget({ pos, collapsed, onPosChange, onCol
   // parked there. Yielding is a fade, not a move — see `useWidgetYield`.
   const yielding = useWidgetYield(rootRef, zoomed, focus, [x, y, scale, collapsed]);
 
+  // Closed by default and never persisted: it is a two-decision panel, not a
+  // mode, and a widget that reopens holding a settings form is one that wastes
+  // a third of its height on something you already finished.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   // ── Clock tick ──────────────────────────────────────────────────────────
   const [now, setNow] = useState(new Date());
   useEffect(() => {
@@ -115,13 +236,22 @@ export default function ConstellationWidget({ pos, collapsed, onPosChange, onCol
     return () => clearInterval(id);
   }, []);
 
-  const hours   = String(now.getHours()).padStart(2, "0");
-  const minutes = String(now.getMinutes()).padStart(2, "0");
-  const seconds = String(now.getSeconds()).padStart(2, "0");
-  const dayName = DAYS[now.getDay()];
-  const dateNum = now.getDate();
-  const monName = MONTHS[now.getMonth()];
-  const year    = now.getFullYear();
+  /**
+   * Every field on the face comes from the chosen zone, not from the `Date`'s
+   * own accessors. `now.getHours()` is this machine's hours and nothing else,
+   * so reading the clock through `zoneNow` is what makes the zone setting mean
+   * anything at all — including the date line, which is the part that actually
+   * changes when you look at Tokyo from California.
+   */
+  const zoned = useMemo(() => zoneNow(now, clockTimeZone), [now, clockTimeZone]);
+  const face  = clockFace(zoned, clockFormat);
+
+  const hours   = face.hours;
+  const minutes = face.minutes;
+  const seconds = face.seconds;
+  const dateNum = zoned.day;
+  const monName = MONTHS[zoned.month - 1];
+  const year    = zoned.year;
 
   // ── Agenda fetch ────────────────────────────────────────────────────────
   const dateStr = localDateStr();
@@ -172,7 +302,7 @@ export default function ConstellationWidget({ pos, collapsed, onPosChange, onCol
   }, [x, y, onPosChange]);
 
   // ── Progress arc for the current minute ─────────────────────────────────
-  const secFraction  = (now.getSeconds()) / 60;
+  const secFraction  = zoned.second / 60;
   const arcR         = 28;
   const arcCirc      = 2 * Math.PI * arcR;
   const arcDash      = arcCirc * (1 - secFraction);
@@ -206,11 +336,33 @@ export default function ConstellationWidget({ pos, collapsed, onPosChange, onCol
               fontSize: 9, letterSpacing: "0.22em", color: "hsl(var(--accent-h) var(--accent-s) var(--accent-l))",
               textTransform: "uppercase",
             }}>
-              {DAY_SHORT[now.getDay()]} · {MON_SHORT[now.getMonth()]} {dateNum}
+              {DAY_SHORT[zoned.weekday]} · {MON_SHORT[zoned.month - 1]} {dateNum}
             </span>
           </div>
 
-          {/* Collapse toggle */}
+          {/* Pin + collapse. The pin is what makes this widget follow you
+              off the map; see `WidgetPinButton`. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 1 }}>
+          {/* Clock settings. Hidden while collapsed — the panel it opens lives
+              in the body, and there would be nowhere for it to appear. */}
+          {!collapsed && (onClockFormatChange || onClockTimeZoneChange) && (
+            <button
+              data-nodrag="1"
+              onClick={() => setSettingsOpen(open => !open)}
+              title="Clock format and timezone"
+              style={{
+                background: "none", border: 0, cursor: "pointer", padding: "2px 3px",
+                lineHeight: 0,
+                color: settingsOpen
+                  ? "hsl(var(--accent-h) var(--accent-s) var(--accent-l))"
+                  : "hsl(var(--accent-h) 30% 38%)",
+                transition: "color 150ms ease",
+              }}
+            >
+              <Clock size={11} />
+            </button>
+          )}
+          <WidgetPinButton pinned={pinned} onPinnedChange={onPinnedChange} />
           <button
             data-nodrag="1"
             onClick={() => onCollapsedChange(!collapsed)}
@@ -229,11 +381,21 @@ export default function ConstellationWidget({ pos, collapsed, onPosChange, onCol
               <path d="M2 8 L6 4 L10 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
           </button>
+          </div>
         </div>
 
         {/* ── Expanded body ────────────────────────────────────────────── */}
         {!collapsed && (
           <div style={{ padding: "10px 12px 12px" }}>
+
+            {settingsOpen && (
+              <ClockSettings
+                format={clockFormat}
+                zone={clockTimeZone}
+                onFormatChange={onClockFormatChange}
+                onZoneChange={onClockTimeZoneChange}
+              />
+            )}
 
             {/* ── Clock display ─────────────────────────────────────── */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
@@ -249,9 +411,24 @@ export default function ConstellationWidget({ pos, collapsed, onPosChange, onCol
                   {hours}
                   <span style={{ opacity: 0.4, animation: "blink 1s step-end infinite" }}>:</span>
                   {minutes}
+                  {/* The meridiem rides at the cap height of the digits rather
+                      than on the baseline, so 12-hour mode does not make the
+                      clock a line taller than 24-hour mode. */}
+                  {face.meridiem && (
+                    <span style={{
+                      fontSize: 10, letterSpacing: "0.14em", marginLeft: 4,
+                      verticalAlign: "top", opacity: 0.75,
+                    }}>
+                      {face.meridiem}
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontSize: 8.5, color: "hsl(var(--accent-h) 30% 40%)", letterSpacing: "0.18em", marginTop: 2 }}>
                   {seconds}s · {monName.toUpperCase()} {year}
+                  {/* Only when the clock is somewhere other than here. A zone
+                      label on a clock showing your own time is noise; on one
+                      showing someone else's it is the whole point. */}
+                  {clockTimeZone && <> · {zoned.abbreviation}</>}
                 </div>
               </div>
 
@@ -358,7 +535,7 @@ export default function ConstellationWidget({ pos, collapsed, onPosChange, onCol
                       fontSize: 8, color: "hsl(220 12% 45%)", marginTop: 1.5,
                       letterSpacing: "0.12em",
                     }}>
-                      {fmtTime(item.start_time)}
+                      {formatWallTime(item.start_time, clockFormat)}
                       {item.duration_minutes > 0 && ` · ${item.duration_minutes}min`}
                     </div>
                   </div>

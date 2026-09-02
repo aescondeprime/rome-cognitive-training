@@ -4,8 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { CONSTELLATION_NODES, getConnectionPairs } from "@/lib/constellationData";
 import {
-  loadLayout,
-  saveLayout,
   resetLayout,
   defaultLayout,
   DEFAULT_RAY_COLOR,
@@ -17,13 +15,13 @@ import {
   DEFAULT_SOUND_ENABLED,
   DEFAULT_SOUND_VOLUME,
   DEFAULT_SOUND_PITCH,
-  refitWidgetPositions,
-  widgetScale,
-  clampWidgetScale,
   type ConstellationLayout,
   type NodeOverride,
-  type WidgetKey,
 } from "@/lib/constellationLayout";
+// The layout is shared state now: widgets render at the app root and outlive
+// this menu, so the editor cannot keep a private `useState` copy of it.
+import { useConstellationLayout } from "@/lib/layoutStore";
+import { setConstellationUi, resetConstellationUi } from "@/lib/constellationUiState";
 // setRayEditOffset was called by handleReset but never imported, so pressing
 // Reset in the Constellation editor threw a ReferenceError before it finished.
 import { getRayState, pinRaySource, setRayDirection, setRayColor, setRayBrightness, setAccentColor, setRayEditOffset } from "@/lib/lightRayState";
@@ -32,14 +30,8 @@ import { applyLayout, isRayFloating } from "@/lib/applyLayout";
 import { playCue, setSoundEnabled, setSoundVolume, setSoundPitch, CUE_NAMES, CUE_LABELS } from "@/lib/sound";
 import ConstellationNode from "./ConstellationNode";
 import ParticleCanvas from "./ParticleCanvas";
-import { nodeFocusRect } from "./WidgetChrome";
 import NodeBranchMenu from "./NodeBranchMenu";
 import NodeHologram from "./NodeHologram";
-import ConstellationWidget from "./ConstellationWidget";
-import ProjectsWidget from "./ProjectsWidget";
-import FlashcardWidget from "./FlashcardWidget";
-import ThreatsWidget from "./ThreatsWidget";
-import TaskStabilizerWidget from "./TaskStabilizerWidget";
 
 // ── Akira ambience presets ────────────────────────────────────────────────
 // Two colors form the conversation glow: A blooms from the lower left, B from
@@ -384,11 +376,10 @@ export default function ConstellationMenu({ onClose }: Props) {
   // The editor card folds away so the whole screen is visible while arranging.
   const [editPanelOpen, setEditPanelOpen] = useState(true);
 
-  // Layout overrides — loaded from localStorage, mutated in edit mode
-  const [layout, setLayout] = useState<ConstellationLayout>(loadLayout);
-
-  // Persist whenever layout changes
-  useEffect(() => { saveLayout(layout); }, [layout]);
+  // Layout overrides — the shared store, mutated in edit mode. Persisting is
+  // the store's job (debounced, because dragging a node rewrites this on every
+  // pointer move).
+  const [layout, setLayout] = useConstellationLayout();
 
   // Push the layout into live renderer state. `applyLayout` is the same
   // function App calls at boot — the editor deliberately has no private copy of
@@ -420,30 +411,6 @@ export default function ConstellationMenu({ onClose }: Props) {
     window.addEventListener("resize", onResize);
     return () => { cancelAnimationFrame(id); window.removeEventListener("resize", onResize); };
   }, []);
-
-  /**
-   * Re-fit the widgets to the screen that is actually here.
-   *
-   * The symptom this fixes: ROME saved widget positions on a large display, you
-   * reopened it on a laptop, and half the widgets were simply gone — parked at
-   * coordinates past the right or bottom edge with no way to reach them. The
-   * remap is proportional, so a widget that lived in the lower right of the big
-   * screen lands in the lower right of the small one instead of being shoved
-   * against the edge with everything else.
-   *
-   * This pass only knows nominal widths; each widget then clamps itself against
-   * its real measured box (`useWidgetFit`), which is what accounts for height.
-   *
-   * `refitWidgetPositions` returns the same object when nothing changed, so the
-   * identity check below is what stops this from looping on its own write.
-   */
-  useEffect(() => {
-    if (dims.w <= 0 || dims.h <= 0) return;
-    setLayout(prev => {
-      const next = refitWidgetPositions(prev, dims);
-      return next === prev ? prev : next;
-    });
-  }, [dims.w, dims.h]);
 
   // Parallax mouse spring
   const mx = useMotionValue(0);
@@ -566,14 +533,6 @@ export default function ConstellationMenu({ onClose }: Props) {
     });
   }, []);
 
-  /** Uniform widget scale. One handler for all five — the key picks the slot. */
-  const handleWidgetScale = useCallback((key: WidgetKey, value: number) => {
-    setLayout(prev => ({
-      ...prev,
-      widgetScales: { ...(prev.widgetScales ?? {}), [key]: clampWidgetScale(value) },
-    }));
-  }, []);
-
   const handleRayDrag = useCallback((ox: number, oy: number) => {
     const x = Math.max(-0.4, Math.min(0.4, ox));
     const y = Math.max(-0.4, Math.min(0.4, oy));
@@ -693,21 +652,34 @@ export default function ConstellationMenu({ onClose }: Props) {
   const selectedNode = effectiveNodes.find(n => n.id === selectedId) ?? null;
 
   /**
-   * The space a zoomed node claims, and the flag that turns it on.
+   * A node owns the middle of the screen.
    *
    * Widgets are `position: fixed` and live outside the camera layer, so they
    * genuinely do not move when the map flies — but the node flies to the exact
    * centre of the screen, and a widget parked in the middle of the map ends up
-   * sitting on top of it. Whichever widgets overlap this rectangle fade out for
-   * the duration and come back on deselect, so a widget can be dropped anywhere
-   * without having to leave the middle of the screen clear.
+   * sitting on top of it. The widgets fade out of the way for the duration;
+   * `WidgetLayer` owns the rectangle they measure against now (`nodeFocusRect`)
+   * and this flag is what turns it on.
    *
    * Edit mode has no camera, so nothing yields there — you need to see every
    * widget while you are arranging them.
    */
   const zoomed = Boolean(selectedId) && !editMode;
-  const focusRect = useMemo(() => nodeFocusRect(dims), [dims.w, dims.h]);
   const activeId     = editMode ? null : (hoveredId ?? selectedId);
+
+  /**
+   * Tell the widget layer what the map is doing.
+   *
+   * The widgets are siblings of this component now, not children, so the three
+   * things they need from it — that the map is up, that the editor is open,
+   * that a node has the middle of the screen — travel through a store instead
+   * of props. The cleanup matters: unmounting the map while a node was selected
+   * would otherwise leave every pinned widget yielding to a zoom that ended.
+   */
+  useEffect(() => {
+    setConstellationUi({ mapOpen: true, editMode, zoomed });
+  }, [editMode, zoomed]);
+  useEffect(() => resetConstellationUi, []);
 
   // One read at mount — the hologram and the assembly effect both branch on it.
   const prefersReduced = useMemo(
@@ -1544,78 +1516,6 @@ export default function ConstellationMenu({ onClose }: Props) {
           </>
         );
       })()}
-
-      {/* ── Widgets ───────────────────────────────────────────────────────
-          These used to unmount the moment edit mode opened, which made the one
-          thing you most want to arrange invisible while arranging. They stay
-          mounted now and take `editing`, which turns on the resize grip and
-          scroll-to-scale without changing anything else about them. */}
-
-      {/* Kronos agenda widget */}
-      <ConstellationWidget
-        pos={layout.widgetPos ?? null}
-        collapsed={layout.widgetCollapsed ?? false}
-        onPosChange={p => setLayout(prev => ({ ...prev, widgetPos: p }))}
-        onCollapsedChange={c => setLayout(prev => ({ ...prev, widgetCollapsed: c }))}
-        scale={widgetScale(layout, "kronos")}
-        editing={editMode}
-        onScaleChange={s => handleWidgetScale("kronos", s)}
-        zoomed={zoomed}
-        focus={focusRect}
-      />
-
-      {/* Task Stabilizer — persistent focus queue + Kronos timer sync */}
-      <TaskStabilizerWidget
-        pos={layout.taskStabilizerWidgetPos ?? null}
-        collapsed={layout.taskStabilizerWidgetCollapsed ?? false}
-        onPosChange={p => setLayout(prev => ({ ...prev, taskStabilizerWidgetPos: p }))}
-        onCollapsedChange={c => setLayout(prev => ({ ...prev, taskStabilizerWidgetCollapsed: c }))}
-        scale={widgetScale(layout, "taskStabilizer")}
-        editing={editMode}
-        onScaleChange={s => handleWidgetScale("taskStabilizer", s)}
-        zoomed={zoomed}
-        focus={focusRect}
-      />
-
-      {/* Threats widget */}
-      <ThreatsWidget
-        pos={layout.threatsWidgetPos ?? null}
-        collapsed={layout.threatsWidgetCollapsed ?? false}
-        onPosChange={p => setLayout(prev => ({ ...prev, threatsWidgetPos: p }))}
-        onCollapsedChange={c => setLayout(prev => ({ ...prev, threatsWidgetCollapsed: c }))}
-        scale={widgetScale(layout, "threats")}
-        editing={editMode}
-        onScaleChange={s => handleWidgetScale("threats", s)}
-        zoomed={zoomed}
-        focus={focusRect}
-      />
-
-      {/* Projects widget */}
-      <ProjectsWidget
-        pos={layout.projectsWidgetPos ?? null}
-        collapsed={layout.projectsWidgetCollapsed ?? false}
-        onPosChange={p => setLayout(prev => ({ ...prev, projectsWidgetPos: p }))}
-        onCollapsedChange={c => setLayout(prev => ({ ...prev, projectsWidgetCollapsed: c }))}
-        onClose={onClose}
-        scale={widgetScale(layout, "projects")}
-        editing={editMode}
-        onScaleChange={s => handleWidgetScale("projects", s)}
-        zoomed={zoomed}
-        focus={focusRect}
-      />
-
-      {/* Flashcard Archive — the cards Quantum Recall kept, when they come due */}
-      <FlashcardWidget
-        pos={layout.flashcardWidgetPos ?? null}
-        collapsed={layout.flashcardWidgetCollapsed ?? false}
-        onPosChange={p => setLayout(prev => ({ ...prev, flashcardWidgetPos: p }))}
-        onCollapsedChange={c => setLayout(prev => ({ ...prev, flashcardWidgetCollapsed: c }))}
-        scale={widgetScale(layout, "flashcards")}
-        editing={editMode}
-        onScaleChange={s => handleWidgetScale("flashcards", s)}
-        zoomed={zoomed}
-        focus={focusRect}
-      />
 
       {/* Profile badge */}
       {activeProfile && !editMode && (

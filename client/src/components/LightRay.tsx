@@ -33,6 +33,13 @@ export default function LightRay({ zIndex = 5 }: Props) {
       if (cancelled) return;
 
       const rs  = getRayState();
+      // Something opaque is on screen that the ray would sit on top of. Clear
+      // once and keep the loop alive, so it comes straight back when it lifts.
+      if (rs.suppressors > 0) {
+        ctx.clearRect(0, 0, w, h);
+        requestAnimationFrame(draw);
+        return;
+      }
       const col = getRayHSL();
       const { h: hue, s, l } = col;
       const bright = getRayBrightness();

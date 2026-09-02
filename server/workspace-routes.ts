@@ -292,10 +292,18 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
     if (!await requireBoard(res, boardId, ownerId)) return;
     const now = Date.now();
     const body = req.body ?? {};
+    // image/source_label carry a capture from the Analysis State; attached_to
+    // and the offsets are what make a sticky note follow its card; data holds a
+    // venn item's sets. All added by
+    // script/sql/2026-09-forge-analysis-state.sql.
     const result = await sb.from("component_pins").insert({
-      board_id: boardId, user_id: ownerId, content: body.content ?? "", pin_type: body.pin_type ?? "evidence",
+      board_id: boardId, user_id: ownerId, content: body.content ?? "", pin_type: body.pin_type ?? "fact",
       pos_x: body.pos_x ?? 100, pos_y: body.pos_y ?? 100, width: body.width ?? 200,
-      height: body.height ?? 0, color: body.color ?? "amber", created_at: now, updated_at: now,
+      height: body.height ?? 0, color: body.color ?? "amber",
+      image: body.image ?? null, source_label: body.source_label ?? null,
+      attached_to: body.attached_to ?? null, offset_x: body.offset_x ?? null, offset_y: body.offset_y ?? null,
+      data: body.data ?? null,
+      created_at: now, updated_at: now,
     }).select().single();
     ensureNoError(result);
     res.json(result.data);
@@ -303,7 +311,10 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
 
   app.patch("/api/pins/:id", route(async (req, res) => {
     const ownerId = await userId(req);
-    const patch = { ...pick(req.body, ["content", "pin_type", "pos_x", "pos_y", "width", "height", "color"]), updated_at: Date.now() };
+    const patch = { ...pick(req.body, [
+      "content", "pin_type", "pos_x", "pos_y", "width", "height", "color",
+      "image", "source_label", "attached_to", "offset_x", "offset_y", "data",
+    ]), updated_at: Date.now() };
     const result = await sb.from("component_pins").update(patch).eq("id", Number(req.params.id)).eq("user_id", ownerId);
     ensureNoError(result);
     res.json({ ok: true });
@@ -311,7 +322,15 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
 
   app.delete("/api/pins/:id", route(async (req, res) => {
     const ownerId = await userId(req);
-    const result = await sb.from("component_pins").delete().eq("id", Number(req.params.id)).eq("user_id", ownerId);
+    const id = Number(req.params.id);
+    // The board tables carry no foreign keys by convention, so the cascade
+    // lives here: a note whose card is gone would be invisible and
+    // undeletable, and a thread to a deleted card would draw to nowhere.
+    const notes = await sb.from("component_pins").delete().eq("attached_to", id).eq("user_id", ownerId);
+    ensureNoError(notes);
+    const lines = await sb.from("component_threads").delete().or(`from_id.eq.${id},to_id.eq.${id}`);
+    ensureNoError(lines);
+    const result = await sb.from("component_pins").delete().eq("id", id).eq("user_id", ownerId);
     ensureNoError(result);
     res.json({ ok: true });
   }));
@@ -493,8 +512,15 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
     const priorityValue = Number(req.body?.priority);
     const priority = [1, 2, 3].includes(priorityValue) ? priorityValue : 1;
     const now = Date.now();
+    const body = req.body ?? {};
     const result = await sb.from("threats")
-      .insert({ user_id: ownerId, title, priority, resolved: false, created_at: now, updated_at: now })
+      .insert({
+        user_id: ownerId, title, priority, resolved: false,
+        detail: typeof body.detail === "string" ? body.detail : "",
+        pos_x: body.pos_x === undefined ? null : Number(body.pos_x),
+        pos_y: body.pos_y === undefined ? null : Number(body.pos_y),
+        created_at: now, updated_at: now,
+      })
       .select().single();
     ensureNoError(result);
     res.json(result.data);
@@ -502,7 +528,7 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
 
   app.patch("/api/threats/:id", route(async (req, res) => {
     const ownerId = await userId(req);
-    const patch = { ...pick(req.body ?? {}, ["title", "priority", "resolved"]), updated_at: Date.now() };
+    const patch = { ...pick(req.body ?? {}, ["title", "priority", "resolved", "detail", "pos_x", "pos_y"]), updated_at: Date.now() };
     const result = await sb.from("threats")
       .update(patch).eq("id", Number(req.params.id)).eq("user_id", ownerId);
     ensureNoError(result);
@@ -511,8 +537,167 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
 
   app.delete("/api/threats/:id", route(async (req, res) => {
     const ownerId = await userId(req);
+    const id = Number(req.params.id);
+    // No foreign keys in this schema on purpose (see the migration), so this
+    // threat's edges are cleaned up here. Directives are untouched: a goal is
+    // not filed under a threat, so there is nothing to detach.
+    ensureNoError(await sb.from("command_links").delete()
+      .eq("user_id", ownerId).eq("source_kind", "threat").eq("source_id", id));
     const result = await sb.from("threats")
-      .delete().eq("id", Number(req.params.id)).eq("user_id", ownerId);
+      .delete().eq("id", id).eq("user_id", ownerId);
+    ensureNoError(result);
+    res.json({ ok: true });
+  }));
+
+  // ── Command Center ─────────────────────────────────────────────────────
+  //
+  // Directives are the other half of the board: goals, with a lifecycle, a
+  // horizon, a progress reading and an optional parent, which is what makes the
+  // chain view a tree rather than a list. They are independent of threats —
+  // the only thing the two sides share is what they can be attached to.
+  // Threats stay where they are: the Command Center reads the same rows the
+  // constellation widget writes.
+
+  const DIRECTIVE_FIELDS = ["title", "detail", "status", "priority", "progress", "target_date", "pos_x", "pos_y"] as const;
+
+  app.get("/api/directives", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const result = await sb.from("directives").select("*").eq("user_id", ownerId).order("created_at", { ascending: true });
+    ensureNoError(result);
+    res.json(result.data ?? []);
+  }));
+
+  app.post("/api/directives", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const body = req.body ?? {};
+    const now = Date.now();
+    const result = await sb.from("directives").insert({
+      user_id: ownerId,
+      title: String(body.title ?? "").trim() || "Untitled objective",
+      detail: typeof body.detail === "string" ? body.detail : "",
+      status: typeof body.status === "string" ? body.status : "planned",
+      priority: [1, 2, 3].includes(Number(body.priority)) ? Number(body.priority) : 1,
+      parent_id: body.parent_id === undefined || body.parent_id === null ? null : Number(body.parent_id),
+      progress: Math.max(0, Math.min(100, Number(body.progress) || 0)),
+      target_date: typeof body.target_date === "string" ? body.target_date : "",
+      pos_x: body.pos_x === undefined ? null : Number(body.pos_x),
+      pos_y: body.pos_y === undefined ? null : Number(body.pos_y),
+      created_at: now, updated_at: now,
+    }).select().single();
+    ensureNoError(result);
+    res.json(result.data);
+  }));
+
+  app.patch("/api/directives/:id", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const id = Number(req.params.id);
+    const body = req.body ?? {};
+    const patch: Record<string, unknown> = { ...pick(body, DIRECTIVE_FIELDS as unknown as string[]), updated_at: Date.now() };
+
+    // A directive cannot be its own parent, and cannot adopt one of its own
+    // descendants — either turns the chain view's tree walk into an infinite
+    // loop, and the graph has no other cycle guard.
+    if (body.parent_id !== undefined) {
+      let next = body.parent_id === null ? null : Number(body.parent_id);
+      if (next === id) next = null;
+      if (next !== null) {
+        const all = await sb.from("directives").select("id,parent_id").eq("user_id", ownerId);
+        ensureNoError(all);
+        const parentOf = new Map<number, number | null>(
+          (all.data ?? []).map((row: { id: number; parent_id: number | null }) =>
+            [Number(row.id), row.parent_id === null ? null : Number(row.parent_id)]));
+        const seen = new Set<number>();
+        let walk: number | null = next;
+        while (walk !== null && !seen.has(walk)) {
+          if (walk === id) { next = null; break; }
+          seen.add(walk);
+          walk = parentOf.get(walk) ?? null;
+        }
+      }
+      patch.parent_id = next;
+    }
+
+    const result = await sb.from("directives").update(patch).eq("id", id).eq("user_id", ownerId);
+    ensureNoError(result);
+    res.json({ ok: true });
+  }));
+
+  app.delete("/api/directives/:id", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const id = Number(req.params.id);
+    // Children are promoted to the deleted directive's parent rather than
+    // deleted with it. Removing one order should not silently remove the
+    // sub-orders under it — those are separate decisions.
+    const victim = await sb.from("directives").select("parent_id").eq("id", id).eq("user_id", ownerId).maybeSingle();
+    ensureNoError(victim);
+    ensureNoError(await sb.from("directives")
+      .update({ parent_id: victim.data?.parent_id ?? null })
+      .eq("user_id", ownerId).eq("parent_id", id));
+    ensureNoError(await sb.from("command_links").delete()
+      .eq("user_id", ownerId).eq("source_kind", "directive").eq("source_id", id));
+    const result = await sb.from("directives").delete().eq("id", id).eq("user_id", ownerId);
+    ensureNoError(result);
+    res.json({ ok: true });
+  }));
+
+  // An edge from a threat or a directive onto real work. One table for both
+  // sides of the board, and `target_ref` is text so that a board id, a Kronos
+  // item id and a Contingency Garden plan letter all address the same way —
+  // see the migration for the encoding.
+
+  app.get("/api/command-links", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const result = await sb.from("command_links").select("*").eq("user_id", ownerId).order("created_at", { ascending: true });
+    ensureNoError(result);
+    res.json(result.data ?? []);
+  }));
+
+  app.post("/api/command-links", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const body = req.body ?? {};
+    const sourceKind = body.source_kind === "directive" ? "directive" : "threat";
+    const sourceId = Number(body.source_id);
+    const targetKind = String(body.target_kind ?? "");
+    const targetRef = String(body.target_ref ?? "");
+    if (!Number.isFinite(sourceId) || !targetKind || !targetRef) {
+      res.status(400).json({ error: "source_id, target_kind and target_ref are required" });
+      return;
+    }
+    // Attaching the same target twice is a mis-click, not a second relation.
+    // The unique index would reject the insert, so the existing edge is
+    // returned instead and the caller never has to care.
+    const existing = await sb.from("command_links").select("*")
+      .eq("user_id", ownerId).eq("source_kind", sourceKind).eq("source_id", sourceId)
+      .eq("target_kind", targetKind).eq("target_ref", targetRef).maybeSingle();
+    ensureNoError(existing);
+    if (existing.data) { res.json(existing.data); return; }
+    const result = await sb.from("command_links").insert({
+      user_id: ownerId,
+      source_kind: sourceKind,
+      source_id: sourceId,
+      target_kind: targetKind,
+      target_ref: targetRef,
+      target_label: typeof body.target_label === "string" ? body.target_label : "",
+      label: typeof body.label === "string" ? body.label : "",
+      created_at: Date.now(),
+    }).select().single();
+    ensureNoError(result);
+    res.json(result.data);
+  }));
+
+  app.patch("/api/command-links/:id", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const patch = pick(req.body ?? {}, ["label", "target_label"]);
+    const result = await sb.from("command_links").update(patch)
+      .eq("id", Number(req.params.id)).eq("user_id", ownerId);
+    ensureNoError(result);
+    res.json({ ok: true });
+  }));
+
+  app.delete("/api/command-links/:id", route(async (req, res) => {
+    const ownerId = await userId(req);
+    const result = await sb.from("command_links").delete()
+      .eq("id", Number(req.params.id)).eq("user_id", ownerId);
     ensureNoError(result);
     res.json({ ok: true });
   }));

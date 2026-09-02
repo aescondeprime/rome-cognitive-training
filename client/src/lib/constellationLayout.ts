@@ -1,3 +1,6 @@
+import type { ClockFormat, ClockZone } from "./clockSettings";
+import { DEFAULT_CLOCK_FORMAT } from "./clockSettings";
+
 const STORAGE_KEY = "rome_constellation_layout_v2";
 
 export interface NodeOverride {
@@ -65,6 +68,27 @@ export interface ConstellationLayout {
    */
   widgetScales: Partial<Record<WidgetKey, number>>;
   /**
+   * Which widgets follow you off the map. An unpinned widget is part of the
+   * constellation and disappears with it; a pinned one is furniture and stays
+   * on screen on every page, still draggable and still collapsible.
+   *
+   * A map keyed by `WidgetKey` for the same reason `widgetScales` is one: the
+   * flat `*WidgetPos` / `*WidgetCollapsed` pairs above are why `loadLayout` is
+   * thirty lines of backfill, and the widget list has grown twice already.
+   */
+  widgetPinned: Partial<Record<WidgetKey, boolean>>;
+  /**
+   * How the agenda widget reads the time. Stored here with the rest of the
+   * widget state rather than in the widget's own key, so a layout export or a
+   * Reset carries it like everything else.
+   *
+   * `clockTimeZone` is `null` for "follow this machine". It moves the clock and
+   * the date only — the agenda keeps showing the wall-clock times you scheduled
+   * (see the note at the top of `clockSettings`).
+   */
+  clockFormat: ClockFormat;
+  clockTimeZone: ClockZone;
+  /**
    * Viewport the widget positions were last written against. Opening ROME on a
    * smaller display remaps them proportionally instead of leaving half of them
    * past the edge — without this there is no way to tell "dragged to x=1700"
@@ -106,6 +130,11 @@ export function clampWidgetScale(value: number): number {
 
 export function widgetScale(layout: ConstellationLayout, key: WidgetKey): number {
   return clampWidgetScale(layout.widgetScales?.[key] ?? DEFAULT_WIDGET_SCALE);
+}
+
+/** True when this widget should stay on screen away from the constellation. */
+export function isWidgetPinned(layout: ConstellationLayout, key: WidgetKey): boolean {
+  return Boolean(layout.widgetPinned?.[key]);
 }
 
 /**
@@ -192,6 +221,9 @@ export function defaultLayout(): ConstellationLayout {
     soundVolume: DEFAULT_SOUND_VOLUME,
     soundPitch: DEFAULT_SOUND_PITCH,
     widgetScales: {},
+    widgetPinned: {},
+    clockFormat: DEFAULT_CLOCK_FORMAT,
+    clockTimeZone: null,
     widgetViewport: null,
   };
 }
@@ -244,7 +276,20 @@ export function loadLayout(): ConstellationLayout {
     if (!("widgetScales"   in parsed) || typeof parsed.widgetScales !== "object" || parsed.widgetScales === null) {
       (parsed as any).widgetScales = {};
     }
+    if (!("widgetPinned" in parsed) || typeof parsed.widgetPinned !== "object" || parsed.widgetPinned === null) {
+      (parsed as any).widgetPinned = {};
+    }
     if (!("widgetViewport" in parsed)) (parsed as any).widgetViewport = null;
+    // Backfill the clock settings (added with the agenda widget's 12/24 and
+    // timezone controls). A stored zone is not validated here — `zoneNow`
+    // falls back to the machine's own zone if `Intl` rejects it, which covers
+    // both a typo and a zone this build of Chromium has never heard of.
+    if (parsed.clockFormat !== "12" && parsed.clockFormat !== "24") {
+      (parsed as any).clockFormat = DEFAULT_CLOCK_FORMAT;
+    }
+    if (!("clockTimeZone" in parsed) || typeof parsed.clockTimeZone !== "string") {
+      (parsed as any).clockTimeZone = null;
+    }
     return parsed;
   } catch {
     return defaultLayout();

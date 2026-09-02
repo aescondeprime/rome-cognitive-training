@@ -25,13 +25,16 @@ import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } fr
 import { createPortal } from "react-dom";
 import {
   Plus, Trash2, Link2, Link2Off, Loader2, Lightbulb, Image as ImageIcon,
-  CornerDownRight, Bold, Italic, Underline, Repeat2,
+  CornerDownRight, Repeat2,
   AlignLeft, AlignCenter, AlignRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import BoardShell, { type Board } from "@/components/BoardShell";
+// Card handling is shared with the Case Board, which edits cards the same way.
+import { contentToHtml, isBlankHtml, sanitizeHtml } from "@/lib/cardText";
+import { FormatBar, ResizeHandles, type Corner } from "@/components/CardChrome";
 
 // ── Types ──────────────────────────────────────────────────────────────
 interface IdeaCard {
@@ -79,13 +82,6 @@ const COLORS = [
 type ColorId = typeof COLORS[number]["id"];
 const colorFor = (id: string) => COLORS.find(c => c.id === id) ?? COLORS[0];
 
-// Text colours offered by the format bar. Deliberately not the card palette:
-// these have to stay readable on every one of those backgrounds.
-const TEXT_COLORS = [
-  "hsl(210 20% 92%)", "hsl(192 90% 68%)", "hsl(270 80% 74%)",
-  "hsl(38 90% 66%)",  "hsl(150 65% 62%)", "hsl(345 85% 70%)",
-];
-
 const ACCENT      = "hsl(192 100% 62%)";
 const MIN_W       = 110;
 const MIN_H       = 44;
@@ -102,57 +98,6 @@ const IMAGE_STORE_LIMIT = 3 * 1024 * 1024;
 const IMAGE_MAX_EDGE    = 1600;
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif"];
 const ACCEPT      = ".png,.jpg,.jpeg,.gif,image/png,image/jpeg,image/gif";
-
-// ── Rich text ──────────────────────────────────────────────────────────
-// The card content column now holds HTML. Everything that ever went into it
-// before was plain text, so anything without a tag is escaped on the way out
-// rather than migrated — there is nothing to migrate to.
-const KEEP   = new Set(["B", "STRONG", "I", "EM", "U", "BR", "SPAN", "DIV", "P", "FONT"]);
-const PURGE  = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "LINK", "META"]);
-
-function sanitizeHtml(html: string): string {
-  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
-  const clean = (node: Element) => {
-    // Unwrapping promotes grandchildren to this level, so the pass repeats
-    // until the level settles. It terminates: every unwrap loses a level.
-    for (let changed = true; changed; ) {
-      changed = false;
-      for (const child of Array.from(node.children)) {
-        if (PURGE.has(child.tagName)) { child.remove(); changed = true; continue; }
-        if (KEEP.has(child.tagName)) continue;
-        const parent = child.parentNode;
-        if (!parent) continue;
-        while (child.firstChild) parent.insertBefore(child.firstChild, child);
-        parent.removeChild(child);
-        changed = true;
-      }
-    }
-    for (const child of Array.from(node.children)) {
-      const el = child as HTMLElement;
-      const color = el.style?.color || el.getAttribute("color") || "";
-      for (const attr of Array.from(el.attributes)) el.removeAttribute(attr.name);
-      if (color) el.style.color = color;
-      clean(el);
-    }
-  };
-  clean(doc.body);
-  return doc.body.innerHTML;
-}
-
-const escapeHtml = (text: string) =>
-  text.replace(/[&<>]/g, ch => (ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : "&gt;"));
-
-function contentToHtml(content: string): string {
-  if (!content) return "";
-  return /<[a-z][^>]*>/i.test(content)
-    ? sanitizeHtml(content)
-    : escapeHtml(content).replace(/\n/g, "<br>");
-}
-
-/** True when an editor holds nothing but formatting scaffolding. */
-function isBlankHtml(html: string): boolean {
-  return html.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim().length === 0;
-}
 
 // ── Failure reporting ──────────────────────────────────────────────────
 // Every write here was fire-and-forget: a rejected insert rolled the optimistic
@@ -215,73 +160,6 @@ function FittedTitle({ text }: { text: string }) {
         {text}
       </span>
     </div>
-  );
-}
-
-// ── Format bar ─────────────────────────────────────────────────────────
-// execCommand is deprecated and still the only thing that formats a selection
-// inside a contenteditable without hand-writing a range editor. styleWithCSS
-// makes foreColor emit a span the sanitiser keeps instead of a <font>.
-function FormatBar({ accent }: { accent: string }) {
-  const run = (command: string, value?: string) => {
-    try {
-      if (command === "foreColor") document.execCommand("styleWithCSS", false, "true");
-      document.execCommand(command, false, value);
-    } catch { /* selection went away; nothing to format */ }
-  };
-
-  return (
-    <div
-      // Losing the selection would make every button a no-op.
-      onMouseDown={e => { e.preventDefault(); e.stopPropagation(); }}
-      className="absolute -top-8 left-0 z-[120] flex items-center gap-1 border px-1.5 py-1"
-      style={{ background: "hsl(222 26% 7% / 0.96)", borderColor: accent, backdropFilter: "blur(8px)" }}
-    >
-      {([["bold", Bold], ["italic", Italic], ["underline", Underline]] as const).map(([command, Icon]) => (
-        <button
-          key={command}
-          onClick={() => run(command)}
-          className="p-1 text-muted-foreground transition-colors hover:text-foreground"
-          title={command[0].toUpperCase() + command.slice(1)}
-        >
-          <Icon className="h-3 w-3" />
-        </button>
-      ))}
-      <span className="mx-0.5 h-3.5 w-px" style={{ background: accent, opacity: 0.4 }} />
-      {TEXT_COLORS.map(color => (
-        <button
-          key={color}
-          onClick={() => run("foreColor", color)}
-          className="h-3 w-3 border border-black/40 transition-transform hover:scale-125"
-          style={{ background: color }}
-          title="Text colour"
-        />
-      ))}
-    </div>
-  );
-}
-
-// ── Corner resize handles ──────────────────────────────────────────────
-type Corner = "nw" | "ne" | "sw" | "se";
-const CORNER_POS: Record<Corner, React.CSSProperties> = {
-  nw: { top: -4,    left: -4,  cursor: "nw-resize" },
-  ne: { top: -4,    right: -4, cursor: "ne-resize" },
-  sw: { bottom: -4, left: -4,  cursor: "sw-resize" },
-  se: { bottom: -4, right: -4, cursor: "se-resize" },
-};
-
-function ResizeHandles({ onStart, color }: { onStart: (corner: Corner, e: React.MouseEvent) => void; color: string }) {
-  return (
-    <>
-      {(["nw", "ne", "sw", "se"] as Corner[]).map(corner => (
-        <div
-          key={corner}
-          className="absolute h-2.5 w-2.5 opacity-0 transition-opacity group-hover:opacity-100"
-          style={{ ...CORNER_POS[corner], background: "hsl(222 22% 10%)", border: `1.5px solid ${color}`, zIndex: 60 }}
-          onMouseDown={e => { e.stopPropagation(); onStart(corner, e); }}
-        />
-      ))}
-    </>
   );
 }
 

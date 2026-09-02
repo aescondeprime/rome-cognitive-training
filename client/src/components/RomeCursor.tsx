@@ -14,10 +14,10 @@
  *   be running the real cursor comes straight back.
  * • Text inputs and textareas keep the native I-beam (see index.css) and the
  *   custom cursor hides itself over them.
- * • The World Browser paints a native WebContentsView over the DOM, where a DOM
- *   cursor would be invisible while the real one is hidden — fatal. The
- *   `data-rome-desktop-world` flag AppShell sets is watched with a
- *   MutationObserver and switches everything off for the duration.
+ * • The World Browser paints a native WebContentsView over the DOM. This used
+ *   to switch the whole cursor off for as long as /world was open, which is no
+ *   longer right and was never quite the reason it looked that way. See the
+ *   note on `enabled` below.
  * • Coarse pointers (touch) never activate it at all.
  */
 
@@ -60,18 +60,32 @@ export default function RomeCursor() {
   const ringRef  = useRef<HTMLDivElement>(null);
   const [enabled, setEnabled] = useState(false);
 
-  // Decide whether we should run at all, and keep deciding — World Browser
-  // toggles its flag as the user navigates in and out of /world.
+  /**
+   * Whether to run at all. Only the pointer type decides now.
+   *
+   * This used to switch off for the whole of /world, on the reasoning that a
+   * DOM cursor is invisible under a native `WebContentsView` while the real one
+   * is hidden. Two things make that wrong today:
+   *
+   * • ROME's `cursor: none` reaches ROME's document and nothing else. The guest
+   *   page is a separate document, so it was never ROME that hid the cursor in
+   *   there — the page either draws its own (`guest-cursor.ts`, injected on
+   *   every web page) or keeps the native one, and neither cares what ROME's
+   *   stylesheet says.
+   * • The browser no longer owns the window. It can be one pane beside another
+   *   (`PaneHost`), and it never covered the top bar or the footer even before
+   *   that. Switching off globally meant the system cursor in ROME's own chrome
+   *   the entire time the browser was open — which is exactly what you notice
+   *   moving between the top bar and the page.
+   *
+   * Over the native view itself, ROME's DOM receives no mouse events at all —
+   * they go to the guest — so `mouseleave` on the document fires and the layer
+   * hides itself. That was always the mechanism doing the real work here.
+   */
   useEffect(() => {
     const fine = typeof window.matchMedia !== "function"
       || window.matchMedia("(pointer: fine)").matches;
-    if (!fine) { setEnabled(false); return; }
-
-    const read = () => setEnabled(document.documentElement.dataset.romeDesktopWorld !== "true");
-    read();
-    const obs = new MutationObserver(read);
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-rome-desktop-world"] });
-    return () => obs.disconnect();
+    setEnabled(fine);
   }, []);
 
   useEffect(() => {

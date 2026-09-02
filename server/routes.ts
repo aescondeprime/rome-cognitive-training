@@ -63,8 +63,10 @@ const insertRecallItemSchema = z.object({
   back: z.string(),
   tags: z.string().optional().default("[]"),
   category: z.string().optional().default("general"),
-  nextReviewAt: z.number().optional(),
-  intervalDays: z.number().optional().default(1),
+  // Nullable, not merely optional: null is "no schedule", which is different
+  // from "not specified" and must reach the store intact.
+  nextReviewAt: z.number().nullable().optional(),
+  intervalDays: z.number().nullable().optional(),
   easeFactor: z.number().optional().default(2.5),
   repetitions: z.number().optional().default(0),
   lastReviewedAt: z.number().nullable().optional(),
@@ -379,6 +381,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (typeof tags === "string") patch.tags = tags;
       if (!Object.keys(patch).length) return res.status(400).json({ error: "Nothing to change" });
       res.json(await storage.updateRecallItem(id, patch));
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  /**
+   * Set or clear a card's interval.
+   *
+   * Separate from both /review and the content PATCH on purpose. /review is
+   * SM-2 deciding the next interval from how well you did; this is you saying
+   * what the interval should be, or that there should not be one. The content
+   * PATCH must not be able to reach the schedule at all — renaming a card is
+   * not reviewing it.
+   *
+   * Sending the card's existing interval is how the due-card overlay resets it
+   * on close: the interval is unchanged and the clock starts again from now.
+   */
+  app.patch("/api/recall-items/:id/schedule", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const user = await getActiveUser(req);
+      const items = await storage.getRecallItems(user.id);
+      if (!items.some(i => i.id === id)) return res.status(404).json({ error: "Not found" });
+      const raw = req.body?.intervalDays;
+      if (raw !== null && typeof raw !== "number") return res.status(400).json({ error: "intervalDays must be a number or null" });
+      const days = raw === null ? null : Math.max(0, raw);
+      res.json(await storage.updateRecallItem(id, {
+        intervalDays: days,
+        nextReviewAt: days === null ? null : Date.now() + days * 24 * 60 * 60 * 1000,
+      }));
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 

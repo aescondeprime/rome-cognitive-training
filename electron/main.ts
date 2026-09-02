@@ -15,6 +15,7 @@ import { AkiraController } from "./akira/controller";
 import { registerAkiraIpc } from "./akira/akira-ipc";
 import { KronosController } from "./kronos/kronos-controller";
 import { registerKronosIpc } from "./kronos/kronos-ipc";
+import { convertToPdf, converterStatus } from "./forge/document-converter";
 import {
   DEFAULT_CONSOLE_SHORTCUT,
   DEFAULT_CONVERSATION_SHORTCUT,
@@ -639,6 +640,22 @@ ipcMain.handle("get-db-path", (event) => {
 ipcMain.handle("get-app-version", (event) => {
   assertTrustedRenderer(event);
   return app.getVersion();
+});
+
+// ── Knowledge Forge ───────────────────────────────────────────────────────
+//
+// The Analysis State renders PDFs only, so Word and PowerPoint documents are
+// converted once at import. This lives in the main process because it is a
+// subprocess; the renderer asks and gets bytes back.
+
+ipcMain.handle("rome:forge:converter-status", (event) => {
+  assertTrustedRenderer(event);
+  return converterStatus();
+});
+
+ipcMain.handle("rome:forge:convert-to-pdf", async (event, name: string, bytes: Uint8Array) => {
+  assertTrustedRenderer(event);
+  return convertToPdf(typeof name === "string" ? name : "document.docx", new Uint8Array(bytes));
 });
 
 // ── App lifecycle ─────────────────────────────────────────────────────────

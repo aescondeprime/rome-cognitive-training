@@ -75,7 +75,7 @@ function mapSession(r: any) {
   return { id: r.id, userId: r.user_id, sessionType: r.session_type ?? "standard", durationMinutes: r.duration_minutes ?? 0, trialsCompleted: r.trials_completed ?? 0, avgAccuracy: r.avg_accuracy ?? 0, avgConfidence: r.avg_confidence ?? 0, metacogReflection: r.metacog_reflection ?? null, completedAt: r.completed_at ?? Date.now() };
 }
 function mapRecallItem(r: any) {
-  return { id: r.id, userId: r.user_id, front: r.front, back: r.back, tags: r.tags ?? "[]", category: r.category ?? "general", nextReviewAt: r.next_review_at ?? Date.now(), intervalDays: r.interval_days ?? 1, easeFactor: r.ease_factor ?? 2.5, repetitions: r.repetitions ?? 0, lastReviewedAt: r.last_reviewed_at ?? null, createdAt: r.created_at ?? Date.now() };
+  return { id: r.id, userId: r.user_id, front: r.front, back: r.back, tags: r.tags ?? "[]", category: r.category ?? "general", nextReviewAt: r.next_review_at ?? null, intervalDays: r.interval_days ?? null, easeFactor: r.ease_factor ?? 2.5, repetitions: r.repetitions ?? 0, lastReviewedAt: r.last_reviewed_at ?? null, createdAt: r.created_at ?? Date.now() };
 }
 function mapCalibration(r: any) {
   return { id: r.id, userId: r.user_id, domain: r.domain, confidenceBucket: r.confidence_bucket, correctCount: r.correct_count ?? 0, totalCount: r.total_count ?? 0, updatedAt: r.updated_at ?? Date.now() };
@@ -351,8 +351,10 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     if (route === "/recall-items" && method === "POST") {
       const user = await getActiveUser(req, sb);
       const body = await readBody(req);
-      const { front, back, tags = "[]", category = "general", nextReviewAt, intervalDays = 1, easeFactor = 2.5, repetitions = 0, lastReviewedAt = null } = body;
-      const { data: item } = await sb.from("recall_items").insert({ user_id: user.id, front, back, tags, category, next_review_at: nextReviewAt ?? Date.now(), interval_days: intervalDays, ease_factor: easeFactor, repetitions, last_reviewed_at: lastReviewedAt, created_at: Date.now() }).select().single();
+      const { front, back, tags = "[]", category = "general", nextReviewAt = null, intervalDays = null, easeFactor = 2.5, repetitions = 0, lastReviewedAt = null } = body;
+      // A card with no interval never becomes due, which is the default for one
+      // written by hand: it surfaces when you go looking for it and not before.
+      const { data: item } = await sb.from("recall_items").insert({ user_id: user.id, front, back, tags, category, next_review_at: nextReviewAt ?? (intervalDays != null ? Date.now() + intervalDays * 86400000 : null), interval_days: intervalDays, ease_factor: easeFactor, repetitions, last_reviewed_at: lastReviewedAt, created_at: Date.now() }).select().single();
       return json(res, 200, item ? mapRecallItem(item) : {});
     }
 
@@ -370,6 +372,25 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     }
 
     {
+      // Setting the interval, or clearing it. Distinct from /review, which is
+      // SM-2 choosing the next one, and from the content PATCH below, which
+      // must never be able to reach the schedule.
+      const m = route.match(/^\/recall-items\/(\d+)\/schedule$/);
+      if (m && method === "PATCH") {
+        const id = parseInt(m[1]);
+        const { intervalDays } = await readBody(req);
+        if (intervalDays !== null && typeof intervalDays !== "number") return json(res, 400, { error: "intervalDays must be a number or null" });
+        const days = intervalDays === null ? null : Math.max(0, intervalDays);
+        const { data, error } = await sb.from("recall_items").update({
+          interval_days: days,
+          next_review_at: days === null ? null : Date.now() + days * 86400000,
+        }).eq("id", id).select().single();
+        if (error) return json(res, 500, { error: error.message });
+        return json(res, 200, data ? mapRecallItem(data) : {});
+      }
+    }
+
+    {
       const m = route.match(/^\/recall-items\/(\d+)$/);
       if (m && method === "DELETE") {
         await sb.from("recall_items").delete().eq("id", parseInt(m[1]));
@@ -378,15 +399,20 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       // Content edits only. Reviewing advances the schedule and lives at
       // /review; a rename must never be able to reach those fields.
       if (m && method === "PATCH") {
+        // Read here rather than relying on an outer `body`: this file is
+        // outside the typecheck (tsconfig covers client, shared and server),
+        // so the free variable it used to reference threw at runtime instead
+        // of failing to compile.
+        const edit = await readBody(req);
         const patch: Record<string, unknown> = {};
-        if (typeof body?.front === "string" && body.front.trim()) patch.front = body.front.trim();
-        if (typeof body?.back === "string" && body.back.trim()) patch.back = body.back.trim();
-        if (typeof body?.category === "string") patch.category = body.category.trim() || "general";
-        if (typeof body?.tags === "string") patch.tags = body.tags;
+        if (typeof edit?.front === "string" && edit.front.trim()) patch.front = edit.front.trim();
+        if (typeof edit?.back === "string" && edit.back.trim()) patch.back = edit.back.trim();
+        if (typeof edit?.category === "string") patch.category = edit.category.trim() || "general";
+        if (typeof edit?.tags === "string") patch.tags = edit.tags;
         if (!Object.keys(patch).length) return json(res, 400, { error: "Nothing to change" });
         const { data, error } = await sb.from("recall_items").update(patch).eq("id", parseInt(m[1])).select().single();
         if (error) return json(res, 500, { error: error.message });
-        return json(res, 200, data);
+        return json(res, 200, data ? mapRecallItem(data) : {});
       }
     }
 
@@ -794,8 +820,13 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           const user = await getActiveUser(req, sb);
           const body = await readBody(req);
           const now  = Date.now();
-          const { content = "", pin_type = "evidence", pos_x = 100, pos_y = 100, width = 200, color = "amber" } = body;
-          const { data: pin } = await sb.from("component_pins").insert({ board_id: boardId, user_id: user.id, content, pin_type, pos_x, pos_y, width, color, created_at: now, updated_at: now }).select().single();
+          const { content = "", pin_type = "fact", pos_x = 100, pos_y = 100, width = 200, height = 0, color = "amber",
+                  image = null, source_label = null, attached_to = null, offset_x = null, offset_y = null, data: shape = null } = body;
+          // image/source_label carry a capture from the Analysis State;
+          // attached_to and the offsets are what make a sticky note follow its
+          // card; data holds a venn item's sets. All from
+          // script/sql/2026-09-forge-analysis-state.sql.
+          const { data: pin } = await sb.from("component_pins").insert({ board_id: boardId, user_id: user.id, content, pin_type, pos_x, pos_y, width, height, color, image, source_label, attached_to, offset_x, offset_y, data: shape, created_at: now, updated_at: now }).select().single();
           return json(res, 200, pin ?? {});
         }
       }
@@ -808,11 +839,17 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
-          ["content","pin_type","pos_x","pos_y","width","height","color"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          ["content","pin_type","pos_x","pos_y","width","height","color","image","source_label","attached_to","offset_x","offset_y","data"]
+            .forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
           await sb.from("component_pins").update(patch).eq("id", id);
           return json(res, 200, { ok: true });
         }
         if (method === "DELETE") {
+          // The board tables carry no foreign keys by convention, so the
+          // cascade lives here: a note whose card is gone would be invisible
+          // and undeletable.
+          await sb.from("component_pins").delete().eq("attached_to", id);
+          await sb.from("component_threads").delete().or(`from_id.eq.${id},to_id.eq.${id}`);
           await sb.from("component_pins").delete().eq("id", id);
           return json(res, 200, { ok: true });
         }
@@ -1350,8 +1387,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       const user = await getActiveUser(req, sb);
       const body = await readBody(req);
       const now  = Date.now();
-      const { title = "", priority = 1 } = body;
-      const { data } = await sb.from("threats").insert({ user_id: user.id, title: title.trim(), priority, resolved: false, created_at: now, updated_at: now }).select().single();
+      const { title = "", priority = 1, detail = "", pos_x = null, pos_y = null } = body;
+      const { data } = await sb.from("threats").insert({ user_id: user.id, title: title.trim(), priority, detail, pos_x, pos_y, resolved: false, created_at: now, updated_at: now }).select().single();
       return json(res, 200, data ?? {});
     }
 
@@ -1359,6 +1396,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     {
       const m = route.match(/^\/threats\/(\d+)$/);
       if (m) {
+        const user = await getActiveUser(req, sb);
         const id = parseInt(m[1]);
         if (method === "PATCH") {
           const body  = await readBody(req);
@@ -1366,11 +1404,153 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           if (body.title    !== undefined) patch.title    = body.title;
           if (body.priority !== undefined) patch.priority = body.priority;
           if (body.resolved !== undefined) patch.resolved = body.resolved;
+          if (body.detail   !== undefined) patch.detail   = body.detail;
+          if (body.pos_x    !== undefined) patch.pos_x    = body.pos_x;
+          if (body.pos_y    !== undefined) patch.pos_y    = body.pos_y;
           const { data } = await sb.from("threats").update(patch).eq("id", id).select().single();
           return json(res, 200, data ?? { error: "Not found" });
         }
         if (method === "DELETE") {
+          // No foreign keys in this schema on purpose (see the migration), so
+          // this threat's edges are cleaned up here. Directives are untouched:
+          // a goal is not filed under a threat, so there is nothing to detach.
+          await sb.from("command_links").delete().eq("user_id", user.id).eq("source_kind", "threat").eq("source_id", id);
           await sb.from("threats").delete().eq("id", id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // DIRECTIVES — the other half of the Command Center
+    // ════════════════════════════════════════════════════════════════════
+
+    if (route === "/directives" && method === "GET") {
+      const user = await getActiveUser(req, sb);
+      const { data } = await sb.from("directives").select("*").eq("user_id", user.id).order("created_at", { ascending: true });
+      return json(res, 200, data ?? []);
+    }
+
+    if (route === "/directives" && method === "POST") {
+      const user = await getActiveUser(req, sb);
+      const body = await readBody(req);
+      const now  = Date.now();
+      const row = {
+        user_id:     user.id,
+        title:       String(body.title ?? "").trim() || "Untitled objective",
+        detail:      body.detail      ?? "",
+        status:      body.status      ?? "planned",
+        priority:    body.priority    ?? 1,
+        parent_id:   body.parent_id   ?? null,
+        progress:    body.progress    ?? 0,
+        target_date: body.target_date ?? "",
+        pos_x:       body.pos_x       ?? null,
+        pos_y:       body.pos_y       ?? null,
+        created_at: now, updated_at: now,
+      };
+      const { data, error } = await sb.from("directives").insert(row).select().single();
+      if (error) return json(res, 500, { message: error.message });
+      return json(res, 200, data ?? {});
+    }
+
+    {
+      const m = route.match(/^\/directives\/(\d+)$/);
+      if (m) {
+        const user = await getActiveUser(req, sb);
+        const id   = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body  = await readBody(req);
+          const patch: any = { updated_at: Date.now() };
+          for (const key of ["title", "detail", "status", "priority", "progress", "target_date", "pos_x", "pos_y"]) {
+            if (body[key] !== undefined) patch[key] = body[key];
+          }
+          // A directive cannot be its own parent, and cannot adopt one of its
+          // own descendants — either turns the chain view's tree walk into an
+          // infinite loop, and the graph has no other cycle guard.
+          if (body.parent_id !== undefined) {
+            const next = body.parent_id === null ? null : Number(body.parent_id);
+            patch.parent_id = next === id ? null : next;
+            if (patch.parent_id !== null) {
+              const { data: all } = await sb.from("directives").select("id,parent_id").eq("user_id", user.id);
+              const parentOf = new Map<number, number | null>((all ?? []).map((d: any) => [Number(d.id), d.parent_id === null ? null : Number(d.parent_id)]));
+              let walk: number | null = patch.parent_id;
+              const seen = new Set<number>();
+              while (walk !== null && !seen.has(walk)) {
+                if (walk === id) { patch.parent_id = null; break; }
+                seen.add(walk);
+                walk = parentOf.get(walk) ?? null;
+              }
+            }
+          }
+          const { data } = await sb.from("directives").update(patch).eq("id", id).eq("user_id", user.id).select().single();
+          return json(res, 200, data ?? { error: "Not found" });
+        }
+        if (method === "DELETE") {
+          // Children are promoted to the deleted directive's parent rather than
+          // deleted with it. Removing one order should not silently remove the
+          // sub-orders under it — those are separate decisions.
+          const { data: victim } = await sb.from("directives").select("parent_id").eq("id", id).eq("user_id", user.id).maybeSingle();
+          await sb.from("directives").update({ parent_id: victim?.parent_id ?? null }).eq("user_id", user.id).eq("parent_id", id);
+          await sb.from("command_links").delete().eq("user_id", user.id).eq("source_kind", "directive").eq("source_id", id);
+          await sb.from("directives").delete().eq("id", id).eq("user_id", user.id);
+          return json(res, 200, { ok: true });
+        }
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // COMMAND LINKS — an edge from a threat or a directive onto real work
+    // ════════════════════════════════════════════════════════════════════
+
+    if (route === "/command-links" && method === "GET") {
+      const user = await getActiveUser(req, sb);
+      const { data } = await sb.from("command_links").select("*").eq("user_id", user.id).order("created_at", { ascending: true });
+      return json(res, 200, data ?? []);
+    }
+
+    if (route === "/command-links" && method === "POST") {
+      const user = await getActiveUser(req, sb);
+      const body = await readBody(req);
+      const row = {
+        user_id:      user.id,
+        source_kind:  body.source_kind === "directive" ? "directive" : "threat",
+        source_id:    Number(body.source_id),
+        target_kind:  String(body.target_kind ?? ""),
+        target_ref:   String(body.target_ref ?? ""),
+        target_label: body.target_label ?? "",
+        label:        body.label ?? "",
+        created_at:   Date.now(),
+      };
+      if (!row.target_kind || !row.target_ref || !Number.isFinite(row.source_id)) {
+        return json(res, 400, { message: "source_id, target_kind and target_ref are required" });
+      }
+      // Attaching the same target twice is a mis-click, not a second relation.
+      // The unique index makes the insert fail rather than duplicate, so the
+      // existing edge is returned and the caller never has to care.
+      const { data: existing } = await sb.from("command_links").select("*")
+        .eq("user_id", user.id).eq("source_kind", row.source_kind).eq("source_id", row.source_id)
+        .eq("target_kind", row.target_kind).eq("target_ref", row.target_ref).maybeSingle();
+      if (existing) return json(res, 200, existing);
+      const { data, error } = await sb.from("command_links").insert(row).select().single();
+      if (error) return json(res, 500, { message: error.message });
+      return json(res, 200, data ?? {});
+    }
+
+    {
+      const m = route.match(/^\/command-links\/(\d+)$/);
+      if (m) {
+        const user = await getActiveUser(req, sb);
+        const id   = parseInt(m[1]);
+        if (method === "PATCH") {
+          const body = await readBody(req);
+          const patch: any = {};
+          if (body.label        !== undefined) patch.label        = body.label;
+          if (body.target_label !== undefined) patch.target_label = body.target_label;
+          const { data } = await sb.from("command_links").update(patch).eq("id", id).eq("user_id", user.id).select().single();
+          return json(res, 200, data ?? { error: "Not found" });
+        }
+        if (method === "DELETE") {
+          await sb.from("command_links").delete().eq("id", id).eq("user_id", user.id);
           return json(res, 200, { ok: true });
         }
       }

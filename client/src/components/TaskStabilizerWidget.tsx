@@ -32,6 +32,7 @@ import {
   useWidgetYield,
   widgetYieldStyle,
   WidgetScaleHandle,
+  WidgetPinButton,
   type FocusRect,
 } from "./WidgetChrome";
 
@@ -67,6 +68,9 @@ interface Props {
   /** Set while the camera has flown to a node; `focus` is the space it claims. */
   zoomed?: boolean;
   focus?: FocusRect | null;
+  /** Pinned widgets stay on screen away from the constellation. */
+  pinned?: boolean;
+  onPinnedChange?: (pinned: boolean) => void;
 }
 
 interface Calendar { id: number; name: string }
@@ -152,7 +156,7 @@ function Accelerator({ progress, active }: { progress: number; active: boolean }
   );
 }
 
-export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCollapsedChange, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null }: Props) {
+export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCollapsedChange, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null, pinned = false, onPinnedChange }: Props) {
   const { data: activeProfile } = useQuery<{ id: number }>({ queryKey: ["/api/active-profile"] });
   const { data: calendars = [] } = useQuery<Calendar[]>({
     queryKey: ["/kronos/calendars"],
@@ -434,7 +438,10 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
             <span style={{ fontSize: 9, letterSpacing: ".2em", color: "hsl(var(--accent-h) 86% 66%)", textTransform: "uppercase" }}>Task Stabilizer</span>
             <span style={{ fontSize: 7, color: "hsl(var(--accent-h) 30% 40%)" }} title={`${queuedCredit} credit queued`}>{activeTasks.length} ACTIVE</span>
           </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <WidgetPinButton pinned={pinned} onPinnedChange={onPinnedChange} />
           <button data-nodrag onClick={() => onCollapsedChange(!collapsed)} style={{ border: 0, background: "none", color: "hsl(var(--accent-h) 50% 50%)", cursor: "pointer", padding: 2 }}><ChevronUp size={13} style={{ transform: collapsed ? "rotate(180deg)" : undefined }} /></button>
+          </div>
         </div>
 
         {!collapsed && <div style={{ padding: 10 }} data-nodrag>

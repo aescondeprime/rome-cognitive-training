@@ -13,6 +13,7 @@ import {
   useWidgetYield,
   widgetYieldStyle,
   WidgetScaleHandle,
+  WidgetPinButton,
   type FocusRect,
 } from "./WidgetChrome";
 
@@ -36,6 +37,9 @@ interface Props {
   /** Set while the camera has flown to a node; `focus` is the space it claims. */
   zoomed?: boolean;
   focus?: FocusRect | null;
+  /** Pinned widgets stay on screen away from the constellation. */
+  pinned?: boolean;
+  onPinnedChange?: (pinned: boolean) => void;
 }
 
 const W = 230;
@@ -92,7 +96,7 @@ function PriorityPicker({ value, onChange }: { value: 1 | 2 | 3; onChange: (v: 1
   );
 }
 
-export default function ThreatsWidget({ pos, collapsed, onPosChange, onCollapsedChange, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null }: Props) {
+export default function ThreatsWidget({ pos, collapsed, onPosChange, onCollapsedChange, scale = 1, editing = false, onScaleChange, zoomed = false, focus = null, pinned = false, onPinnedChange }: Props) {
   const DEFAULT_X = window.innerWidth - W - 24;
   const DEFAULT_Y = 560;
   const x = pos?.x ?? DEFAULT_X;
@@ -254,6 +258,8 @@ export default function ThreatsWidget({ pos, collapsed, onPosChange, onCollapsed
                   fontSize: 13, lineHeight: 1, transition: "all 0.15s",
                 }}>+</button>
             )}
+            {/* Pin */}
+            <WidgetPinButton pinned={pinned} onPinnedChange={onPinnedChange} />
             {/* Collapse */}
             <button data-nodrag="1" onClick={() => onCollapsedChange(!collapsed)}
               style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 4px", color: "hsl(0 30% 42%)", lineHeight: 1, transition: "color 0.15s" }}
