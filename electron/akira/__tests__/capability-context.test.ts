@@ -5,7 +5,7 @@ import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AkiraActivityStore } from "../activity-store";
-import { AkiraCapabilityRegistry } from "../capability-registry";
+import { AkiraCapabilityRegistry, describeDay, readSpan } from "../capability-registry";
 import { DEFAULT_AKIRA_SETTINGS } from "../settings-store";
 
 function startApi(routes: Record<string, unknown>) {
@@ -106,7 +106,7 @@ test("capability schema validation runs before permission prompts or mutations",
   }
 });
 
-test("capability mutation asks approval, executes once, and emits authoritative invalidation", async () => {
+test("a reversible mutation runs unasked, once, and emits authoritative invalidation", async () => {
   const api = await startApi({
     "POST /api/boards": (body: any) => ({ id: 41, ...body }),
     "GET /api/active-profile": { id: 7 },
@@ -125,7 +125,9 @@ test("capability mutation asks approval, executes once, and emits authoritative 
   try {
     const value: any = await registry.call("rome.boards.create", { title: "Launch", type: "taskboard" });
     assert.equal(value.result.id, 41);
-    assert.equal(approvals, 1);
+    // Creating a board is undoable, so it no longer stops for a dialog the
+    // voice loop cannot wait on. The undo entry is what makes that safe.
+    assert.equal(approvals, 0);
     assert.ok(value.undoId);
     assert.deepEqual(changed[0].queryKeys, [["/boards"], ["/research-boards"], ["/api/boards"]]);
     assert.equal(api.requests.filter(request => request.method === "POST").length, 1);
@@ -159,4 +161,40 @@ test("ambiguous capability target fails before any mutation", async () => {
   } finally {
     await api.close();
   }
+});
+
+test("a spoken time span becomes a start and a duration", () => {
+  // "Sunfever practice, five to nine on Wednesday the 9th."
+  assert.deepEqual(readSpan({ date: "2026-09-09", startTime: "17:00", endTime: "21:00" }), {
+    date: "2026-09-09", startTime: "17:00", durationMinutes: 240,
+  });
+  // The model writes the clock however it heard it.
+  assert.deepEqual(readSpan({ dueDate: "2026-09-09", startTime: "5:00 PM", endTime: "9 pm" }), {
+    date: "2026-09-09", startTime: "17:00", durationMinutes: 240,
+  });
+  // Across midnight is a real span, not a negative one.
+  assert.equal(readSpan({ startTime: "22:00", endTime: "01:30" }).durationMinutes, 210);
+  // An explicit duration wins; an absent one falls back to an hour.
+  assert.equal(readSpan({ startTime: "09:00", durationMinutes: 45 }).durationMinutes, 45);
+  assert.equal(readSpan({ startTime: "09:00" }).durationMinutes, 60);
+  // A missing date means today rather than a rejected call.
+  assert.match(readSpan({ startTime: "09:00" }).date, /^\d{4}-\d{2}-\d{2}$/);
+});
+
+test("a spoken day is described the way the user would say it", () => {
+  const today = new Date();
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  assert.equal(describeDay(iso(today)), "today");
+  assert.equal(describeDay(iso(tomorrow)), "tomorrow");
+
+  // Anything further out is named by its weekday, because "the 9th" is what
+  // gets checked against the wrong week.
+  const later = new Date();
+  later.setDate(later.getDate() + 10);
+  const weekday = later.toLocaleDateString("en-GB", { weekday: "long" });
+  assert.match(describeDay(iso(later)), new RegExp(weekday));
+  assert.match(describeDay(iso(later)), /\d/);
 });

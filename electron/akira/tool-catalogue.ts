@@ -28,6 +28,15 @@ export const DISPATCH_TOOL_SPEC = {
   description:
     "Execute a capability inside the ROME application. The exact capability names and their arguments are listed in the ROME CAPABILITIES section of your system prompt. Wait for the response before telling the user what happened.",
   waitForResponse: true,
+  /**
+   * Set this on the tool in the ElevenLabs dashboard.
+   *
+   * When it expires ElevenLabs answers the call itself with "the tool call
+   * timed out", the agent apologises, and the work it just disowned completes
+   * anyway. ROME answers within `approvals.toolDeadlineMs` (a few seconds) so
+   * this should never fire — but a low value here is a race ROME cannot win.
+   */
+  responseTimeoutSecs: 30,
   parameters: [
     {
       identifier: "capability",

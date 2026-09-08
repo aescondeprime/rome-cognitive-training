@@ -65,6 +65,24 @@ export class RealtimeOverrideRejected extends Error {
   }
 }
 
+/** ElevenLabs puts the useful part in the body; a status code alone is not a diagnosis. */
+async function readErrorDetail(response: { text(): Promise<string> }): Promise<string> {
+  try {
+    const text = (await response.text()).slice(0, 400);
+    if (!text) return "";
+    try {
+      const payload = JSON.parse(text);
+      const detail = payload?.detail ?? payload?.error ?? payload;
+      const message = typeof detail === "string" ? detail : detail?.message ?? detail?.status ?? "";
+      return message ? `: ${String(message).slice(0, 200)}` : "";
+    } catch {
+      return `: ${text}`;
+    }
+  } catch {
+    return "";
+  }
+}
+
 /** ElevenLabs signals a rejected override by closing with policy-violation. */
 function looksLikeOverrideRejection(code: number, reason: string): boolean {
   return code === 1008 || /override/i.test(reason);
@@ -297,21 +315,28 @@ export class ElevenLabsRealtimeSession extends EventEmitter {
         { headers: { "xi-api-key": options.apiKey }, signal: AbortSignal.timeout(10_000) },
       );
       if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-          throw new Error("ElevenLabs rejected the API key. Check it in Akira's voice settings.");
-        }
         if (response.status === 404) {
           throw new Error(`ElevenLabs does not recognise agent ${options.agentId}.`);
         }
+        // A rejected key does not stop a public agent from talking, and taking
+        // the conversation away is a poor way to report a settings problem.
+        // But falling back in silence is how a key that had never worked went
+        // unnoticed for weeks — everything that needed one failed quietly while
+        // the conversation itself carried on. So: fall back, and say so.
+        const detail = await readErrorDetail(response);
+        this.emit("degraded", new Error(
+          `Akira is connected without authentication: ElevenLabs rejected the API key (HTTP ${response.status}${detail}). ` +
+          "Spoken warnings and the wake acknowledgement need a working key — check it in Akira's Voice settings.",
+        ));
         return direct;
       }
       const payload = await response.json().catch(() => ({} as Record<string, unknown>));
       const signed = typeof payload.signed_url === "string" ? payload.signed_url : "";
       return signed || direct;
     } catch (error) {
-      // A wrong key or missing agent is worth surfacing; anything else (offline
-      // signing endpoint, transient 5xx) should still try the direct route.
-      if (error instanceof Error && /API key|does not recognise/.test(error.message)) throw error;
+      // A missing agent is fatal; anything else (offline signing endpoint,
+      // transient 5xx) should still try the direct route.
+      if (error instanceof Error && /does not recognise/.test(error.message)) throw error;
       return direct;
     }
   }

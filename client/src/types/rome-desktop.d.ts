@@ -73,6 +73,16 @@ interface RomeAkiraBridge {
   updateSettings: (patch: Partial<RomeAkiraSettings>) => Promise<RomeAkiraStatus>;
   setSecret: (name: string, value: string) => Promise<RomeAkiraStatus>;
   installRuntime: () => Promise<RomeAkiraStatus>;
+  /** Ask ElevenLabs whether the stored key is a usable key. */
+  verifyKey: () => Promise<{ ok: boolean; detail: string }>;
+  /** Ask ROME's own data server whether it is answering. */
+  probeServer: () => Promise<{ ok: boolean; detail: string }>;
+  /** Read the ElevenLabs agent's own tool and turn configuration. */
+  auditAgent: () => Promise<{ ok: boolean; detail: string }>;
+  /** Set the agent's tool timeout and turn timeout to what ROME needs. */
+  repairAgent: () => Promise<{ ok: boolean; detail: string }>;
+  /** Cancel the pending "Yes?" — the user is still speaking. */
+  suppressGreeting: () => void;
   getActivity: () => Promise<import("@shared/akira").AkiraActivityEntry[]>;
   getDiagnostics: () => Promise<Record<string, unknown>>;
   getCapabilities: () => Promise<import("@shared/akira").AkiraCapabilityDescriptor[]>;
@@ -82,6 +92,10 @@ interface RomeAkiraBridge {
   /** Base64 PCM16 mono at 16 kHz. Fire-and-forget; no acknowledgement. */
   sendAudioChunk: (base64: string) => void;
   sendContext: (text: string) => void;
+  /** Speak a short line without opening a conversation. Bills characters. */
+  announce: (text: string) => Promise<{ ok: boolean; voice: "agent" | "settings" | "system" | "off"; detail: string }>;
+  /** Report the running focus cycle, or null when none is. */
+  setFocus: (state: import("@shared/akira").AkiraFocusState | null) => void;
   onStatus: (listener: (value: RomeAkiraStatus) => void) => () => void;
   onVad: (listener: (value: { score: number; at: number }) => void) => () => void;
   onTranscript: (listener: (value: RomeAkiraTranscript) => void) => () => void;

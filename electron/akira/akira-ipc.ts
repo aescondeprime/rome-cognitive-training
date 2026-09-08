@@ -1,5 +1,5 @@
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
-import type { AkiraRendererCommandResult, AkiraSecretName, AkiraSettings } from "../../shared/akira";
+import type { AkiraFocusState, AkiraRendererCommandResult, AkiraSecretName, AkiraSettings } from "../../shared/akira";
 import type { AkiraController } from "./controller";
 
 export function registerAkiraIpc(getController: () => AkiraController | null): void {
@@ -23,6 +23,12 @@ export function registerAkiraIpc(getController: () => AkiraController | null): v
     if (!controller || !controller.owns(event.sender.id)) return;
     controller.pushAudio(String(base64 ?? ""));
   });
+  ipcMain.handle("rome:akira:announce", (event, text: unknown) => withController(event, controller => controller.announce(String(text ?? ""))));
+  ipcMain.on("rome:akira:focus", (event, state: unknown) => {
+    const controller = getController();
+    if (!controller || !controller.owns(event.sender.id)) return;
+    controller.setFocusState(state && typeof state === "object" ? state as AkiraFocusState : null);
+  });
   ipcMain.on("rome:akira:context", (event, text: unknown) => {
     const controller = getController();
     if (!controller || !controller.owns(event.sender.id)) return;
@@ -31,6 +37,15 @@ export function registerAkiraIpc(getController: () => AkiraController | null): v
   ipcMain.handle("rome:akira:approval-response", (event, id: unknown, approved: unknown) => withController(event, controller => controller.resolveApproval(String(id ?? ""), Boolean(approved))));
   ipcMain.handle("rome:akira:update-settings", (event, patch: Partial<AkiraSettings>) => withController(event, controller => controller.updateSettings(patch && typeof patch === "object" ? patch : {})));
   ipcMain.handle("rome:akira:set-secret", (event, name: AkiraSecretName, value: unknown) => withController(event, controller => controller.setSecret(name, String(value ?? ""))));
+  ipcMain.on("rome:akira:suppress-greeting", event => {
+    const controller = getController();
+    if (!controller || !controller.owns(event.sender.id)) return;
+    controller.suppressGreeting();
+  });
+  ipcMain.handle("rome:akira:repair-agent", event => withController(event, controller => controller.repairAgent()));
+  ipcMain.handle("rome:akira:audit-agent", event => withController(event, controller => controller.auditAgent()));
+  ipcMain.handle("rome:akira:probe-server", event => withController(event, controller => controller.probeDataServer()));
+  ipcMain.handle("rome:akira:verify-key", event => withController(event, controller => controller.verifyElevenLabsKey()));
   ipcMain.handle("rome:akira:install-runtime", event => withController(event, controller => controller.installRuntime()));
   ipcMain.handle("rome:akira:activity", event => withController(event, controller => controller.listActivity()));
   ipcMain.handle("rome:akira:diagnostics", event => withController(event, controller => controller.diagnostics()));

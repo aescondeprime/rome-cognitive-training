@@ -7,7 +7,8 @@ import type {
 } from "../../shared/akira";
 import type { AkiraSettingsStore } from "./settings-store";
 import { AkiraActivityStore } from "./activity-store";
-import { PermissionPolicy, requireSingleMatch, validateCapabilityArguments } from "./permission-policy";
+import { AmbiguousTargetError, PermissionPolicy, matchByLabel, requireSingleMatch, validateCapabilityArguments } from "./permission-policy";
+import { resolveDestination } from "./navigation";
 import type { AkiraRendererBridge } from "./renderer-bridge";
 
 interface CapabilityResult {
@@ -42,6 +43,19 @@ export class AkiraCapabilityRegistry {
   private readonly capabilities = new Map<string, RegisteredCapability>();
   private readonly policy = new PermissionPolicy();
   private readonly serverBase: string;
+  /** Resolved once; see `ensureCalendar`. */
+  private calendarId: number | null = null;
+  /**
+   * The app's own session token, borrowed from the renderer.
+   *
+   * ROME's server accepts an unauthenticated call by falling back to the active
+   * profile, which made every capability appear to work while writing as
+   * whoever that happened to be. Reading and writing as the person actually
+   * logged in is the difference between "created" and "created somewhere you
+   * cannot see".
+   */
+  private sessionToken: string | null = null;
+  private sessionTokenAt = 0;
 
   constructor(private readonly dependencies: RegistryDependencies) {
     this.serverBase = dependencies.serverBase ?? "http://127.0.0.1:5000";
@@ -105,12 +119,28 @@ export class AkiraCapabilityRegistry {
       objectSchema({ includeRecent: boolean("Include recent workspace records.") })),
       async () => ({ value: await this.contextSnapshot() }));
 
-    this.add(this.descriptor("rome.navigate", "Open a ROME surface", "Navigates ROME to a named internal route.", "read", "navigate", [], [], false,
-      objectSchema({ route: string("Internal ROME route, such as /taskboard or /kronos-keep.") }, ["route"])),
+    // "Navigate" and "open up …" are the same intent: take the view the user is
+    // looking at and put something else in it. Which side of the app that
+    // lands on — a ROME surface or a web page in the World Browser — is a
+    // detail the user should not have to state, so one capability decides.
+    this.add(this.descriptor("rome.navigate", "Navigate the view", "Switches what the user is looking at: a ROME surface named in plain words (Kronos Keep, Idea Workshop, Athena, Command Center), or a website, which opens in ROME's World Browser and takes the user there. Handles both \"navigate to …\" and \"open up …\".", "read", "navigate", [], [], false,
+      objectSchema({
+        target: string("Where to go, in the user's own words: a ROME surface name, a domain such as youtube.com, or a search."),
+        route: string("Exact internal route, only when it is already known."),
+      })),
       async args => {
-        const route = cleanRoute(args.route);
-        await this.dependencies.renderer.command("navigate", { route });
-        return { value: { route } };
+        const destination = resolveDestination(args.target ?? args.route);
+        if (destination.kind === "surface") {
+          await this.dependencies.renderer.command("navigate", { route: destination.route });
+          return { value: { opened: destination.name, route: destination.route } };
+        }
+        // Order matters: the World Browser's native view is only positioned
+        // once that page has mounted, so a tab opened before the switch would
+        // load behind whatever the user was looking at.
+        const browser = this.requireBrowser();
+        await this.dependencies.renderer.command("navigate", { route: "/world" });
+        const tab = browser.createTab(destination.url) as Record<string, any> | undefined;
+        return { value: { opened: destination.name, url: destination.url, tabId: tab?.id ? String(tab.id) : undefined } };
       });
 
     this.add(this.descriptor("rome.boards.list", "List workspace boards", "Lists live task, idea, component, or research boards.", "read", "background", [], [], false,
@@ -158,33 +188,97 @@ export class AkiraCapabilityRegistry {
         return { value, undo: { method: "DELETE", path: `/api/tasks/${numericId(value?.id)}` } };
       });
 
-    this.add(this.descriptor("rome.tasks.update", "Update a task card", "Updates the text, color, pinned, or board visibility fields of a task card.", "write", "background", [["/boards"]], [], false,
-      objectSchema({ taskId: number("Exact task id."), content: string("New task text."), color: string("Color."), pinned: boolean("Pinned state."), on_board: boolean("Board visibility.") }, ["taskId"])),
+    this.add(this.descriptor("rome.tasks.update", "Update a task card", "Updates the text, color, pinned, or board visibility of one task card, found by its text.", "write", "background", [["/boards"]], [], true,
+      objectSchema({
+        content: string("The card's current text as the user said it."),
+        taskId: number("Exact task id, only if one was returned earlier."),
+        boardTitle: string("Board title, when more than one board could hold it."),
+        newContent: string("Replacement text, only when rewording the card."),
+        color: string("Color."), pinned: boolean("Pinned state."), on_board: boolean("Board visibility."),
+      })),
       async args => {
-        const taskId = numericId(args.taskId);
-        const body = pick(args, ["content", "color", "pinned", "on_board"]);
-        await this.api("PATCH", `/api/tasks/${taskId}`, body);
-        return { value: { id: taskId, ...body } };
+        const card = await this.resolveTaskCard(args);
+        const body = pick(args, ["color", "pinned", "on_board"]);
+        const reworded = String(args.newContent ?? "").trim();
+        if (reworded) body.content = reworded;
+        if (!Object.keys(body).length) throw new Error("Nothing to change: provide newContent, color, pinned, or on_board.");
+        await this.api("PATCH", `/api/tasks/${numericId(card.id)}`, body);
+        return {
+          value: { id: card.id, name: String(body.content ?? card.content ?? "").slice(0, 200) },
+          undo: { method: "PATCH", path: `/api/tasks/${numericId(card.id)}`, body: pick(card, ["content", "color", "pinned", "on_board"]) },
+        };
       });
 
-    this.add(this.descriptor("rome.tasks.delete", "Delete a task card", "Permanently deletes one task card.", "destructive", "background", [["/boards"]], [], false,
-      objectSchema({ taskId: number("Exact task id.") }, ["taskId"])),
-      async args => { const id = numericId(args.taskId); await this.api("DELETE", `/api/tasks/${id}`); return { value: { deletedId: id } }; });
+    this.add(this.descriptor("rome.tasks.delete", "Delete a task card", "Permanently deletes one task card, found by its text.", "destructive", "background", [["/boards"]], [], false,
+      objectSchema({
+        content: string("The card's text as the user said it."),
+        taskId: number("Exact task id, only if one was returned earlier."),
+        boardTitle: string("Board title, when more than one board could hold it."),
+      })),
+      async args => {
+        const card = await this.resolveTaskCard(args);
+        await this.api("DELETE", `/api/tasks/${numericId(card.id)}`);
+        return { value: { deleted: { id: card.id, name: String(card.content ?? "").slice(0, 200) } } };
+      });
 
-    this.add(this.descriptor("rome.stabilizer.list", "List Task Stabilizer items", "Reads the active profile's local Task Stabilizer queue.", "read", "background", [], [], false, objectSchema({})),
-      async () => ({ value: await this.dependencies.renderer.command("task-stabilizer.list") }));
-    this.add(this.descriptor("rome.stabilizer.create", "Add a Task Stabilizer item", "Adds an item to the active profile's local focus queue.", "write", "background", [], ["task-stabilizer"], true,
-      objectSchema({ title: string("Task title.") }, ["title"])),
+    // Focus tasks are addressed by name, not by id.
+    //
+    // These ids are uuids the user has never seen and cannot say. Requiring one
+    // meant Akira had to list the queue, carry a uuid through the conversation,
+    // and then read it back to confirm which task it meant — which is exactly
+    // the wrong question. Every capability here takes the task's name, and
+    // every result carries the name back so Akira has something speakable.
+    this.add(this.descriptor("rome.stabilizer.list", "List focus tasks", "Lists the active profile's Task Stabilizer queue by name.", "read", "background", [], [], false,
+      objectSchema({ includeCompleted: boolean("Include tasks already finished. Defaults to false.") })),
+      async args => {
+        const tasks = await this.stabilizerTasks();
+        const visible = args.includeCompleted ? tasks : tasks.filter(task => !task.completedAt);
+        return { value: visible.map(summariseStabilizerTask) };
+      });
+    this.add(this.descriptor("rome.stabilizer.create", "Add a focus task", "Adds a task to the active profile's focus queue.", "write", "background", [], ["task-stabilizer"], true,
+      objectSchema({ title: string("Task name, in the user's own words.") }, ["title"])),
       async args => {
         const value = await this.dependencies.renderer.command("task-stabilizer.create", { title: requiredText(args.title, "title") });
-        return { value, undo: { rendererAction: "task-stabilizer.delete", rendererArgs: { id: (value as any)?.id } } };
+        return { value: summariseStabilizerTask(value), undo: { rendererAction: "task-stabilizer.delete", rendererArgs: { id: (value as any)?.id } } };
       });
-    this.add(this.descriptor("rome.stabilizer.update", "Update a Task Stabilizer item", "Completes, restores, or renames one focus item.", "write", "background", [], ["task-stabilizer"], false,
-      objectSchema({ id: string("Exact item id."), title: string("Optional new title."), completed: boolean("Optional completion state.") }, ["id"])),
-      async args => ({ value: await this.dependencies.renderer.command("task-stabilizer.update", pick(args, ["id", "title", "completed"])) }));
-    this.add(this.descriptor("rome.stabilizer.delete", "Delete a Task Stabilizer item", "Permanently removes one local focus item.", "destructive", "background", [], ["task-stabilizer"], false,
-      objectSchema({ id: string("Exact item id.") }, ["id"])),
-      async args => ({ value: await this.dependencies.renderer.command("task-stabilizer.delete", { id: requiredText(args.id, "id") }) }));
+    this.add(this.descriptor("rome.stabilizer.complete", "Complete a focus task", "Marks one focus task finished, or reopens it, by its name.", "write", "background", [], ["task-stabilizer"], true,
+      objectSchema({ title: string("The task's name as the user said it."), completed: boolean("False reopens a finished task. Defaults to true.") }, ["title"])),
+      async args => {
+        const task = await this.resolveStabilizerTask(args);
+        const completed = args.completed === undefined ? true : Boolean(args.completed);
+        const value = await this.dependencies.renderer.command("task-stabilizer.update", { id: task.id, completed });
+        return {
+          value: summariseStabilizerTask(value ?? { ...task, completedAt: completed ? Date.now() : null }),
+          undo: { rendererAction: "task-stabilizer.update", rendererArgs: { id: task.id, completed: Boolean(task.completedAt) } },
+        };
+      });
+    this.add(this.descriptor("rome.stabilizer.update", "Rename or complete a focus task", "Renames a focus task, or changes whether it is finished, by its name.", "write", "background", [], ["task-stabilizer"], true,
+      objectSchema({
+        title: string("The task's current name as the user said it."),
+        id: string("Exact item id, only if one was returned earlier."),
+        newTitle: string("New name, only when renaming."),
+        completed: boolean("Completion state."),
+      })),
+      async args => {
+        const task = await this.resolveStabilizerTask(args);
+        const patch: Record<string, unknown> = { id: task.id };
+        const renamed = String(args.newTitle ?? "").trim();
+        if (renamed) patch.title = renamed;
+        if (args.completed !== undefined) patch.completed = Boolean(args.completed);
+        if (Object.keys(patch).length === 1) throw new Error("Provide newTitle or completed.");
+        const value = await this.dependencies.renderer.command("task-stabilizer.update", patch);
+        return {
+          value: summariseStabilizerTask(value),
+          undo: { rendererAction: "task-stabilizer.update", rendererArgs: { id: task.id, title: task.title, completed: Boolean(task.completedAt) } },
+        };
+      });
+    this.add(this.descriptor("rome.stabilizer.delete", "Delete a focus task", "Permanently removes one focus task, by its name.", "destructive", "background", [], ["task-stabilizer"], false,
+      objectSchema({ title: string("The task's name as the user said it."), id: string("Exact item id, only if one was returned earlier.") })),
+      async args => {
+        const task = await this.resolveStabilizerTask(args);
+        await this.dependencies.renderer.command("task-stabilizer.delete", { id: task.id });
+        return { value: { deleted: summariseStabilizerTask(task) } };
+      });
 
     this.addCrudCapabilities("notes", "/api/notes", [["/api/notes"]], {
       createSchema: objectSchema({ title: string("Note title."), content: string("Note body."), tags: { type: "array", items: { type: "string" } } }, ["title"]),
@@ -220,21 +314,30 @@ export class AkiraCapabilityRegistry {
       objectSchema({ date: string("Local date in YYYY-MM-DD.") })),
       async args => ({ value: await this.api("GET", `/api/kronos/today${args.date ? `?date=${encodeURIComponent(String(args.date))}` : ""}`) }));
     this.add(this.descriptor("rome.schedule.create_assignment", "Create a Kronos assignment", "Creates a dated assignment on a Kronos calendar.", "write", "background", [["kronos-today"], ["/kronos"], ["/kronos/calendars"]], [], true,
-      objectSchema({ calendarId: number("Calendar id."), title: string("Assignment title."), dueDate: string("Date YYYY-MM-DD."), startTime: string("Time HH:MM."), durationMinutes: number("Duration in minutes."), instructions: string("Optional instructions.") }, ["title", "dueDate"])),
+      objectSchema({ calendarId: number("Calendar id."), title: string("Assignment title."), dueDate: string("Date YYYY-MM-DD."), date: string("Alias for dueDate."), startTime: string("Start time HH:MM, 24-hour."), endTime: string("End time HH:MM, 24-hour. Use this when the user gives a span such as five to nine."), durationMinutes: number("Duration in minutes, if no end time was given."), instructions: string("Optional instructions.") }, ["title"])),
       async args => {
         const calendarId = args.calendarId ? numericId(args.calendarId) : await this.ensureCalendar();
+        const when = readSpan(args);
         const value = await this.api<any>("POST", `/api/kronos/calendars/${calendarId}/assignments`, {
-          title: args.title, due_date: args.dueDate, start_time: args.startTime ?? "09:00",
-          duration_minutes: Math.max(1, Number(args.durationMinutes) || 60), instructions: args.instructions ?? "", saved: false,
+          title: requiredText(args.title, "title"), due_date: when.date, start_time: when.startTime,
+          duration_minutes: when.durationMinutes, instructions: args.instructions ?? "", saved: false,
         });
-        return { value, undo: { method: "DELETE", path: `/api/kronos/assignments/${numericId(value?.id)}` } };
+        return {
+          value: await this.confirmScheduled(calendarId, "assignments", value, when),
+          undo: { method: "DELETE", path: `/api/kronos/assignments/${numericId(value?.id)}` },
+        };
       });
 
     this.add(this.descriptor("rome.browser.tabs", "List browser tabs", "Returns metadata for ROME's native browser tabs without page content.", "read", "background", [], [], false, objectSchema({})),
       async () => ({ value: this.requireBrowser().tabs.getStates() }));
-    this.add(this.descriptor("rome.browser.open", "Open a browser tab", "Opens an HTTP(S) URL or search in ROME's native browser.", "read", "navigate", [], [], false,
+    this.add(this.descriptor("rome.browser.open", "Open a browser tab", "Opens an HTTP(S) URL or search in ROME's native browser, switching the view to it.", "read", "navigate", [], [], false,
       objectSchema({ url: string("HTTP(S) URL, domain, or search query.") }, ["url"])),
-      async args => ({ value: this.requireBrowser().createTab(requiredText(args.url, "url")) }));
+      async args => {
+        const browser = this.requireBrowser();
+        const url = requiredText(args.url, "url");
+        await this.dependencies.renderer.command("navigate", { route: "/world" }).catch(() => undefined);
+        return { value: browser.createTab(url) };
+      });
     this.add(this.descriptor("rome.browser.navigate", "Navigate the active browser tab", "Navigates an exact active tab to an HTTP(S) URL or search.", "read", "navigate", [], [], false,
       objectSchema({ tabId: string("Exact tab id; active tab is used if omitted."), url: string("URL or query.") }, ["url"])),
       async args => {
@@ -270,6 +373,8 @@ export class AkiraCapabilityRegistry {
     this.registerScheduleCapabilities();
     this.registerTrainingCapabilities();
     this.registerThreatCapabilities();
+    this.registerFocusCapabilities();
+    this.registerWebCapabilities();
 
     this.add(this.descriptor("rome.undo", "Undo an Akira action", "Applies a still-valid compensating action from the Akira activity log.", "write", "background", [["/api/boards"], ["/api/notes"], ["/api/memory"], ["/kronos"]], ["task-stabilizer", "finance"], false,
       objectSchema({ undoId: string("Undo id returned by a prior action.") }, ["undoId"])),
@@ -451,14 +556,14 @@ export class AkiraCapabilityRegistry {
       async () => ({ value: await this.api("GET", "/api/kronos/calendars") }));
 
     this.add(this.descriptor("rome.schedule.create_routine", "Create a recurring routine", "Creates a daily or weekly routine on a Kronos calendar.", "write", "background", KRONOS, [], true,
-      objectSchema({ calendarId: number("Calendar id."), title: string("Routine title."), startTime: string("Time HH:MM."), durationMinutes: number("Duration in minutes."), recurrence: string("daily or weekly."), daysOfWeek: { type: "array", items: { type: "number" }, description: "Weekday numbers, 0 = Sunday, when recurrence is weekly." }, notes: string("Optional notes."), startDate: string("First day the routine runs, YYYY-MM-DD. Defaults to the start of the current month."), endDate: string("Last day the routine runs, YYYY-MM-DD. Defaults to the end of the current month.") }, ["title"])),
+      objectSchema({ calendarId: number("Calendar id."), title: string("Routine title."), startTime: string("Start time HH:MM, 24-hour."), endTime: string("End time HH:MM, 24-hour."), durationMinutes: number("Duration in minutes, if no end time was given."), recurrence: string("daily or weekly."), daysOfWeek: { type: "array", items: { type: "number" }, description: "Weekday numbers, 0 = Sunday, when recurrence is weekly." }, notes: string("Optional notes."), startDate: string("First day the routine runs, YYYY-MM-DD. Defaults to the start of the current month."), endDate: string("Last day the routine runs, YYYY-MM-DD. Defaults to the end of the current month.") }, ["title"])),
       async args => {
         const calendarId = args.calendarId ? numericId(args.calendarId) : await this.ensureCalendar();
         const recurrence = String(args.recurrence ?? "daily") === "weekly" ? "weekly" : "daily";
         const value = await this.api<any>("POST", `/api/kronos/calendars/${calendarId}/routines`, {
           title: requiredText(args.title, "title"),
-          start_time: args.startTime ?? "09:00",
-          duration_minutes: Math.max(1, Number(args.durationMinutes) || 60),
+          start_time: readSpan(args).startTime,
+          duration_minutes: readSpan(args).durationMinutes,
           recurrence,
           days_of_week: recurrence === "weekly" && Array.isArray(args.daysOfWeek) ? args.daysOfWeek : [],
           notes: args.notes ?? "", saved: false,
@@ -472,31 +577,67 @@ export class AkiraCapabilityRegistry {
       });
 
     this.add(this.descriptor("rome.schedule.create_event", "Create a calendar event", "Creates a dated event on a Kronos calendar.", "write", "background", KRONOS, [], true,
-      objectSchema({ calendarId: number("Calendar id."), title: string("Event title."), eventDate: string("Date YYYY-MM-DD."), startTime: string("Time HH:MM."), durationMinutes: number("Duration in minutes."), preparations: string("Optional preparation notes.") }, ["title", "eventDate"])),
+      objectSchema({ calendarId: number("Calendar id."), title: string("Event title."), eventDate: string("Date YYYY-MM-DD."), date: string("Alias for eventDate."), startTime: string("Start time HH:MM, 24-hour."), endTime: string("End time HH:MM, 24-hour. Use this when the user gives a span such as five to nine."), durationMinutes: number("Duration in minutes, if no end time was given."), preparations: string("Optional preparation notes.") }, ["title"])),
       async args => {
         const calendarId = args.calendarId ? numericId(args.calendarId) : await this.ensureCalendar();
+        const when = readSpan({ ...args, dueDate: args.eventDate ?? args.date });
         const value = await this.api<any>("POST", `/api/kronos/calendars/${calendarId}/events`, {
           title: requiredText(args.title, "title"),
-          event_date: requiredText(args.eventDate, "eventDate"),
-          start_time: args.startTime ?? "09:00",
-          duration_minutes: Math.max(1, Number(args.durationMinutes) || 60),
+          event_date: when.date,
+          start_time: when.startTime,
+          duration_minutes: when.durationMinutes,
           preparations: args.preparations ?? "", saved: false,
         });
-        return { value, undo: { method: "DELETE", path: `/api/kronos/events/${numericId(value?.id)}` } };
+        return {
+          value: await this.confirmScheduled(calendarId, "events", value, when),
+          undo: { method: "DELETE", path: `/api/kronos/events/${numericId(value?.id)}` },
+        };
       });
 
     this.add(this.descriptor("rome.schedule.create_general", "Create a general calendar item", "Creates a dated general item — the neutral type, for anything that is not a routine, an assignment or an event.", "write", "background", KRONOS, [], true,
-      objectSchema({ calendarId: number("Calendar id."), title: string("Item title."), itemDate: string("Date YYYY-MM-DD."), startTime: string("Time HH:MM."), durationMinutes: number("Duration in minutes."), notes: string("Optional notes.") }, ["title", "itemDate"])),
+      objectSchema({ calendarId: number("Calendar id."), title: string("Item title."), itemDate: string("Date YYYY-MM-DD."), date: string("Alias for itemDate."), startTime: string("Start time HH:MM, 24-hour."), endTime: string("End time HH:MM, 24-hour."), durationMinutes: number("Duration in minutes, if no end time was given."), notes: string("Optional notes.") }, ["title"])),
       async args => {
         const calendarId = args.calendarId ? numericId(args.calendarId) : await this.ensureCalendar();
+        const when = readSpan({ ...args, dueDate: args.itemDate ?? args.date });
         const value = await this.api<any>("POST", `/api/kronos/calendars/${calendarId}/generals`, {
           title: requiredText(args.title, "title"),
-          item_date: requiredText(args.itemDate, "itemDate"),
-          start_time: args.startTime ?? "09:00",
-          duration_minutes: Math.max(1, Number(args.durationMinutes) || 60),
+          item_date: when.date,
+          start_time: when.startTime,
+          duration_minutes: when.durationMinutes,
           notes: args.notes ?? "", saved: false,
         });
         return { value, undo: { method: "DELETE", path: `/api/kronos/generals/${numericId(value?.id)}` } };
+      });
+
+    this.add(this.descriptor("rome.schedule.find", "Find something on the calendar", "Searches every kind of Kronos item for a title, and says which calendar and day it is on. Use this when the user cannot find something, or to check where something was scheduled.", "read", "background", [], [], false,
+      objectSchema({ title: string("Part of the title, in the user's words."), calendarId: number("Calendar id; every calendar is searched if omitted.") })),
+      async args => {
+        const label = String(args.title ?? "").trim();
+        const calendars = await this.api<any[]>("GET", "/api/kronos/calendars");
+        const wanted = args.calendarId ? [calendars.find(entry => numericId(entry?.id) === numericId(args.calendarId))].filter(Boolean) : calendars;
+        const dateField: Record<string, string> = {
+          events: "event_date", assignments: "due_date", generals: "item_date", routines: "start_date",
+        };
+        const found: Record<string, unknown>[] = [];
+        for (const calendar of wanted.slice(0, 6)) {
+          for (const kind of ["events", "assignments", "generals", "routines"] as const) {
+            const rows = await this.api<any[]>("GET", `/api/kronos/calendars/${numericId(calendar.id)}/${kind}`).catch(() => []);
+            for (const row of Array.isArray(rows) ? rows : []) {
+              if (label && !matchByLabel([row], label, item => String(item?.title ?? "")).length) continue;
+              found.push({
+                kind: kind.slice(0, -1),
+                title: String(row?.title ?? ""),
+                calendar: String(calendar?.name ?? ""),
+                day: describeDay(String(row?.[dateField[kind]] ?? "")),
+                date: String(row?.[dateField[kind]] ?? ""),
+                startTime: String(row?.start_time ?? ""),
+                durationMinutes: Number(row?.duration_minutes ?? 0),
+              });
+            }
+          }
+        }
+        found.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+        return { value: { matches: found.slice(0, 20), searched: wanted.length } };
       });
 
     this.add(this.descriptor("rome.schedule.cancel", "Cancel a scheduled item", "Deletes one routine, assignment, event, or general item by exact id.", "destructive", "background", KRONOS, [], false,
@@ -568,6 +709,144 @@ export class AkiraCapabilityRegistry {
    * out of the Vercel handler into workspace-routes; before that this whole
    * surface 404'd.
    */
+  /**
+   * The focus cycle.
+   *
+   * Every one of these is a thin wrapper over a renderer command, because the
+   * cycle lives in the renderer's storage — the main process cannot read
+   * localStorage, and duplicating the clock in two places would guarantee two
+   * different answers to "how long have I got?".
+   *
+   * All of them are undoable, which is what lets them run without an approval
+   * dialog. Nothing here is destructive: the worst case is a clock that has to
+   * be restarted.
+   */
+  private registerFocusCapabilities(): void {
+    const FOCUS_KEYS = [["kronos-today"], ["/kronos"]];
+
+    this.add(this.descriptor("rome.focus.start", "Start a focus cycle", "Starts a timed cycle on one task, by name, creating the task if it is new. The clock runs in ROME's top bar; five minutes, one minute, and time's up are announced aloud.", "write", "background", FOCUS_KEYS, ["task-stabilizer"], true,
+      objectSchema({ title: string("Task name, in the user's own words."), minutes: number("Length in minutes. Defaults to 25.") }, ["title"])),
+      async args => {
+        const value = await this.dependencies.renderer.command("focus.start", pick(args, ["title", "minutes"]));
+        return { value, undo: { rendererAction: "focus.cancel" } };
+      });
+
+    this.add(this.descriptor("rome.focus.status", "Check the focus cycle", "Returns the running cycle's task and how much time is left, phrased for speech. Use this for any question about time remaining.", "read", "background", [], [], false, objectSchema({})),
+      async () => ({ value: await this.dependencies.renderer.command("focus.status") }));
+
+    this.add(this.descriptor("rome.focus.pause", "Pause the focus cycle", "Stops the clock without ending the cycle. Paused time is not counted against it.", "write", "background", [], ["task-stabilizer"], true,
+      objectSchema({})),
+      async () => ({
+        value: await this.dependencies.renderer.command("focus.pause"),
+        undo: { rendererAction: "focus.resume" },
+      }));
+
+    this.add(this.descriptor("rome.focus.resume", "Resume the focus cycle", "Restarts a paused clock where it stopped.", "write", "background", [], ["task-stabilizer"], true,
+      objectSchema({})),
+      async () => ({
+        value: await this.dependencies.renderer.command("focus.resume"),
+        undo: { rendererAction: "focus.pause" },
+      }));
+
+    this.add(this.descriptor("rome.focus.extend", "Add time to the focus cycle", "Adds minutes to the running cycle. Also the answer to \"no, I didn't finish\": a cycle that has run out reopens from now.", "write", "background", FOCUS_KEYS, ["task-stabilizer"], true,
+      objectSchema({ minutes: number("Minutes to add.") }, ["minutes"])),
+      async args => {
+        const minutes = Math.round(Number(args.minutes) || 0);
+        if (!minutes) throw new Error("Say how many minutes to add.");
+        const value = await this.dependencies.renderer.command("focus.extend", { minutes });
+        return { value, undo: { rendererAction: "focus.extend", rendererArgs: { minutes: -minutes } } };
+      });
+
+    this.add(this.descriptor("rome.focus.cancel", "Cancel the focus cycle", "Stops the cycle and leaves the task open and unfinished.", "write", "background", FOCUS_KEYS, ["task-stabilizer"], true,
+      objectSchema({})),
+      async () => {
+        const value = await this.dependencies.renderer.command("focus.cancel") as Record<string, any>;
+        return {
+          value: { cancelled: value?.taskName ?? "the focus cycle" },
+          // The clock is what someone wants back when they say "no, undo that";
+          // the calendar row is not, so it is not recreated.
+          ...(value?.taskId && value?.timer
+            ? { undo: { rendererAction: "focus.restore", rendererArgs: { taskId: value.taskId, timer: value.timer } } }
+            : {}),
+        };
+      });
+
+    this.add(this.descriptor("rome.focus.complete", "Finish a focus task", "Marks the task finished, banks its capability credit, and squares the calendar up to the time actually spent. With no name, finishes the task the cycle is running on.", "write", "background", FOCUS_KEYS, ["task-stabilizer"], true,
+      objectSchema({ title: string("Task name, if it is not the one the cycle is running on.") })),
+      async args => {
+        const value = await this.dependencies.renderer.command("focus.complete", pick(args, ["title"])) as Record<string, any>;
+        return {
+          value,
+          ...(value?.taskId
+            ? { undo: { rendererAction: "focus.restore_task", rendererArgs: { taskId: value.taskId } } }
+            : {}),
+        };
+      });
+  }
+
+  /**
+   * Questions ROME cannot answer from its own data.
+   *
+   * The ElevenLabs agent has no web access, and its model is chosen for
+   * conversational latency rather than knowledge — so "what's the current
+   * version of X" was answered from memory, confidently, and sometimes wrongly.
+   *
+   * This routes those to OpenAI's Responses API with its built-in web search,
+   * using the key ROME already stores. It is billed as tokens rather than
+   * conversation minutes, which is what makes it usable mid-focus-cycle: the
+   * socket opens for the length of the question and closes again.
+   */
+  private registerWebCapabilities(): void {
+    this.add(this.descriptor("rome.web.ask", "Ask the web", "Answers a question that needs current information from the internet — news, prices, releases, documentation, facts you are not certain of. Returns a short answer with its sources. Prefer this over answering from memory whenever the answer could have changed.", "read", "background", [], [], false,
+      objectSchema({ question: string("The question, written out in full.") }, ["question"])),
+      async args => ({ value: await this.askTheWeb(requiredText(args.question, "question")) }));
+  }
+
+  private async askTheWeb(question: string): Promise<unknown> {
+    const settings = this.dependencies.settings.get();
+    if (!settings.research.enabled) throw new Error("Web answers are switched off in Akira's settings.");
+    const apiKey = this.dependencies.settings.getSecret("openaiApiKey");
+    if (!apiKey) {
+      throw new Error("No OpenAI key is configured. Tell the user to add one in Akira's Voice settings so you can search the web.");
+    }
+
+    const request = async (toolType: string) => fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: settings.research.model,
+        tools: [{ type: toolType }],
+        instructions: [
+          "You are answering out loud through a voice assistant.",
+          "Search the web when the answer could have changed, then answer in at most three sentences.",
+          "No lists, no markdown, no URLs read aloud — name the source in words instead.",
+          "Say plainly when the sources disagree or when you could not find it.",
+        ].join(" "),
+        input: question,
+      }),
+      signal: AbortSignal.timeout(45_000),
+    });
+
+    // The hosted tool has been called both `web_search_preview` and
+    // `web_search` while the API settled. Try the current name, and fall back
+    // rather than failing on a rename that has nothing to do with the question.
+    let response = await request("web_search");
+    if (response.status === 400) {
+      const detail = await response.clone().text().catch(() => "");
+      if (/web_search/.test(detail)) response = await request("web_search_preview");
+    }
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      if (response.status === 401) throw new Error("OpenAI rejected the stored key. It needs replacing in Akira's settings.");
+      throw new Error(`The web search failed (HTTP ${response.status})${detail ? `: ${detail.slice(0, 200)}` : "."}`);
+    }
+
+    const payload = await response.json().catch(() => ({} as Record<string, any>));
+    const { text, sources } = readResponsesPayload(payload);
+    if (!text) throw new Error("The web search came back empty. Say so rather than inventing an answer.");
+    return { answer: text.slice(0, 4_000), sources: sources.slice(0, 5) };
+  }
+
   private registerThreatCapabilities(): void {
     const THREATS = [["threats"]];
 
@@ -694,11 +973,99 @@ export class AkiraCapabilityRegistry {
     return requireSingleMatch(values.filter(value => String(value[labelField] ?? "").trim().toLowerCase() === label), path.slice(5));
   }
 
+  private async stabilizerTasks(): Promise<Record<string, any>[]> {
+    const value = await this.dependencies.renderer.command("task-stabilizer.list");
+    return Array.isArray(value) ? value as Record<string, any>[] : [];
+  }
+
+  /**
+   * Turn what the user said into one focus task.
+   *
+   * Unfinished tasks are searched first: "mark the dentist one done" is about
+   * something still open far more often than something already closed. An
+   * ambiguous name comes back as candidates rather than a failure, so Akira
+   * can ask which one using their names.
+   */
+  private async resolveStabilizerTask(args: Record<string, unknown>): Promise<Record<string, any>> {
+    const tasks = await this.stabilizerTasks();
+    const id = String(args.id ?? "").trim();
+    if (id) {
+      const exact = tasks.find(task => String(task.id) === id);
+      if (exact) return exact;
+    }
+    const label = String(args.title ?? args.match ?? args.name ?? "").trim();
+    if (!label) throw new Error("Which task? Give the task's name as the user said it.");
+    const open = tasks.filter(task => !task.completedAt);
+    const matches = matchByLabel(open, label, task => String(task.title ?? ""));
+    const searched = matches.length ? matches : matchByLabel(tasks, label, task => String(task.title ?? ""));
+    if (!searched.length) throw new Error(`No focus task matches "${label.slice(0, 80)}".`);
+    if (searched.length > 1) {
+      throw new AmbiguousTargetError(
+        searched.map(summariseStabilizerTask),
+        "More than one focus task matches that name. Ask the user which one, using their names.",
+      );
+    }
+    return searched[0];
+  }
+
+  /**
+   * Turn what the user said into one task card.
+   *
+   * Same reasoning as the focus queue, one layer out: card ids are database
+   * integers, and nobody says "update task four hundred and six".
+   */
+  private async resolveTaskCard(args: Record<string, unknown>): Promise<Record<string, any>> {
+    if (args.taskId !== undefined) {
+      const id = numericId(args.taskId);
+      const boards = await this.api<Record<string, any>[]>("GET", "/api/boards");
+      for (const board of boards.filter(board => String(board.type ?? "").includes("taskboard"))) {
+        const cards = await this.api<Record<string, any>[]>("GET", `/api/boards/${numericId(board.id)}/tasks`).catch(() => []);
+        const found = cards.find(card => numericId(card.id) === id);
+        if (found) return found;
+      }
+      throw new Error("That task card was not found.");
+    }
+    const label = String(args.content ?? args.match ?? args.title ?? "").trim();
+    if (!label) throw new Error("Which card? Give its text as the user said it.");
+    const boards = (await this.api<Record<string, any>[]>("GET", "/api/boards"))
+      .filter(board => String(board.type ?? "").includes("taskboard"));
+    const wanted = String(args.boardTitle ?? "").trim().toLowerCase();
+    const scoped = wanted ? boards.filter(board => String(board.title ?? "").trim().toLowerCase() === wanted) : boards;
+    const cards: Record<string, any>[] = [];
+    for (const board of scoped) {
+      const values = await this.api<Record<string, any>[]>("GET", `/api/boards/${numericId(board.id)}/tasks`).catch(() => []);
+      for (const card of values) cards.push({ ...card, boardTitle: board.title });
+    }
+    const matches = matchByLabel(cards, label, card => String(card.content ?? ""));
+    if (!matches.length) throw new Error(`No task card matches "${label.slice(0, 80)}".`);
+    if (matches.length > 1) {
+      throw new AmbiguousTargetError(
+        matches.map(card => ({ id: card.id, label: String(card.content ?? "").slice(0, 120), board: card.boardTitle })),
+        "More than one task card matches that text. Ask the user which one, using their text.",
+      );
+    }
+    return matches[0];
+  }
+
+  /**
+   * The calendar to schedule onto, resolved once.
+   *
+   * This used to be a GET (and sometimes a POST) in front of every scheduling
+   * call — two round trips to Supabase before the one that did the work, which
+   * is most of why "schedule that for Wednesday" ran long enough for the agent
+   * to give up on it. The id does not change; caching it makes scheduling a
+   * single request.
+   */
   private async ensureCalendar(): Promise<number> {
+    if (this.calendarId !== null) return this.calendarId;
     const values = await this.api<any[]>("GET", "/api/kronos/calendars");
-    if (values[0]?.id) return numericId(values[0].id);
+    if (values[0]?.id) {
+      this.calendarId = numericId(values[0].id);
+      return this.calendarId;
+    }
     const value = await this.api<any>("POST", "/api/kronos/calendars", { name: "My Calendar" });
-    return numericId(value?.id);
+    this.calendarId = numericId(value?.id);
+    return this.calendarId;
   }
 
   private async performUndo(id: string): Promise<unknown> {
@@ -736,17 +1103,122 @@ export class AkiraCapabilityRegistry {
     return { name, title, description, risk, visual, queryKeys, localStores, supportsUndo, inputSchema };
   }
 
+  /**
+   * ROME's own data server, in this process rather than the renderer's.
+   *
+   * The failure text matters more than it looks: when this times out the agent
+   * is told "the tool call timed out", which is indistinguishable from
+   * ElevenLabs giving up on ROME. Naming which side stalled is the difference
+   * between a diagnosis and another round of guessing.
+   */
   private async api<T = unknown>(method: string, pathname: string, body?: unknown): Promise<T> {
-    const response = await fetch(`${this.serverBase}${pathname}`, {
-      method,
-      headers: body === undefined ? {} : { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(12_000),
-    });
+    let response: Response;
+    const auth = await this.authHeaders();
+    try {
+      response = await fetch(`${this.serverBase}${pathname}`, {
+        method,
+        headers: body === undefined ? auth : { ...auth, "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        // Shorter than it was: past this something is wrong, and eight seconds
+        // of waiting only pushes the report past the point of being useful.
+        signal: AbortSignal.timeout(8_000),
+      });
+    } catch (error) {
+      const timedOut = error instanceof Error && /abort|timeout/i.test(error.name + error.message);
+      throw new Error(timedOut
+        ? `ROME's own data server did not answer within 8 seconds (${method} ${pathname}). This is ROME, not ElevenLabs — the app's server or its database is not responding.`
+        : `ROME's own data server could not be reached at ${this.serverBase} (${method} ${pathname}): ${error instanceof Error ? error.message : String(error)}`);
+    }
     const text = await response.text();
-    const value = text ? JSON.parse(text) : null;
-    if (!response.ok) throw new Error(value?.error?.message ?? value?.error ?? value?.message ?? `ROME API returned HTTP ${response.status}.`);
+    const value = text ? safeJson(text) : null;
+    if (!response.ok) {
+      throw new Error(
+        value?.error?.message ?? value?.error ?? value?.message
+        ?? `ROME's data server returned HTTP ${response.status} for ${method} ${pathname}.`,
+      );
+    }
     return value as T;
+  }
+
+  /**
+   * Read back what was just written, and describe it in the user's terms.
+   *
+   * "Successfully created" was true and useless: the row existed, on a calendar
+   * and a date nobody had said out loud, and the user went looking for it on
+   * the day they had in mind. One extra read turns a claim into a fact, and
+   * returning the day, the time and the calendar name means Akira says the
+   * three things that would have caught it.
+   */
+  private async confirmScheduled(
+    calendarId: number,
+    kind: "events" | "assignments" | "generals" | "routines",
+    created: any,
+    when: { date: string; startTime: string; durationMinutes: number },
+  ): Promise<Record<string, unknown>> {
+    const id = Number(created?.id);
+    const calendars = await this.api<any[]>("GET", "/api/kronos/calendars").catch(() => []);
+    const calendar = calendars.find(entry => numericId(entry?.id) === calendarId);
+    const rows = await this.api<any[]>("GET", `/api/kronos/calendars/${calendarId}/${kind}`).catch(() => []);
+    const found = Array.isArray(rows) ? rows.find(row => Number(row?.id) === id) : undefined;
+
+    return {
+      id: created?.id ?? null,
+      title: String(created?.title ?? ""),
+      calendar: String(calendar?.name ?? "your calendar"),
+      // Say the weekday: the user thinks in "Wednesday", not in "2026-09-09",
+      // and a date defaulted to today is exactly the mistake worth catching.
+      day: describeDay(when.date),
+      date: when.date,
+      startTime: when.startTime,
+      durationMinutes: when.durationMinutes,
+      verified: Boolean(found),
+      ...(found ? {} : { warning: "The row was created but did not come back when re-read. Tell the user it may not have saved." }),
+    };
+  }
+
+  /**
+   * The session token, cached for a minute.
+   *
+   * Asking the renderer on every call would put an IPC round trip in front of
+   * every request; asking once and never again would survive a sign-out. A
+   * minute is short enough that switching accounts settles on its own.
+   */
+  private async authHeaders(): Promise<Record<string, string>> {
+    if (Date.now() - this.sessionTokenAt > 60_000) {
+      this.sessionTokenAt = Date.now();
+      try {
+        const value = await this.dependencies.renderer.command("auth.token", {}, 2_000) as { token?: unknown };
+        this.sessionToken = typeof value?.token === "string" && value.token ? value.token : null;
+      } catch {
+        // The window may not be up yet. The server's active-profile fallback
+        // still applies, so this is degraded rather than broken.
+        this.sessionToken = null;
+      }
+    }
+    return this.sessionToken ? { "x-session-token": this.sessionToken } : {};
+  }
+
+  /**
+   * Reachability, timed.
+   *
+   * Exposed so the console can ask the question directly rather than inferring
+   * it from a failed voice command three layers up.
+   */
+  async probe(): Promise<{ ok: boolean; detail: string }> {
+    const startedAt = Date.now();
+    try {
+      const calendars = await this.api<any[]>("GET", "/api/kronos/calendars");
+      const count = Array.isArray(calendars) ? calendars.length : 0;
+      const profile = await this.api<Record<string, unknown>>("GET", "/api/active-profile").catch(() => null);
+      const who = profile?.name ? ` Writing as ${String(profile.name)}${this.sessionToken ? "" : " (no session token — the app's own login could differ)"}.` : "";
+      const first = Array.isArray(calendars) && calendars[0]?.name ? ` First calendar: ${String(calendars[0].name)}.` : "";
+      return {
+        ok: true,
+        detail: `ROME's data server answered in ${Date.now() - startedAt}ms (${count} calendar${count === 1 ? "" : "s"}).${first}${who}`,
+      };
+    } catch (error) {
+      return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   private async activeProfileId(): Promise<number | null> {
@@ -761,6 +1233,128 @@ export class AkiraCapabilityRegistry {
       risk: descriptor.risk, status, error,
     });
   }
+}
+
+/**
+ * What a focus task looks like to the agent: a name, and a state it can say
+ * out loud. The id rides along for the next call and nothing else.
+ */
+function summariseStabilizerTask(task: unknown): Record<string, unknown> {
+  const record = (task && typeof task === "object" ? task : {}) as Record<string, any>;
+  return {
+    id: String(record.id ?? ""),
+    name: String(record.title ?? "").slice(0, 200),
+    completed: Boolean(record.completedAt),
+  };
+}
+
+/**
+ * Pull the answer out of an OpenAI Responses payload.
+ *
+ * `output_text` is an SDK convenience that the raw endpoint does not always
+ * send, and the output array carries reasoning and tool-call items alongside
+ * the message. Walk it rather than betting on a shape.
+ */
+function readResponsesPayload(payload: any): { text: string; sources: { title: string; url: string }[] } {
+  if (typeof payload?.output_text === "string" && payload.output_text.trim()) {
+    return { text: payload.output_text.trim(), sources: collectCitations(payload) };
+  }
+  const parts: string[] = [];
+  for (const item of Array.isArray(payload?.output) ? payload.output : []) {
+    if (item?.type !== "message") continue;
+    for (const content of Array.isArray(item.content) ? item.content : []) {
+      if (typeof content?.text === "string") parts.push(content.text);
+    }
+  }
+  return { text: parts.join(" ").trim(), sources: collectCitations(payload) };
+}
+
+function collectCitations(payload: any): { title: string; url: string }[] {
+  const sources: { title: string; url: string }[] = [];
+  const seen = new Set<string>();
+  for (const item of Array.isArray(payload?.output) ? payload.output : []) {
+    for (const content of Array.isArray(item?.content) ? item.content : []) {
+      for (const annotation of Array.isArray(content?.annotations) ? content.annotations : []) {
+        const url = typeof annotation?.url === "string" ? annotation.url : "";
+        if (!url || seen.has(url)) continue;
+        seen.add(url);
+        sources.push({ title: String(annotation.title ?? "").slice(0, 160) || url, url: url.slice(0, 500) });
+      }
+    }
+  }
+  return sources;
+}
+
+/**
+ * When something is, from however the user said it.
+ *
+ * Speech gives spans, not durations: "five to nine on Wednesday" is a start and
+ * an end, and the model passes them through as it heard them. The schema
+ * rejects unknown arguments, so an `endTime` it had no way to send was refused
+ * outright — the request failed, and the failure looked like the calendar being
+ * broken rather than an argument name. Accepting the span and doing the
+ * arithmetic here is both the fix and the more honest interface.
+ */
+export function readSpan(args: Record<string, unknown>): { date: string; startTime: string; durationMinutes: number } {
+  const date = String(args.dueDate ?? args.date ?? "").trim() || localDate();
+  const startTime = readClock(args.startTime) ?? "09:00";
+  const end = readClock(args.endTime);
+  const explicit = Number(args.durationMinutes);
+
+  let durationMinutes = Number.isFinite(explicit) && explicit > 0 ? Math.round(explicit) : 0;
+  if (!durationMinutes && end) {
+    const span = minutesOfDay(end) - minutesOfDay(startTime);
+    // A span that ends "before" it starts crossed midnight rather than being
+    // nonsense — 22:00 to 01:00 is three hours.
+    durationMinutes = span > 0 ? span : span + 24 * 60;
+  }
+  return {
+    date,
+    startTime,
+    durationMinutes: Math.max(1, Math.min(24 * 60, durationMinutes || 60)),
+  };
+}
+
+/** Accept 17:00, 5:00 PM, 5pm, 1700 — all of which the model has produced. */
+function readClock(value: unknown): string | null {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return null;
+  const match = text.match(/^(\d{1,2})[:.]?(\d{2})?\s*(am|pm)?$/);
+  if (!match) return null;
+  let hours = Number(match[1]);
+  const minutes = Number(match[2] ?? 0);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || minutes > 59) return null;
+  if (match[3] === "pm" && hours < 12) hours += 12;
+  if (match[3] === "am" && hours === 12) hours = 0;
+  if (hours > 23) return null;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function minutesOfDay(clock: string): number {
+  const [hours, minutes] = clock.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+/** "Wednesday 9 September", or "today" when that is what it is. */
+export function describeDay(date: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  const when = new Date(`${date}T12:00:00`);
+  const today = localDate();
+  if (date === today) return "today";
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  if (date === localDate(tomorrow)) return "tomorrow";
+  return when.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+}
+
+function localDate(date = new Date()): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+/** A body that is not JSON is a fact about the failure, not a crash. */
+function safeJson(text: string): any {
+  try { return JSON.parse(text); }
+  catch { return { message: text.slice(0, 300) }; }
 }
 
 function requiredText(value: unknown, label: string): string {
@@ -779,21 +1373,6 @@ function pick(source: Record<string, unknown>, fields: string[]): Record<string,
   const result: Record<string, unknown> = {};
   for (const field of fields) if (source[field] !== undefined) result[field] = source[field];
   return result;
-}
-
-function cleanRoute(value: unknown): string {
-  const route = requiredText(value, "route");
-  // Mirrors the routes registered in client/src/App.tsx. The training drills
-  // were missing, so "take me to dual n-back" failed for no good reason.
-  const allowed = new Set([
-    "/athena", "/athena/dual-n-back", "/athena/cwm", "/athena/mental-math",
-    "/athena/corsi", "/athena/memory-span", "/athena/pasat",
-    "/philosophy", "/strategic", "/taskboard", "/kronos-keep",
-    "/creative", "/idea-workshop", "/investigative", "/component-board", "/research-lab",
-    "/world", "/funding", "/academia", "/settings",
-  ]);
-  if (!allowed.has(route)) throw new Error("That route is not an approved ROME surface.");
-  return route;
 }
 
 function sanitizeBrowserMetadata(tab: {

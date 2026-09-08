@@ -20,11 +20,17 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronUp, CircleStop, Clock3, GripVertical, Plus, RotateCcw, TimerReset, Trash2, X } from "lucide-react";
+import { Check, ChevronUp, CircleStop, Clock3, GripVertical, Pause, Play, Plus, RotateCcw, TimerReset, Trash2, X } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import {
-  addEntry, loadCapability, notifyCapabilityChanged, removeEntryForTask, saveCapability,
+  loadCapability, notifyCapabilityChanged, removeEntryForTask, saveCapability,
 } from "@/lib/capabilityStore";
+import {
+  cancelFocus, completeTask as completeFocusTask, elapsedSeconds, extendFocus, formatRemaining,
+  pauseFocus, readTasks, remainingSeconds, restoreTask as restoreFocusTask, resumeFocus,
+  startFocus, storageKey, DEFAULT_CREDIT,
+  type StabilizerTask,
+} from "@/lib/focusSession";
 import {
   widgetRootStyle,
   useWidgetFit,
@@ -35,26 +41,6 @@ import {
   WidgetPinButton,
   type FocusRect,
 } from "./WidgetChrome";
-
-interface FocusTimer {
-  startedAt: number;
-  durationSeconds: number;
-  kronosAssignmentId: number | null;
-}
-
-interface StabilizerTask {
-  id: string;
-  title: string;
-  createdAt: number;
-  completedAt: number | null;
-  timer: FocusTimer | null;
-  /** "YYYY-MM-DD", or null for undated. Mirrored into Kronos when set. */
-  dueDate: string | null;
-  /** The Kronos assignment this task's due date owns, if any. */
-  kronosItemId: number | null;
-  /** What finishing this task is worth in the Capability ledger. */
-  credit: number;
-}
 
 interface Props {
   pos: { x: number; y: number } | null;
@@ -77,51 +63,6 @@ interface Calendar { id: number; name: string }
 
 const W = 286;
 const PRESETS = [5, 15, 25, 45, 60];
-const DEFAULT_CREDIT = 10;
-
-function storageKey(profileId: number | undefined) {
-  return `rome_task_stabilizer_v1:${profileId ?? "default"}`;
-}
-
-/**
- * Read and normalise.
- *
- * Tasks written before due dates and credit existed are missing those fields
- * entirely, so every read backfills them. Without this, `task.credit` is
- * `undefined`, `clampCredit` turns that into 0, and every task you had before
- * today silently becomes worth nothing.
- */
-function readTasks(profileId: number | undefined): StabilizerTask[] {
-  try {
-    const value = JSON.parse(localStorage.getItem(storageKey(profileId)) ?? "[]");
-    if (!Array.isArray(value)) return [];
-    return value.map((t: any): StabilizerTask => ({
-      id: String(t?.id ?? crypto.randomUUID()),
-      title: String(t?.title ?? ""),
-      createdAt: Number(t?.createdAt) || Date.now(),
-      completedAt: t?.completedAt ?? null,
-      timer: t?.timer ?? null,
-      dueDate: typeof t?.dueDate === "string" && t.dueDate ? t.dueDate : null,
-      kronosItemId: typeof t?.kronosItemId === "number" ? t.kronosItemId : null,
-      credit: Number.isFinite(Number(t?.credit)) ? Math.max(0, Math.round(Number(t.credit))) : DEFAULT_CREDIT,
-    }));
-  } catch {
-    return [];
-  }
-}
-
-function localDateStr(date = new Date()) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function localTimeStr(date = new Date()) {
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-}
-
-function formatRemaining(seconds: number) {
-  const safe = Math.max(0, seconds);
-  return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
-}
 
 function Corner() {
   return (
@@ -214,9 +155,11 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
   }, []);
 
   const running = tasks.find(task => task.timer && !task.completedAt) ?? null;
-  const elapsed = running?.timer ? Math.max(0, Math.floor((now - running.timer.startedAt) / 1000)) : 0;
-  const remaining = running?.timer ? Math.max(0, running.timer.durationSeconds - elapsed) : 0;
+  const elapsed = running?.timer ? elapsedSeconds(running.timer, now) : 0;
+  const remaining = running?.timer ? remainingSeconds(running.timer, now) : 0;
   const progress = running?.timer ? Math.min(1, elapsed / running.timer.durationSeconds) : 0;
+  const paused = Boolean(running?.timer?.pausedAt);
+  const awaiting = Boolean(running?.timer?.endedAt);
 
   const patchTask = useCallback((id: string, patch: Partial<StabilizerTask>) => {
     setTasks(old => old.map(t => (t.id === id ? { ...t, ...patch } : t)));
@@ -240,12 +183,6 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
   // Read-modify-write against localStorage rather than holding the ledger in
   // React state: the MIDAS dashboard owns its own copy, and the event tells it
   // to re-read. Two writers, one file, no shared state to get out of step.
-  const bankCredit = useCallback((task: StabilizerTask) => {
-    const next = addEntry(loadCapability(profileId), task.title, task.credit, "stabilizer", task.id);
-    saveCapability(profileId, next);
-    notifyCapabilityChanged();
-  }, [profileId]);
-
   const refundCredit = useCallback((taskId: string) => {
     const next = removeEntryForTask(loadCapability(profileId), taskId);
     saveCapability(profileId, next);
@@ -290,26 +227,19 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
     }
   }, [ensureCalendar, patchTask, refreshKronos]);
 
-  const completeTask = useCallback(async (task: StabilizerTask, actualSeconds?: number) => {
-    const timer = task.timer;
-    const seconds = actualSeconds ?? (timer ? Math.max(1, Math.floor((Date.now() - timer.startedAt) / 1000)) : 0);
-    setTasks(old => old.map(item => item.id === task.id ? { ...item, completedAt: Date.now(), timer: null } : item));
-    bankCredit(task);
-    if (timer?.kronosAssignmentId) {
-      try {
-        await apiRequest("PATCH", `/api/kronos/assignments/${timer.kronosAssignmentId}`, {
-          duration_minutes: Math.max(1, Math.ceil(seconds / 60)),
-          instructions: `Completed through Task Stabilizer · ${Math.max(1, Math.ceil(seconds / 60))} minute focus cycle`,
-        });
-        refreshKronos();
-      } catch { /* task completion remains local if calendar sync is temporarily unavailable */ }
-    }
-  }, [bankCredit, refreshKronos]);
+  // Completion, credit and the Kronos reconciliation all live in
+  // `focusSession` now, because Akira finishes tasks too and the two paths
+  // drifting apart would mean a voice-completed task banking no credit.
+  const completeTask = useCallback(async (task: StabilizerTask) => {
+    await completeFocusTask(profileId, task.id);
+    setTasks(readTasks(profileId));
+    refreshKronos();
+  }, [profileId, refreshKronos]);
 
   const restoreTask = useCallback((task: StabilizerTask) => {
-    setTasks(old => old.map(item => item.id === task.id ? { ...item, completedAt: null } : item));
-    refundCredit(task.id);
-  }, [refundCredit]);
+    restoreFocusTask(profileId, task.id);
+    setTasks(readTasks(profileId));
+  }, [profileId]);
 
   const deleteTask = useCallback(async (task: StabilizerTask) => {
     setTasks(old => old.filter(item => item.id !== task.id));
@@ -322,9 +252,10 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
     }
   }, [refundCredit, refreshKronos]);
 
-  useEffect(() => {
-    if (running?.timer && remaining === 0 && elapsed > 0) void completeTask(running, running.timer.durationSeconds);
-  }, [running?.id, running?.timer?.startedAt, remaining, elapsed, completeTask]);
+  // Nothing auto-completes at zero any more. A cycle that runs out is *waiting
+  // on an answer* — Akira asks whether you finished, and the bar in the top
+  // rail keeps asking until you say. Marking a task done because a clock ran
+  // out was how abandoned work quietly counted as finished.
 
   const addTask = () => {
     const trimmed = title.trim();
@@ -340,44 +271,35 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
   };
 
   const launchTimer = async () => {
-    const task = tasks.find(item => item.id === timerTaskId);
-    if (!task || running || minutes < 1) return;
+    if (!timerTaskId || running || minutes < 1) return;
     setSyncing(true);
-    let assignmentId: number | null = null;
     try {
-      const calendar = await ensureCalendar();
-      const response = await apiRequest("POST", `/api/kronos/calendars/${calendar.id}/assignments`, {
-        title: task.title,
-        color: "hsl(43 88% 60%)",
-        start_time: localTimeStr(),
-        duration_minutes: minutes,
-        due_date: localDateStr(),
-        instructions: `Task Stabilizer focus cycle · planned ${minutes} minutes`,
-        saved: false,
-      });
-      const assignment = await response.json();
-      assignmentId = assignment.id;
+      await startFocus(profileId, timerTaskId, minutes);
       refreshKronos();
-    } catch { /* timer remains usable offline */ }
-    setTasks(old => old.map(item => item.id === task.id ? {
-      ...item,
-      completedAt: null,
-      timer: { startedAt: Date.now(), durationSeconds: minutes * 60, kronosAssignmentId: assignmentId },
-    } : item));
+    } catch { /* surfaced by the queue staying as it was */ }
+    setTasks(readTasks(profileId));
     setTimerTaskId(null);
     setSyncing(false);
   };
 
   const cancelTimer = async () => {
-    if (!running?.timer) return;
-    const assignmentId = running.timer.kronosAssignmentId;
-    setTasks(old => old.map(item => item.id === running.id ? { ...item, timer: null } : item));
-    if (assignmentId) {
-      try {
-        await apiRequest("DELETE", `/api/kronos/assignments/${assignmentId}`);
-        refreshKronos();
-      } catch {}
-    }
+    if (!running) return;
+    try { await cancelFocus(profileId); } catch { /* nothing was running */ }
+    setTasks(readTasks(profileId));
+    refreshKronos();
+  };
+
+  const togglePause = () => {
+    if (!running) return;
+    try { paused ? resumeFocus(profileId) : pauseFocus(profileId); } catch { /* nothing was running */ }
+    setTasks(readTasks(profileId));
+  };
+
+  const addTime = async (extra: number) => {
+    if (!running) return;
+    try { await extendFocus(profileId, extra); } catch { /* nothing was running */ }
+    setTasks(readTasks(profileId));
+    refreshKronos();
   };
 
   // ── Reorder ──────────────────────────────────────────────────────────────
@@ -449,10 +371,13 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
             <Accelerator progress={progress} active={Boolean(running)} />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 7, color: "hsl(var(--accent-h) 35% 43%)", letterSpacing: ".18em", textTransform: "uppercase" }}>{running ? "Beam locked" : "Accelerator idle"}</div>
-              <div style={{ fontSize: running ? 22 : 11, color: "hsl(var(--accent-h) 85% 72%)", marginTop: 3, lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{running ? formatRemaining(remaining) : "Select a task"}</div>
+              <div style={{ fontSize: running ? 22 : 11, color: "hsl(var(--accent-h) 85% 72%)", marginTop: 3, lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{running ? (awaiting ? "FINISHED?" : formatRemaining(remaining)) : "Select a task"}</div>
               {running && <div title={running.title} style={{ fontSize: 9, color: "hsl(220 12% 62%)", marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{running.title}</div>}
               {running && <div style={{ display: "flex", gap: 5, marginTop: 7 }}>
-                <button onClick={() => void completeTask(running)} style={miniButton("hsl(145 58% 54%)")}><Check size={11} /> Finish</button>
+                <button onClick={() => void completeTask(running)} style={miniButton("hsl(145 58% 54%)")}><Check size={11} /> {awaiting ? "Finished" : "Finish"}</button>
+                {awaiting
+                  ? <button onClick={() => void addTime(10)} style={miniButton("hsl(43 78% 60%)")}><Plus size={11} /> 10 min</button>
+                  : <button onClick={togglePause} style={miniButton("hsl(var(--accent-h) 55% 58%)")}>{paused ? <Play size={11} /> : <Pause size={11} />} {paused ? "Resume" : "Pause"}</button>}
                 <button onClick={() => void cancelTimer()} style={miniButton("hsl(0 58% 58%)")}><CircleStop size={11} /> Cancel</button>
               </div>}
             </div>
@@ -473,7 +398,7 @@ export default function TaskStabilizerWidget({ pos, collapsed, onPosChange, onCo
                 onDragEnd={() => setDragId(null)}
                 onDropOn={() => { if (dragId) moveTask(dragId, task.id); setDragId(null); }}
                 onTimer={() => { setTimerTaskId(task.id); setMinutes(25); }}
-                onComplete={() => void completeTask(task, 0)}
+                onComplete={() => void completeTask(task)}
                 onDelete={() => void deleteTask(task)}
                 onDue={value => void setDueDate(task, value)}
                 onCredit={value => patchTask(task.id, { credit: value })} />
