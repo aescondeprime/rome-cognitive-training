@@ -429,6 +429,9 @@
 .akira-actions button,
 .akira-list article button { border: 1px solid hsl(220 14% 17%); background: hsl(222 16% 8%); color: hsl(220 10% 54%); padding: 5px 7px; display: inline-flex; align-items: center; gap: 5px; font: 8px 'DM Mono', monospace; cursor: pointer; }
 .akira-actions button:disabled { opacity: .3; }
+/* A plain button inside a settings group — the spoken-warning test. */
+.akira-button { border: 1px solid hsl(220 14% 17%); background: hsl(222 16% 8%); color: hsl(220 10% 54%); padding: 6px 9px; font: 8px 'DM Mono', monospace; letter-spacing: .1em; text-transform: uppercase; cursor: pointer; }
+.akira-button:hover { color: hsl(var(--accent-h) 70% 66%); border-color: hsl(var(--accent-h) 40% 26%); }
 .akira-notice,
 .akira-error { padding: 7px 12px; border-bottom: 1px solid hsl(220 15% 13%); background: hsl(var(--accent-h) 25% 9% / .45); color: hsl(var(--accent-h) 42% 58%); font: 8px 'DM Mono', monospace; line-height: 1.45; }
 .akira-error { background: hsl(0 38% 12% / .7); color: hsl(0 58% 66%); display: flex; gap: 5px; }

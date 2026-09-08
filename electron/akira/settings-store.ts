@@ -15,7 +15,18 @@ export interface SecureCipher {
   decrypt(value: Buffer): string;
 }
 
+/**
+ * Bump when an internal timing default changes and existing installs must take
+ * it. Only fields ROME has never put in front of the user are re-applied —
+ * anything with a control in the console is the user's, whatever its age.
+ */
+export const AKIRA_SETTINGS_VERSION = 3;
+
+/** Values with no UI, reset by a version bump because no one chose them. */
+const UNCHOSEN_TIMINGS = ["approvals.toolDeadlineMs", "realtime.greetingDelayMs"] as const;
+
 export const DEFAULT_AKIRA_SETTINGS: AkiraSettings = {
+  settingsVersion: AKIRA_SETTINGS_VERSION,
   appearance: {
     showTranscript: true,
     reduceMotion: false,
@@ -50,9 +61,24 @@ export const DEFAULT_AKIRA_SETTINGS: AkiraSettings = {
     agentId: "",
     greetingEnabled: true,
     greetingText: "Yes?",
-    greetingDelayMs: 1_200,
+    // Long enough to tell "Akira" from "Akira, open my workshop", short enough
+    // that a bare summons still feels answered rather than waited on. The clip
+    // itself is pre-rendered, so this is the whole delay.
+    greetingDelayMs: 600,
     shareLiveContext: true,
     idleTimeoutMs: 20_000,
+    focusIdleTimeoutMs: 8_000,
+    resumeWindowMs: 600_000,
+  },
+  research: { enabled: true, model: "gpt-5-mini" },
+  approvals: {
+    autoApproveReversibleWrites: true,
+    // Deliberately very short. ElevenLabs enforces its own timeout on a client tool
+    // and injects "the tool call timed out" as the result when it expires —
+    // which the model then reports as being unable to act, while the action it
+    // is denying goes on to succeed. Answering inside a few seconds means that
+    // race is never run, whatever the agent's timeout is set to.
+    toolDeadlineMs: 1_500,
   },
   agent: { provider: "openai", model: "gpt-5-mini", effort: "medium" },
   privacy: {
@@ -81,18 +107,37 @@ function stripLegacy<T extends Record<string, unknown>>(value: T | undefined, ke
   return copy as T;
 }
 
+/** Exposed for tests: the migration is the part worth pinning down. */
+export function mergeSettingsForTest(value: Partial<AkiraSettings>): AkiraSettings {
+  return mergeSettings(value);
+}
+
 function mergeSettings(value: Partial<AkiraSettings>): AkiraSettings {
   const appearance = stripLegacy(value.appearance as Record<string, unknown> | undefined, LEGACY_SETTING_KEYS.appearance);
   const input = stripLegacy(value.input as Record<string, unknown> | undefined, LEGACY_SETTING_KEYS.input);
   const merged: AkiraSettings = {
+    settingsVersion: AKIRA_SETTINGS_VERSION,
     appearance: { ...DEFAULT_AKIRA_SETTINGS.appearance, ...appearance },
     voice: { ...DEFAULT_AKIRA_SETTINGS.voice, ...value.voice },
     input: { ...DEFAULT_AKIRA_SETTINGS.input, ...input },
     realtime: { ...DEFAULT_AKIRA_SETTINGS.realtime, ...value.realtime },
+    approvals: { ...DEFAULT_AKIRA_SETTINGS.approvals, ...value.approvals },
+    research: { ...DEFAULT_AKIRA_SETTINGS.research, ...value.research },
     agent: { ...DEFAULT_AKIRA_SETTINGS.agent, ...value.agent },
     privacy: { ...DEFAULT_AKIRA_SETTINGS.privacy, ...value.privacy },
     permissions: { ...DEFAULT_AKIRA_SETTINGS.permissions, ...value.permissions },
   };
+  // Anything the user has never been shown a control for is not a preference,
+  // it is a stale copy of an old default. Re-apply those on a version bump.
+  if (Number(value.settingsVersion ?? 0) < AKIRA_SETTINGS_VERSION) {
+    for (const path of UNCHOSEN_TIMINGS) {
+      const [section, field] = path.split(".") as [keyof AkiraSettings, string];
+      (merged[section] as Record<string, unknown>)[field] =
+        (DEFAULT_AKIRA_SETTINGS[section] as Record<string, unknown>)[field];
+    }
+  }
+  merged.settingsVersion = AKIRA_SETTINGS_VERSION;
+
   merged.input.conversationShortcut = normalizeAkiraShortcut(merged.input.conversationShortcut, DEFAULT_CONVERSATION_SHORTCUT);
   merged.input.consoleShortcut = normalizeAkiraShortcut(merged.input.consoleShortcut, DEFAULT_CONSOLE_SHORTCUT);
   // Both shortcuts landing on the same accelerator would make one unreachable.
@@ -139,6 +184,12 @@ export class AkiraSettingsStore {
       appearance: { ...this.settings.appearance, ...patch.appearance },
       voice: { ...this.settings.voice, ...patch.voice },
       input: { ...this.settings.input, ...patch.input },
+      // Every section is merged, not replaced. A partial patch — say, only the
+      // idle timeout — would otherwise take the agent id and the greeting with
+      // it, which is a bad way to find out this list was incomplete.
+      realtime: { ...this.settings.realtime, ...patch.realtime },
+      approvals: { ...this.settings.approvals, ...patch.approvals },
+      research: { ...this.settings.research, ...patch.research },
       agent: { ...this.settings.agent, ...patch.agent },
       privacy: { ...this.settings.privacy, ...patch.privacy },
       permissions: { ...this.settings.permissions, ...patch.permissions },

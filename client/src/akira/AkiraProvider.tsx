@@ -25,9 +25,16 @@ import {
   type AkiraTranscriptEvent,
 } from "@shared/akira";
 import { queryClient } from "@/lib/queryClient";
+import { getToken } from "@/lib/auth";
 import { AkiraMic } from "./AkiraMic";
 import { OpenWakeWord } from "./wake/OpenWakeWord";
 import { loadFinancialState, saveFinancialState } from "@/lib/financialStore";
+import {
+  cancelFocus, completeTask as completeFocusTask, createTask as createFocusTask, extendFocus,
+  findTask, focusStatus, markAnnounced, markEnded, pauseFocus, readTasks, restoreFocus,
+  restoreTask as restoreFocusTask, resumeFocus, runningTask, spokenRemaining, startFocus,
+  type FocusTimer,
+} from "@/lib/focusSession";
 import { makeId, projectFinancials, toDateInput, type ExpenseKind, type Recurrence } from "@/lib/financialEngine";
 
 /**
@@ -88,6 +95,16 @@ interface AkiraContextValue {
   /** Start a conversation when dormant, end it when active. Bound to Command+'. */
   toggleConversation: () => Promise<void>;
   submitText: (text: string) => Promise<void>;
+  /** Speak one line without opening a conversation. Used to test the voice path. */
+  announce: (text: string) => Promise<{ ok: boolean; voice: string; detail: string }>;
+  /** Ask ElevenLabs whether the stored key is usable, and say what it answered. */
+  verifyKey: () => Promise<{ ok: boolean; detail: string }>;
+  /** Ask ROME's own data server whether it is answering, and how fast. */
+  probeServer: () => Promise<{ ok: boolean; detail: string }>;
+  /** Read the agent's tool and turn configuration from ElevenLabs. */
+  auditAgent: () => Promise<{ ok: boolean; detail: string }>;
+  /** Set the agent's tool timeout and turn timeout to what ROME needs. */
+  repairAgent: () => Promise<{ ok: boolean; detail: string }>;
   respondToApproval: (approved: boolean) => Promise<void>;
   updateSettings: (patch: Partial<AkiraSettings>) => Promise<void>;
   setSecret: (name: string, value: string) => Promise<void>;
@@ -123,6 +140,8 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const playbackGenerationRef = useRef(0);
   const continueTimerRef = useRef<number | null>(null);
   const lastVadLevelRef = useRef(0);
+  /** Raw microphone RMS, used to tell a bare summons from an instruction. */
+  const localLevelRef = useRef(0);
   const noticeTimerRef = useRef<number | null>(null);
 
   useEffect(() => { statusRef.current = status; }, [status]);
@@ -172,6 +191,18 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const playAudio = useCallback(async (event: AkiraAudioEvent) => {
     if (event.type === "cancel") {
       cancelPlayback();
+      try { window.speechSynthesis?.cancel(); } catch { /* not every runtime has it */ }
+      return;
+    }
+    // The fallback voice. Nothing to schedule: the browser owns the audio.
+    if (event.type === "speak") {
+      const line = String(event.text ?? "").trim();
+      if (!line) return;
+      try {
+        const utterance = new SpeechSynthesisUtterance(line);
+        utterance.volume = Math.max(0, Math.min(1, statusRef.current?.settings.voice.volume ?? 0.85));
+        window.speechSynthesis.speak(utterance);
+      } catch { /* no speech synthesis here; the console line still explains why */ }
       return;
     }
     if (event.type === "start") {
@@ -220,6 +251,9 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
       deviceId: statusRef.current?.settings.input.microphoneId || undefined,
       onChunk: base64 => bridge?.sendAudioChunk(base64),
       onLevel: rms => {
+        // Kept raw as well as scaled: the greeting watcher below needs to know
+        // whether a person is talking, not how bright to draw the glow.
+        localLevelRef.current = rms;
         // Local level drives the ambience until the server's own VAD arrives,
         // so the glow responds on the very first syllable. Written straight to
         // CSS: React state here would re-render on every audio frame.
@@ -246,10 +280,18 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /**
-   * Order matters here. V2 connected first and armed the microphone second,
-   * which is why the first words of every request were lost. The mic is armed
-   * first — usually already open — and streaming begins with a pre-roll flush,
-   * so speech from before the trigger still reaches the agent.
+   * Order matters here.
+   *
+   * V2 connected first and armed the microphone second, which is why the first
+   * words of every request were lost. V3 armed the mic first but still waited
+   * for the socket before streaming — and opening one costs a signed-URL round
+   * trip plus a handshake, so anything said in that second went nowhere. It
+   * felt like having to wait for her to be ready before speaking.
+   *
+   * Streaming now starts *before* the connection: the main process holds those
+   * frames and flushes them the moment the socket opens. Combined with the
+   * ring buffer's pre-roll, the whole sentence survives — the part said before
+   * the wake word and the part said during the connect.
    */
   const activate = useCallback(async (viaWakeWord = false) => {
     if (!bridge) return;
@@ -260,9 +302,31 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
         ? new Error("ROME needs microphone access. Enable it in System Settings \u2192 Privacy & Security \u2192 Microphone.")
         : error;
     }
-    const next = await bridge.activate(viaWakeWord);
-    setStatus(next);
     micRef.current?.beginStreaming(true);
+    // "Yes?" is decided here, while the socket is still opening, because it is
+    // local audio and has never needed the connection. What it does need is to
+    // not answer someone who is still talking — and the microphone knows that
+    // a second before the transcript does.
+    if (viaWakeWord) {
+      const startedAt = Date.now();
+      const watcher = window.setInterval(() => {
+        const elapsed = Date.now() - startedAt;
+        // The first moments are the tail of the wake word itself.
+        if (elapsed < 250) return;
+        if (elapsed > 900) { window.clearInterval(watcher); return; }
+        if (localLevelRef.current > 0.035) {
+          window.clearInterval(watcher);
+          void bridge.suppressGreeting();
+        }
+      }, 60);
+    }
+    try {
+      setStatus(await bridge.activate(viaWakeWord));
+    } catch (error) {
+      // Nothing is listening, so nothing should be leaving the machine.
+      micRef.current?.endStreaming();
+      throw error;
+    }
   }, [armMicrophone, bridge]);
 
   /**
@@ -518,6 +582,102 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, [activate, armMicrophone, bridge, showNotice, status?.available, status?.settings.input.wakeWordEnabled]);
 
+  /**
+   * The focus cycle's voice.
+   *
+   * Runs here rather than in the widget or the top bar because both can be
+   * unmounted and the cycle cannot: a five-minute warning that only fires while
+   * the Task Stabilizer happens to be on screen is not a warning.
+   *
+   * Warnings are spoken through one-shot synthesis, which bills characters
+   * rather than conversation minutes, so a whole 25-minute cycle costs nothing
+   * until you actually say something. The two moments that need an *answer* —
+   * time's up, and the nudge a minute later — open the socket after speaking,
+   * and it closes itself on the usual silence timeout.
+   */
+  useEffect(() => {
+    if (!bridge) return;
+    let lastSignature = "\u0000";
+    let asking = false;
+
+    const ask = async (text: string, taskName: string) => {
+      if (asking) return;
+      asking = true;
+      try {
+        await bridge.announce(text);
+        await activate(false);
+        bridge.sendContext(
+          `The focus cycle on "${taskName}" has run out and the user has just been asked aloud whether they finished. ` +
+          "Do not repeat the question. Wait for their answer: if they finished, call rome.focus.complete; " +
+          "if they need longer, call rome.focus.extend with the minutes they ask for; if they are done working on it " +
+          "either way, call rome.focus.cancel.",
+        );
+      } catch { /* the bar keeps asking on screen */ }
+      finally { asking = false; }
+    };
+
+    const tick = () => {
+      const profile = queryClient.getQueryData<{ id?: number }>(["/api/active-profile"]);
+      const profileId = profile?.id;
+      const status = focusStatus(profileId);
+
+      // Tell the main process only when something actually changed. It uses
+      // this for the shorter silence leash during a cycle and to know what you
+      // are working on, not to draw anything, so per-second updates are waste.
+      const signature = status.active
+        ? `${status.taskId}|${status.paused}|${status.awaitingAnswer}|${Math.round(status.remainingSeconds / 60)}`
+        : "";
+      if (signature !== lastSignature) {
+        lastSignature = signature;
+        bridge.setFocus(status.active
+          ? {
+              taskName: status.taskName,
+              remainingSeconds: status.remainingSeconds,
+              paused: status.paused,
+              awaitingAnswer: status.awaitingAnswer,
+            }
+          : null);
+      }
+
+      const task = runningTask(readTasks(profileId));
+      if (!task?.timer || status.paused) return;
+      const announced = task.timer.announced;
+
+      if (!status.awaitingAnswer) {
+        // Skip a warning the cycle is already past — starting a four-minute
+        // cycle should not open with "five minutes left".
+        if (status.remainingSeconds <= 300 && !announced.five) {
+          markAnnounced(profileId, "five");
+          if (task.timer.durationSeconds > 360) void bridge.announce(`Five minutes left on ${task.title}.`);
+          return;
+        }
+        if (status.remainingSeconds <= 60 && !announced.one) {
+          markAnnounced(profileId, "one");
+          if (task.timer.durationSeconds > 90) void bridge.announce(`One minute left on ${task.title}.`);
+          return;
+        }
+        if (status.remainingSeconds <= 0) {
+          markEnded(profileId);
+          markAnnounced(profileId, "done");
+          void ask(`Time's up on ${task.title}. Did you finish?`, task.title);
+        }
+        return;
+      }
+
+      // Asked once, asked again a minute later, then quiet. The question stays
+      // on screen in the top bar either way.
+      const endedAt = task.timer.endedAt ?? Date.now();
+      if (!announced.nudge && Date.now() - endedAt >= 60_000) {
+        markAnnounced(profileId, "nudge");
+        void ask(`Still on ${task.title}. Did you finish, or do you want more time?`, task.title);
+      }
+    };
+
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [activate, bridge]);
+
   useEffect(() => {
     const onVisibility = () => {
       const current = statusRef.current;
@@ -540,6 +700,12 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AkiraContextValue>(() => ({
     status, transcripts, approval, microphoneArmed, notice, showNotice, panelOpen, setPanelOpen,
     activate, standby, interrupt, toggleConversation, submitText,
+    announce: async text =>
+      (await bridge?.announce(text)) ?? { ok: false, voice: "off", detail: "Akira is desktop-only." },
+    verifyKey: () => bridge?.verifyKey() ?? Promise.resolve({ ok: false, detail: "Akira is desktop-only." }),
+    probeServer: () => bridge?.probeServer() ?? Promise.resolve({ ok: false, detail: "Akira is desktop-only." }),
+    auditAgent: () => bridge?.auditAgent() ?? Promise.resolve({ ok: false, detail: "Akira is desktop-only." }),
+    repairAgent: () => bridge?.repairAgent() ?? Promise.resolve({ ok: false, detail: "Akira is desktop-only." }),
     respondToApproval: async approved => {
       if (!bridge || !approval) return;
       const id = approval.id;
@@ -566,6 +732,100 @@ function mergeTranscript(values: AkiraTranscriptEvent[], next: AkiraTranscriptEv
   return output.slice(-100);
 }
 
+/**
+ * The focus cycle, as Akira reaches it.
+ *
+ * The cycle lives in localStorage, which the main process cannot read, so the
+ * capabilities are thin main-process wrappers and the actual work happens here
+ * against `focusSession`. Tasks are addressed by name throughout; the matcher
+ * is the shared one, so a name resolves the same way here as it does for every
+ * other capability.
+ */
+async function runFocusCommand(
+  action: string,
+  args: Record<string, unknown>,
+  profileId: number | undefined,
+): Promise<unknown> {
+  const status = () => focusStatus(profileId);
+  const speakable = () => {
+    const value = status();
+    if (!value.active) return { active: false, message: "No focus cycle is running." };
+    return {
+      active: true,
+      task: value.taskName,
+      remaining: value.awaitingAnswer ? "none" : spokenRemaining(value.remainingSeconds),
+      remainingSeconds: value.remainingSeconds,
+      paused: value.paused,
+      awaitingAnswer: value.awaitingAnswer,
+    };
+  };
+
+  if (action === "focus.status") return speakable();
+
+  if (action === "focus.start") {
+    const label = String(args.title ?? "").trim();
+    if (!label) throw new Error("Which task should the cycle run on?");
+    const minutes = Math.max(1, Math.min(480, Math.round(Number(args.minutes) || 25)));
+    const tasks = readTasks(profileId);
+    const matches = findTask(tasks, label);
+    if (matches.length > 1) {
+      throw new Error(`More than one task matches that name: ${matches.slice(0, 4).map(task => task.title).join(", ")}. Ask which one.`);
+    }
+    // Nothing matched, so this is a new intention rather than a mis-heard one.
+    // Refusing here would mean "start twenty minutes on the outline" needs a
+    // separate "add the outline first", which is not how anyone speaks.
+    const task = matches[0] ?? createFocusTask(profileId, label);
+    await startFocus(profileId, task.id, minutes);
+    return { started: task.title, minutes, created: !matches.length };
+  }
+
+  if (action === "focus.pause") { pauseFocus(profileId); return speakable(); }
+  if (action === "focus.resume") { resumeFocus(profileId); return speakable(); }
+
+  if (action === "focus.extend") {
+    const minutes = Math.round(Number(args.minutes) || 0);
+    if (!minutes) throw new Error("How many minutes should be added?");
+    await extendFocus(profileId, Math.max(-480, Math.min(480, minutes)));
+    return speakable();
+  }
+
+  if (action === "focus.cancel") {
+    const running = runningTask(readTasks(profileId));
+    const snapshot = running?.timer ? { ...running.timer } : null;
+    const cancelled = await cancelFocus(profileId);
+    return { ...cancelled, timer: snapshot };
+  }
+
+  if (action === "focus.restore") {
+    const taskId = String(args.taskId ?? "");
+    const timer = args.timer as FocusTimer | undefined;
+    if (!taskId || !timer) throw new Error("Nothing to restore.");
+    restoreFocus(profileId, taskId, timer);
+    return speakable();
+  }
+
+  if (action === "focus.complete") {
+    const label = String(args.title ?? "").trim();
+    const tasks = readTasks(profileId);
+    let target = label ? findTask(tasks, label) : [];
+    if (label && target.length > 1) {
+      throw new Error(`More than one task matches that name: ${target.slice(0, 4).map(task => task.title).join(", ")}. Ask which one.`);
+    }
+    const task = target[0] ?? (label ? null : runningTask(tasks));
+    if (!task) throw new Error(label ? `No task matches "${label}".` : "No focus cycle is running.");
+    return await completeFocusTask(profileId, task.id);
+  }
+
+  if (action === "focus.restore_task") {
+    const taskId = String(args.taskId ?? "");
+    if (!taskId) throw new Error("Which task should be reopened?");
+    restoreFocusTask(profileId, taskId);
+    return { reopened: taskId };
+  }
+
+  throw new Error(`Unsupported focus command: ${action}`);
+}
+
 async function runRendererCommand(action: string, args: Record<string, unknown>): Promise<unknown> {
   const profile = queryClient.getQueryData<{ id?: number }>(["/api/active-profile"]);
   const profileId = profile?.id ?? "default";
@@ -582,8 +842,19 @@ async function runRendererCommand(action: string, args: Record<string, unknown>)
     const route = String(args.route ?? "");
     if (!route.startsWith("/")) throw new Error("Invalid ROME route.");
     window.location.hash = `#${route}`;
+    // The map sits over the whole app, so navigating underneath it changes a
+    // page the user cannot see. Taking them to a page means taking them out of
+    // the constellation — the overlay already exposes this for widgets that
+    // navigate, and Akira is one more thing that navigates.
+    try { (window as any).__romeCloseConstellation?.(); } catch { /* no map open */ }
     return { route };
   }
+  // Akira's capabilities run in the main process, which has no localStorage and
+  // therefore no session token. Without one the server falls back to the active
+  // profile — which is usually the same account, and silently is not: writes
+  // land under a different user than the app is reading as, so an event that
+  // was really created is nowhere to be seen.
+  if (action === "auth.token") return { token: getToken(), profileId: profile?.id ?? null };
   if (action === "task-stabilizer.list") return readTasks();
   if (action === "task-stabilizer.create") {
     const task = { id: crypto.randomUUID(), title: String(args.title ?? "").trim(), createdAt: Date.now(), completedAt: null, timer: null };
@@ -615,6 +886,7 @@ async function runRendererCommand(action: string, args: Record<string, unknown>)
     writeTasks(tasks);
     return { deletedId: id };
   }
+  if (action.startsWith("focus.")) return runFocusCommand(action, args, profileId === "default" ? undefined : profileId as number);
   if (action === "finance.summary") {
     const state = loadFinancialState(profileId);
     const projection = projectFinancials(state);

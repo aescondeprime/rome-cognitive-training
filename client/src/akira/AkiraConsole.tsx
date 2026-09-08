@@ -239,6 +239,36 @@ export default function AkiraConsole() {
                     checked={draft.realtime.shareLiveContext}
                     onChange={checked => setDraft({ ...draft, realtime: { ...draft.realtime, shareLiveContext: checked } })}
                   />
+                  <RangeInput
+                    label="Close after silence during a focus cycle (seconds · 0 = same as above)"
+                    value={Math.round(draft.realtime.focusIdleTimeoutMs / 1000)}
+                    min={0} max={60} step={1}
+                    onChange={value => setDraft({ ...draft, realtime: { ...draft.realtime, focusIdleTimeoutMs: value * 1000 } })}
+                  />
+                  <RangeInput
+                    label="Resume a paused conversation for (minutes · 0 = always fresh)"
+                    value={Math.round(draft.realtime.resumeWindowMs / 60_000)}
+                    min={0} max={60} step={1}
+                    onChange={value => setDraft({ ...draft, realtime: { ...draft.realtime, resumeWindowMs: value * 60_000 } })}
+                  />
+                  <Toggle
+                    label="Act on reversible changes without asking"
+                    checked={draft.approvals.autoApproveReversibleWrites}
+                    onChange={checked => setDraft({ ...draft, approvals: { ...draft.approvals, autoApproveReversibleWrites: checked } })}
+                  />
+                  <Toggle
+                    label="Answer from the web when she isn't sure"
+                    checked={draft.research.enabled}
+                    onChange={checked => setDraft({ ...draft, research: { ...draft.research, enabled: checked } })}
+                  />
+                  <p className="akira-section-note">
+                    Web answers go through OpenAI with search, using the OpenAI key below — billed as
+                    tokens, not conversation minutes, so asking mid-focus-cycle costs cents.
+                  </p>
+                  <p className="akira-section-note">
+                    Scheduling, adding tasks and notes just happen — every one is logged in Activity
+                    and can be undone there. Deleting anything, and anything financial, still asks.
+                  </p>
                 </SettingGroup>
                 <SettingGroup title="Voice">
                   <Toggle label="Voice responses" checked={draft.voice.enabled} onChange={checked => setDraft({ ...draft, voice: { ...draft.voice, enabled: checked } })} />
@@ -248,6 +278,73 @@ export default function AkiraConsole() {
                   <p className="akira-section-note">
                     Voice and speech model are chosen on the agent in the ElevenLabs dashboard.
                   </p>
+                  {/* The focus cycle's warnings use this path, not the
+                      conversation, so a broken key or agent shows up as
+                      warnings that simply never arrive. One button settles it. */}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      className="akira-button"
+                      onClick={async () => {
+                        // Says which of the three voices it used, because
+                        // "I heard something" does not distinguish them.
+                        const result = await akira.announce("Akira here. Spoken warnings are working.");
+                        akira.showNotice(result.detail, result.ok ? "info" : "error");
+                      }}
+                    >
+                      Test spoken warnings
+                    </button>
+                    {/* The key that talks and the key that speaks are the same
+                        key — but a conversation can open without one, so only
+                        this asks the question directly. */}
+                    <button
+                      className="akira-button"
+                      onClick={async () => {
+                        const result = await akira.verifyKey();
+                        akira.showNotice(result.detail, result.ok ? "info" : "error");
+                      }}
+                    >
+                      Check key
+                    </button>
+                    {/* Two different servers can be the reason a command
+                        fails. This asks the other one. */}
+                    <button
+                      className="akira-button"
+                      onClick={async () => {
+                        const result = await akira.probeServer();
+                        akira.showNotice(result.detail, result.ok ? "info" : "error");
+                      }}
+                    >
+                      Check data server
+                    </button>
+                    {/* What the agent itself is configured to do — including
+                        the response timeout that decides whether ROME's answer
+                        arrives in time to count. Written to the transcript,
+                        because it is several lines. */}
+                    <button
+                      className="akira-button"
+                      onClick={async () => {
+                        const result = await akira.auditAgent();
+                        akira.showNotice(
+                          result.ok ? "Agent configuration written to the transcript." : result.detail,
+                          result.ok ? "info" : "error",
+                        );
+                      }}
+                    >
+                      Check agent
+                    </button>
+                    {/* The two agent-side values ROME depends on, set from
+                        here. Both live in a web dashboard, and both were wrong
+                        in ways nobody would guess at. */}
+                    <button
+                      className="akira-button"
+                      onClick={async () => {
+                        const result = await akira.repairAgent();
+                        akira.showNotice(result.detail, result.ok ? "info" : "error");
+                      }}
+                    >
+                      Repair agent
+                    </button>
+                  </div>
                 </SettingGroup>
                 <SettingGroup title="Input">
                   <p className="akira-section-note">
@@ -288,11 +385,17 @@ export default function AkiraConsole() {
                   <RangeInput label="Animation strength" value={draft.appearance.animationStrength} min={0} max={1} step={0.05} onChange={value => setDraft({ ...draft, appearance: { ...draft.appearance, animationStrength: value } })} />
                   <Toggle label="Reduce motion" checked={draft.appearance.reduceMotion} onChange={checked => setDraft({ ...draft, appearance: { ...draft.appearance, reduceMotion: checked } })} />
                 </SettingGroup>
-                <SettingGroup title="Background work (optional)">
+                <SettingGroup title="Web answers and background work">
                   <p className="akira-section-note">
-                    Hermes handles long multi-step tasks in the background so they don't block the
-                    conversation. Akira works without it; leave this alone unless you've installed it.
+                    The OpenAI key here is what lets Akira search the web when she isn't sure — set the
+                    provider to OpenAI for that. Hermes, optional and separate, handles long multi-step
+                    tasks in the background; Akira works fine without it.
                   </p>
+                  <LabeledInput
+                    label="Web answer model"
+                    value={draft.research.model}
+                    onChange={value => setDraft({ ...draft, research: { ...draft.research, model: value } })}
+                  />
                   <label className="akira-field"><span>Cloud provider</span><select value={draft.agent.provider} onChange={event => setDraft({ ...draft, agent: { ...draft.agent, provider: event.target.value as AkiraSettings["agent"]["provider"] } })}><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option></select></label>
                   <LabeledInput label="Model" value={draft.agent.model} onChange={value => setDraft({ ...draft, agent: { ...draft.agent, model: value } })} />
                   <LabeledInput label={`${draft.agent.provider} API key · ${status.settings.secrets.providerConfigured ? "configured" : "not configured"}`} value={providerKey} onChange={setProviderKey} password placeholder="Stored encrypted; never shown again" />

@@ -139,6 +139,16 @@ export function normalizeAkiraShortcut(value: unknown, fallback: AkiraShortcut):
 }
 
 export interface AkiraSettings {
+  /**
+   * Schema version of the stored settings.
+   *
+   * Stored settings win over defaults — which is right for anything the user
+   * chose, and wrong for internal timings they have never seen. Without a
+   * version, a default fixed in code never reaches a machine that has run the
+   * app once: `toolDeadlineMs` stayed at the old 9 seconds on every existing
+   * install while the source said 3.5.
+   */
+  settingsVersion: number;
   appearance: {
     showTranscript: boolean;
     reduceMotion: boolean;
@@ -200,6 +210,58 @@ export interface AkiraSettings {
      * the meter running until morning. 0 disables it.
      */
     idleTimeoutMs: number;
+    /**
+     * The same, during a focus cycle.
+     *
+     * A cycle is the case where the socket is opened for one question and
+     * should shut again immediately — you are working, not conversing, and
+     * every second of held silence is billed. Falls back to `idleTimeoutMs`
+     * when 0.
+     */
+    focusIdleTimeoutMs: number;
+    /**
+     * How long a closed conversation stays resumable.
+     *
+     * Silence ends the socket, not the thread. Speak again inside this window
+     * and the last few exchanges are compiled back into the prompt, so "put
+     * that one on Thursday too" still means something. 0 disables it.
+     */
+    resumeWindowMs: number;
+  };
+  /**
+   * When Akira may act without stopping to ask.
+   *
+   * V3 gated every [write] behind a modal that waits up to 90 seconds — far
+   * longer than ElevenLabs will hold a client tool call open, so a spoken
+   * "schedule that for Thursday" timed out before the dialog could be answered.
+   */
+  approvals: {
+    /**
+     * Perform write capabilities that record an undo entry without asking.
+     *
+     * The safety net is undo plus the Activity log, not a dialog. Destructive
+     * and financial capabilities always ask, and a per-capability "ask"
+     * override still wins.
+     */
+    autoApproveReversibleWrites: boolean;
+    /**
+     * How long a capability may run before the agent is told it is still
+     * working. Anything slower reports back through a context update instead
+     * of holding the tool call open past the socket's own timeout.
+     */
+    toolDeadlineMs: number;
+  };
+  /**
+   * Answering questions that need the open web.
+   *
+   * Routed through OpenAI's Responses API with its built-in web search rather
+   * than the ElevenLabs agent, which has no web access — and billed as tokens,
+   * so asking a question mid-focus-cycle costs cents rather than conversation
+   * minutes. Uses the OpenAI key ROME already stores.
+   */
+  research: {
+    enabled: boolean;
+    model: string;
   };
   agent: {
     provider: "openai" | "anthropic" | "openrouter";
@@ -303,9 +365,16 @@ export interface AkiraRendererCommandResult {
 }
 
 export interface AkiraAudioEvent {
-  type: "start" | "chunk" | "end" | "cancel";
+  /**
+   * `speak` is the fallback voice: no audio, just a line for the renderer to
+   * read with the operating system's own speech synthesiser. Used when
+   * ElevenLabs cannot synthesise — a focus warning in the system voice is
+   * worth far more than a warning that silently never happens.
+   */
+  type: "start" | "chunk" | "end" | "cancel" | "speak";
   audio?: string;
   sampleRate?: number;
+  text?: string;
 }
 
 export interface AkiraTranscriptEvent {
@@ -333,6 +402,20 @@ export interface AkiraContextSnapshot {
   };
 }
 
+/**
+ * A running focus cycle, as the main process sees it.
+ *
+ * Sent from the renderer, which owns the cycle: it lives in localStorage, and
+ * the main process needs only enough of it to shorten the silence leash and to
+ * tell Akira what the user is working on.
+ */
+export interface AkiraFocusState {
+  taskName: string;
+  remainingSeconds: number;
+  paused: boolean;
+  awaitingAnswer: boolean;
+}
+
 export const AKIRA_CHANNELS = {
   status: "rome:akira:status",
   transcript: "rome:akira:transcript",
@@ -344,3 +427,73 @@ export const AKIRA_CHANNELS = {
   /** Server-side voice activity, used to make the ambience breathe. */
   vad: "rome:akira:vad",
 } as const;
+
+/**
+ * Is this the whole utterance a request to end the conversation?
+ *
+ * Matched here rather than left to the agent so it lands instantly, mid-
+ * sentence if need be, and costs no turn. Deliberately anchored to the entire
+ * utterance: "standby" inside a sentence about standby modes is not a command.
+ * Speech recognition writes it as one word or two, and often adds a name or a
+ * politeness on either end, so both are absorbed.
+ */
+export function isStandbyCommand(value: string): boolean {
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return false;
+  const core = normalized
+    .replace(/^(ok|okay|alright|hey|yo|and|well|thanks|thank you)\s+/g, "")
+    .replace(/^akira\s+/, "")
+    .replace(/\s+(akira|please|now|for now|thanks|thank you)$/g, "")
+    .trim();
+  return new Set([
+    "standby", "stand by", "on standby", "go to standby", "go on standby", "go into standby",
+    "deactivate", "stand down", "go dormant", "go to sleep",
+    "that will be all", "that is all", "that s all", "thats all",
+  ]).has(core);
+}
+
+/**
+ * Find the records a spoken name refers to.
+ *
+ * Voice never produces an id, and rarely produces an exact title — "mark the
+ * dentist thing done" has to reach "Call the dentist". Matching walks from
+ * exact to loose and stops at the first tier that hits, so a precise name is
+ * never widened into a pile of near-misses; only a genuinely ambiguous one
+ * returns several, which the caller turns into a question.
+ */
+export function matchByLabel<T>(values: T[], label: string, read: (value: T) => string): T[] {
+  const wanted = normalizeLabel(label);
+  if (!wanted) return [];
+  const entries = values.map(value => ({ value, text: normalizeLabel(read(value)) })).filter(entry => entry.text);
+  const tiers: ((text: string) => boolean)[] = [
+    text => text === wanted,
+    text => text.startsWith(wanted) || wanted.startsWith(text),
+    text => text.includes(wanted) || wanted.includes(text),
+    text => {
+      const words = wanted.split(" ").filter(word => word.length > 2);
+      if (!words.length) return false;
+      const other = new Set(text.split(" "));
+      const shared = words.filter(word => other.has(word)).length;
+      return shared / words.length >= 0.6;
+    },
+  ];
+  for (const tier of tiers) {
+    const matches = entries.filter(entry => tier(entry.text));
+    if (matches.length) return matches.map(entry => entry.value);
+  }
+  return [];
+}
+
+/** Lowercase, strip punctuation, drop the filler words speech adds. */
+export function normalizeLabel(value: unknown): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\b(the|a|an|my|please)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}

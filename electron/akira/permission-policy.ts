@@ -1,4 +1,7 @@
 import type { AkiraCapabilityDescriptor, AkiraSettings } from "../../shared/akira";
+// Name matching is shared with the renderer, which resolves focus tasks the
+// same way against localStorage the main process cannot read.
+export { matchByLabel, normalizeLabel } from "../../shared/akira";
 
 export class AmbiguousTargetError extends Error {
   constructor(public readonly candidates: unknown[], message = "The target is ambiguous.") {
@@ -42,7 +45,16 @@ export class PermissionPolicy {
     }
     if (descriptor.risk === "destructive") return { kind: "ask", reason: "Destructive actions always require approval." };
     if (descriptor.risk === "financial") return { kind: "ask", reason: "Financial changes always require approval." };
-    if (override === "ask" || descriptor.risk === "write") return { kind: "ask", reason: "This action changes ROME data." };
+    if (override === "ask") return { kind: "ask", reason: "This capability is set to always ask." };
+    if (descriptor.risk === "write") {
+      // A dialog is the wrong safety net for a reversible write. It cannot be
+      // answered inside the window ElevenLabs holds a client tool call open, so
+      // "schedule that for Thursday" timed out rather than asking anything.
+      // Undo plus the Activity log covers these; destructive and financial
+      // capabilities, and any explicit "ask" override, still stop and ask.
+      if (settings.approvals?.autoApproveReversibleWrites && descriptor.supportsUndo) return { kind: "allow" };
+      return { kind: "ask", reason: "This action changes ROME data." };
+    }
     return { kind: "allow" };
   }
 }

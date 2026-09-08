@@ -14,6 +14,7 @@ import { Link } from "wouter";
 import { ConstellationTrigger } from "./ConstellationOverlay";
 import ForgeJobBar from "./ForgeJobBar";
 import RecallStatusBar from "./RecallStatusBar";
+import FocusTimerBar from "./FocusTimerBar";
 import DueCardOverlay from "./DueCardOverlay";
 import TopBarNav from "./TopBarNav";
 import PaneHost from "./PaneHost";
@@ -77,6 +78,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <div className="flex flex-1 basis-0 min-w-0 items-center gap-4">
           <ForgeJobBar />
           <RecallStatusBar />
+          {/* The focus clock. Silent unless a cycle is running. */}
+          <FocusTimerBar />
         </div>
 
         <TopBarNav />
