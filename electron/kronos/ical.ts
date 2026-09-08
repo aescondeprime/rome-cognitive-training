@@ -42,6 +42,8 @@ export const PRODID = "-//ROME//Kronos Keep//EN";
 /** RFC 5545 §3.1: content lines are folded to 75 octets, excluding the CRLF. */
 const FOLD_LIMIT = 75;
 
+import { minutesFromTrigger, normalizeAlerts, triggerFor } from "./alerts";
+
 // ── Folding ─────────────────────────────────────────────────────────────────
 
 /**
@@ -534,6 +536,14 @@ export interface VeventPatch {
   rrule?: string | null;
   romeKind?: string;
   romeId?: string | number;
+  /**
+   * Minutes before the start, replacing **ROME's own** alarms only.
+   *
+   * Undefined leaves every alarm in the file alone, which is the behaviour the
+   * whole patch path is built around. An empty array is a real instruction:
+   * remove the alarms ROME wrote, and still keep the ones you added yourself.
+   */
+  alerts?: number[];
 }
 
 /**
@@ -582,6 +592,17 @@ export function patchVevent(ics: string, patch: VeventPatch, now = Date.now()): 
     put("DURATION", null);
   }
 
+  // Alarms are whole nested blocks rather than single lines, so they are
+  // handled apart from `put`. Only ROME's own are removed; an alarm added on
+  // the phone has no marker, is never matched, and survives every push.
+  if (patch.alerts !== undefined) {
+    for (const alarm of childBlocks(lines, block, "VALARM")) {
+      if (!isRomeAlarm(lines, alarm)) continue;
+      for (let i = alarm.begin; i <= alarm.end; i += 1) replace.set(i, null);
+    }
+    insert.push(...romeAlarmLines(patch.alerts, patch.summary));
+  }
+
   const current = findOwn(lines, block, "SEQUENCE");
   const nextSeq = current === -1 ? 1 : (Number(parseLine(lines[current])?.value ?? 0) || 0) + 1;
   put("SEQUENCE", `SEQUENCE:${nextSeq}`);
@@ -600,6 +621,97 @@ export function patchVevent(ics: string, patch: VeventPatch, now = Date.now()): 
   });
 
   return foldAll(out);
+}
+
+// ── Alarms ──────────────────────────────────────────────────────────────────
+//
+// ROME marks the alarms it writes and only ever touches those. Two markers,
+// because Apple's Calendar app rewrites an event it edits and the two are not
+// equally likely to survive that: `UID` is how a client tracks a snooze, so it
+// is kept, and `X-ROME-ALARM` is the plain statement of intent for anything
+// reading the file by eye. Either one is enough to claim the alarm.
+//
+// The cost of losing both is a duplicate alert, not a lost one — ROME would add
+// its alarm back beside the unrecognised copy. That is the right way round.
+
+const ROME_ALARM_UID = /^rome-alarm-\d+@rome\.local$/i;
+
+function isRomeAlarm(lines: string[], alarm: Block): boolean {
+  if (findOwn(lines, alarm, "X-ROME-ALARM") !== -1) return true;
+  const uid = findOwn(lines, alarm, "UID");
+  return uid !== -1 && ROME_ALARM_UID.test(String(parseLine(lines[uid])?.value ?? "").trim());
+}
+
+/**
+ * The VALARM blocks ROME writes for a list of "minutes before".
+ *
+ * `ACTION:DISPLAY` is what a phone turns into a notification; `ACTION:AUDIO`
+ * is the older spelling and iOS treats it as a banner without a body, so the
+ * DESCRIPTION carrying the item's own title is what makes the notification say
+ * something useful rather than "Event".
+ */
+export function romeAlarmLines(minutes: number[], summary?: string): string[] {
+  const description = String(summary ?? "").trim() || "Reminder";
+  const out: string[] = [];
+  normalizeAlerts(minutes).forEach((value, i) => {
+    out.push(
+      "BEGIN:VALARM",
+      "ACTION:DISPLAY",
+      `DESCRIPTION:${escapeText(description)}`,
+      `TRIGGER:${triggerFor(value)}`,
+      `UID:rome-alarm-${i + 1}@rome.local`,
+      "X-ROME-ALARM:1",
+      "END:VALARM",
+    );
+  });
+  return out;
+}
+
+/**
+ * Read back the alarms ROME owns, in minutes before the start.
+ *
+ * Used by the pull half and by anything that wants to know whether the file
+ * already says what ROME means it to say. Alarms ROME did not write are not
+ * reported, because they are not ROME's to show or to edit.
+ */
+export function readRomeAlerts(ics: string): number[] {
+  const lines = toLines(ics);
+  const block = masterBlock(lines);
+  if (!block) return [];
+  const out: number[] = [];
+  for (const alarm of childBlocks(lines, block, "VALARM")) {
+    if (!isRomeAlarm(lines, alarm)) continue;
+    const i = findOwn(lines, alarm, "TRIGGER");
+    if (i === -1) continue;
+    const line = parseLine(lines[i]);
+    // A VALUE=DATE-TIME trigger is an absolute instant, not an offset.
+    if (!line || String(line.params["VALUE"] ?? "").toUpperCase() === "DATE-TIME") continue;
+    const value = minutesFromTrigger(line.value);
+    if (value !== null) out.push(value);
+  }
+  return normalizeAlerts(out);
+}
+
+/** Nested components of one name, as line ranges. Direct children only. */
+function childBlocks(lines: string[], block: Block, name: string): Block[] {
+  const target = name.toUpperCase();
+  const out: Block[] = [];
+  let depth = 0;
+  let begin = -1;
+  for (let i = block.begin + 1; i < block.end; i += 1) {
+    const line = parseLine(lines[i]);
+    if (!line) continue;
+    if (line.name === "BEGIN") {
+      if (depth === 0 && line.value.trim().toUpperCase() === target) begin = i;
+      depth += 1;
+      continue;
+    }
+    if (line.name === "END") {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0 && begin !== -1) { out.push({ begin, end: i }); begin = -1; }
+    }
+  }
+  return out;
 }
 
 /** DTSTART/DTEND for a local day, or the VALUE=DATE pair for an all-day item. */
@@ -634,6 +746,8 @@ export interface VeventInput {
   rrule?: string | null;
   romeKind?: string;
   romeId?: string | number;
+  /** Minutes before the start. */
+  alerts?: number[];
   created?: number;
 }
 
@@ -664,6 +778,7 @@ export function buildVevent(input: VeventInput): string {
   if (input.rrule) lines.push(`RRULE:${input.rrule}`);
   if (input.romeKind) lines.push(`X-ROME-KIND:${escapeText(input.romeKind)}`);
   if (input.romeId !== undefined) lines.push(`X-ROME-ID:${escapeText(String(input.romeId))}`);
+  lines.push(...romeAlarmLines(input.alerts ?? [], input.summary));
   lines.push("SEQUENCE:0", `LAST-MODIFIED:${formatUtcStamp(now)}`, "END:VEVENT", "END:VCALENDAR");
   return foldAll(lines);
 }

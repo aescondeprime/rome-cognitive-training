@@ -1167,7 +1167,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "POST") {
           const body = await readBody(req);
           const now = Date.now();
-          const { data: row } = await sb.from("kronos_routines").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(43 88% 60%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, recurrence: body.recurrence ?? "daily", days_of_week: body.days_of_week ?? null, notes: body.notes ?? "", saved: body.saved ?? false, start_date: body.start_date ?? "", end_date: body.end_date ?? "", created_at: now, updated_at: now }).select().single();
+          const { data: row } = await sb.from("kronos_routines").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(43 88% 60%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, recurrence: body.recurrence ?? "daily", days_of_week: body.days_of_week ?? null, notes: body.notes ?? "", saved: body.saved ?? false, start_date: body.start_date ?? "", end_date: body.end_date ?? "", alerts: body.alerts ?? "", created_at: now, updated_at: now }).select().single();
           return json(res, 200, row ?? {});
         }
       }
@@ -1180,7 +1180,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
-          ["title","color","start_time","duration_minutes","recurrence","days_of_week","notes","saved","start_date","end_date","ical_uid","ical_href","ical_etag","ical_raw","synced_at","sync_state"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          ["title","color","start_time","duration_minutes","recurrence","days_of_week","notes","saved","start_date","end_date","alerts","ical_uid","ical_href","ical_etag","ical_raw","synced_at","sync_state"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
           await sb.from("kronos_routines").update(patch).eq("id", id);
           return json(res, 200, { ok: true });
         }
@@ -1204,7 +1204,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "POST") {
           const body = await readBody(req);
           const now = Date.now();
-          const { data: row } = await sb.from("kronos_assignments").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(210 65% 62%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, due_date: body.due_date ?? "", instructions: body.instructions ?? "", saved: body.saved ?? false, created_at: now, updated_at: now }).select().single();
+          const { data: row } = await sb.from("kronos_assignments").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(210 65% 62%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, due_date: body.due_date ?? "", instructions: body.instructions ?? "", saved: body.saved ?? false, alerts: body.alerts ?? "", created_at: now, updated_at: now }).select().single();
           return json(res, 200, row ?? {});
         }
       }
@@ -1216,7 +1216,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
-          ["title","color","start_time","duration_minutes","due_date","instructions","saved","ical_uid","ical_href","ical_etag","ical_raw","synced_at","sync_state"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          ["title","color","start_time","duration_minutes","due_date","instructions","saved","alerts","ical_uid","ical_href","ical_etag","ical_raw","synced_at","sync_state"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
           await sb.from("kronos_assignments").update(patch).eq("id", id);
           return json(res, 200, { ok: true });
         }
@@ -1240,7 +1240,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "POST") {
           const body = await readBody(req);
           const now = Date.now();
-          const { data: row } = await sb.from("kronos_events").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(270 60% 72%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, event_date: body.event_date ?? "", preparations: body.preparations ?? "", saved: body.saved ?? false, created_at: now, updated_at: now }).select().single();
+          const { data: row } = await sb.from("kronos_events").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(270 60% 72%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, event_date: body.event_date ?? "", preparations: body.preparations ?? "", saved: body.saved ?? false, alerts: body.alerts ?? "", created_at: now, updated_at: now }).select().single();
           return json(res, 200, row ?? {});
         }
       }
@@ -1252,7 +1252,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
-          ["title","color","start_time","duration_minutes","event_date","preparations","saved","ical_uid","ical_href","ical_etag","ical_raw","synced_at","sync_state"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          ["title","color","start_time","duration_minutes","event_date","preparations","saved","alerts","ical_uid","ical_href","ical_etag","ical_raw","synced_at","sync_state"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
           await sb.from("kronos_events").update(patch).eq("id", id);
           return json(res, 200, { ok: true });
         }
@@ -1277,7 +1277,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "POST") {
           const body = await readBody(req);
           const now = Date.now();
-          const { data: row } = await sb.from("kronos_generals").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(145 55% 50%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, item_date: body.item_date ?? "", notes: body.notes ?? "", saved: body.saved ?? false, created_at: now, updated_at: now }).select().single();
+          const { data: row } = await sb.from("kronos_generals").insert({ user_id: user.id, calendar_id: calId, title: body.title, color: body.color ?? "hsl(145 55% 50%)", start_time: body.start_time ?? "09:00", duration_minutes: body.duration_minutes ?? 60, item_date: body.item_date ?? "", notes: body.notes ?? "", saved: body.saved ?? false, alerts: body.alerts ?? "", created_at: now, updated_at: now }).select().single();
           return json(res, 200, row ?? {});
         }
       }
@@ -1310,7 +1310,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (method === "PATCH") {
           const body = await readBody(req);
           const patch: any = { updated_at: Date.now() };
-          ["title","color","start_time","duration_minutes","item_date","notes","saved","ical_uid","ical_href","ical_etag","ical_raw","synced_at","sync_state"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
+          ["title","color","start_time","duration_minutes","item_date","notes","saved","alerts","ical_uid","ical_href","ical_etag","ical_raw","synced_at","sync_state"].forEach(k => { if (body[k] !== undefined) patch[k] = body[k]; });
           await sb.from("kronos_generals").update(patch).eq("id", id).eq("user_id", user.id);
           return json(res, 200, { ok: true });
         }

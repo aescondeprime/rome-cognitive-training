@@ -27,6 +27,7 @@
  *    on their phone. Only a resource ROME has never seen is built from scratch.
  */
 
+import { readAlerts } from "./alerts";
 import { buildVevent, patchVevent, romeUid, type VeventInput } from "./ical";
 import { rruleFromRoutine } from "./rrule";
 
@@ -62,6 +63,8 @@ export interface KronosRow {
   ical_etag?: string | null;
   ical_raw?: string | null;
   sync_state?: string | null;
+  /** Minutes before the start, comma-separated. `""` is no alert. */
+  alerts?: string | null;
   // routine
   recurrence?: string | null;
   days_of_week?: number[] | null;
@@ -85,6 +88,8 @@ export interface PushAction {
   op: "create" | "update" | "skip";
   /** Path-only. Absent on a skip. */
   href?: string;
+  /** The day this will land on, for the confirmation. Absent on a skip. */
+  date?: string;
   /** The body to PUT. Absent on a skip. */
   ics?: string;
   /** For `If-Match` on an update. Null when Apple never gave us one. */
@@ -102,6 +107,37 @@ export interface PushPlan {
 
 export function emptyRows(): RowsByKind {
   return { routine: [], assignment: [], event: [], general: [] };
+}
+
+/**
+ * Message for the one setup mistake that breaks everything downstream.
+ *
+ * Without the v2 columns nothing can be recorded, so every row looks brand new,
+ * every push is a create, and the second attempt collides with the first — a
+ * three-step failure whose symptom (a 412 naming an event you did not choose)
+ * points nowhere near the cause. Said once, up front, instead.
+ */
+export const MIGRATION_REQUIRED =
+  "ROME's database is missing the calendar-sync columns. " +
+  "Run script/sql/2026-08-kronos-v2.sql in the Supabase SQL editor, then try again.";
+
+/**
+ * Have the v2 sync columns been applied?
+ *
+ * PostgREST's `select("*")` returns only columns that exist, so the absence of
+ * the `ical_href` *key* on a row that came back from the server is a reliable
+ * signal — much better than probing `information_schema` over the API, and it
+ * costs nothing because the rows have already been read.
+ *
+ * Null when there are no rows to judge from, in which case there is nothing to
+ * push either and the question does not arise.
+ */
+export function syncColumnsPresent(rows: RowsByKind): boolean | null {
+  for (const kind of KRONOS_KINDS) {
+    const row = (rows[kind] ?? [])[0];
+    if (row) return "ical_href" in row && "synced_at" in row;
+  }
+  return null;
 }
 
 /** Strictly greater. See rule 3 in the header — this is the ping-pong guard. */
@@ -143,6 +179,7 @@ export function veventFor(kind: KronosKind, row: KronosRow, today: string): Veve
     rrule: kind === "routine" ? rruleFromRoutine(row) : null,
     romeKind: kind,
     romeId: row.id,
+    alerts: readAlerts(row.alerts),
   };
 }
 
@@ -206,7 +243,7 @@ function planRow(
   // 3 · Never seen by iCloud → create.
   if (!href) {
     return {
-      kind, row, op: "create",
+      kind, row, op: "create", date,
       href: romeHref(calendarPath, kind, row.id),
       ics: buildVevent({ ...veventFor(kind, row, today), created: now }),
     };
@@ -227,10 +264,11 @@ function planRow(
         rrule: input.rrule ?? null,
         romeKind: kind,
         romeId: row.id,
+        alerts: input.alerts ?? [],
       }, now)
     : buildVevent({ ...input, created: now });
 
-  return { kind, row, op: "update", href, ics, etag: row.ical_etag ?? null };
+  return { kind, row, op: "update", date, href, ics, etag: row.ical_etag ?? null };
 }
 
 /** `"YYYY-MM-DD"` for an instant, in the machine's local zone. */
@@ -240,16 +278,160 @@ export function localDay(ms: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// DELETIONS — the orphan sweep
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Push alone cannot see a row that no longer exists, so a Kronos item you
+// delete leaves its event in Apple Calendar forever. The way out is to look at
+// what is actually on the server and find things ROME put there that ROME no
+// longer has a reason to keep.
+//
+// ── Matching on the href, not the UID ───────────────────────────────────────
+//
+// ROME names every resource it creates `rome-<kind>-<id>.ics`, and that
+// filename is enough to identify it. Matching on the href means the sweep needs
+// only the listing that `sync-collection` already returns — no bodies, no
+// multiget of the whole calendar on every cycle.
+//
+// It also draws the blast radius exactly where it should be: an event you
+// created in Apple Calendar has a UID and a filename of Apple's choosing, so it
+// can never match this pattern and can never be swept. **The sweep can only
+// ever delete ROME's own events.**
+//
+// ── What counts as an orphan ────────────────────────────────────────────────
+//
+// Not "the row was deleted" but "the row is not on the Kronos calendar" — which
+// also covers an assignment whose date was cleared, or one turned back into a
+// library template. If ROME draws it on no day, it should not sit on a day in
+// Apple Calendar. A row that is merely *unchanged* is very much still there.
+
+export interface DeleteAction {
+  href: string;
+  etag: string | null;
+  kind: KronosKind;
+  id: number;
+  /** The row's title while ROME still holds the row; null once it is gone. */
+  title: string | null;
+  /** Shown in the confirmation. */
+  reason: string;
+}
+
+const ROME_RESOURCE = /(?:^|\/)rome-(routine|assignment|event|general)-(\d+)\.ics$/;
+
+/** `(kind, id)` for a ROME-authored resource, or null for anything else. */
+export function romeKeyFromHref(href: string): { kind: KronosKind; id: number } | null {
+  const m = ROME_RESOURCE.exec(String(href ?? "").trim());
+  return m ? { kind: m[1] as KronosKind, id: Number(m[2]) } : null;
+}
+
+export function rowKey(kind: KronosKind, id: number): string {
+  return `${kind}-${id}`;
+}
+
 /**
- * A one-line summary for the dry-run confirmation.
+ * The rows that belong on the calendar right now.
  *
- * Written as a sentence rather than a table because it is shown once, in a
- * dialog, to someone deciding whether to let this touch their real calendar.
+ * Derived from the push plan rather than recomputed, so the two halves of a
+ * cycle can never disagree about whether an item is placed. `create`, `update`
+ * and a skip of "unchanged" all mean it is there; every other skip means it is
+ * not, and the reason travels with it into the deletion.
  */
-export function describePlan(plan: PushPlan): string {
-  if (plan.creates === 0 && plan.updates === 0) return "Nothing to send — iCloud is already up to date.";
+export function livePlacementKeys(plan: PushPlan): Set<string> {
+  const live = new Set<string>();
+  for (const action of plan.actions) {
+    const placed = action.op !== "skip" || action.reason === "unchanged" || action.reason?.startsWith("created in Apple");
+    if (placed) live.add(rowKey(action.kind, action.row.id));
+  }
+  return live;
+}
+
+/**
+ * What the confirmation should say about a key that is no longer placed.
+ *
+ * A row ROME still holds can be named and explained; a row that is simply gone
+ * has neither a title nor a reason beyond its absence, and saying that plainly
+ * beats inventing one.
+ */
+function describeOrphan(
+  plan: PushPlan, kind: KronosKind, id: number,
+): { title: string | null; reason: string } {
+  const action = plan.actions.find(a => a.kind === kind && a.row.id === id);
+  if (!action) return { title: null, reason: "deleted from Kronos" };
+  return {
+    title: action.row.title ?? null,
+    reason: action.reason ? `no longer on the calendar (${action.reason})` : "no longer on the calendar",
+  };
+}
+
+export interface RemoteResource { href: string; etag: string | null }
+
+/**
+ * Which of the server's resources ROME should remove.
+ *
+ * `remote` is the listing as the server gave it. Anything outside ROME's naming
+ * scheme is skipped without comment — it is not ours to reason about.
+ */
+export function planDeletes(
+  remote: RemoteResource[],
+  plan: PushPlan,
+): { deletes: DeleteAction[]; romeResources: number } {
+  const live = livePlacementKeys(plan);
+  const deletes: DeleteAction[] = [];
+  let romeResources = 0;
+
+  for (const resource of remote) {
+    const key = romeKeyFromHref(resource.href);
+    if (!key) continue;                 // not ROME's; not ours to touch
+    romeResources += 1;
+    if (live.has(rowKey(key.kind, key.id))) continue;
+    const { title, reason } = describeOrphan(plan, key.kind, key.id);
+    deletes.push({ href: resource.href, etag: resource.etag, kind: key.kind, id: key.id, title, reason });
+  }
+
+  return { deletes, romeResources };
+}
+
+/** Never fewer than this, however small the calendar. */
+export const DELETE_GUARD_FLOOR = 5;
+export const DELETE_GUARD_FRACTION = 0.25;
+
+/**
+ * Is this many deletions too many to do without asking again?
+ *
+ * A stale token, a wrong calendar or a half-read listing all present exactly as
+ * "everything is an orphan", and an unguarded sweep would faithfully empty
+ * somebody's calendar. Past the threshold the cycle refuses and says so; the
+ * user can look, and delete by hand if that really is what they meant.
+ */
+export function deleteGuardExceeded(deleteCount: number, romeResources: number): boolean {
+  return deleteCount > Math.max(DELETE_GUARD_FLOOR, Math.ceil(romeResources * DELETE_GUARD_FRACTION));
+}
+
+export function deleteGuardMessage(deleteCount: number, romeResources: number): string {
+  return (
+    `Sync stopped: this would delete ${deleteCount} of ${romeResources} ROME events on iCloud. ` +
+    `That is more than a normal cleanup, so nothing was changed. ` +
+    `If it is right, remove them in Apple Calendar yourself.`
+  );
+}
+
+/**
+ * The one-line confirmation for a dry run.
+ *
+ * Written as a sentence rather than a table because it is shown once, to
+ * someone deciding whether to let this touch their real calendar — and now
+ * that a cycle can remove things, leaving deletions out of that sentence
+ * would be the worst possible omission.
+ */
+export function describeCycle(plan: PushPlan, deleteCount: number): string {
   const parts: string[] = [];
   if (plan.creates) parts.push(`create ${plan.creates} event${plan.creates === 1 ? "" : "s"}`);
   if (plan.updates) parts.push(`update ${plan.updates}`);
-  return `ROME will ${parts.join(" and ")} in your iCloud calendar.`;
+  if (deleteCount) parts.push(`delete ${deleteCount}`);
+  if (!parts.length) return "Nothing to send — iCloud is already up to date.";
+  const last = parts.pop()!;
+  const list = parts.length ? `${parts.join(", ")} and ${last}` : last;
+  return `ROME will ${list} in your iCloud calendar.`;
 }

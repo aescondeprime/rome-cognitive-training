@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { GOLD } from "@/lib/kronosTypes";
+import { getToken } from "@/lib/auth";
 
 const CAVE = "hsl(222 14% 9%)";
 const HAIRLINE = "hsl(220 15% 14%)";
@@ -56,12 +57,21 @@ export default function CalendarSyncPanel({ onClose }: { onClose: () => void }) 
   const [preview, setPreview] = useState<RomeKronosCycleReport | null>(null);
   const [pushed, setPushed] = useState<RomeKronosCycleReport | null>(null);
 
+  // A cycle can remove as well as add, so the button's count is the whole
+  // cycle. Counting only the writes would let a sweep-only cycle sit behind a
+  // disabled button with nothing to explain why.
+  const previewWrites = preview ? preview.plan.creates + preview.plan.updates : 0;
+  const previewDeletes = preview?.deletes?.length ?? 0;
+  const previewTotal = previewWrites + previewDeletes;
+
   useEffect(() => {
     if (!bridge) return;
     void bridge.getConfig().then(next => {
       setConfig(next);
       setAppleId(next.appleId);
     }).catch(() => setError("Could not read the calendar settings."));
+    // Re-sent on every open so a profile switch or a logout is picked up.
+    void bridge.setSession(getToken()).catch(() => undefined);
     void bridge.syncStatus().then(setStatus).catch(() => undefined);
     return bridge.onSyncStatus(setStatus);
   }, [bridge]);
@@ -368,20 +378,95 @@ export default function CalendarSyncPanel({ onClose }: { onClose: () => void }) 
                 {/* Only offered once a preview exists, and it sends that plan. */}
                 <button
                   onClick={() => void runPush()}
-                  disabled={Boolean(busy) || !preview || (preview.plan.creates + preview.plan.updates === 0)}
+                  disabled={Boolean(busy) || !preview || previewTotal === 0}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-mono transition-all disabled:opacity-30"
                   style={{ color: GOLD, background: `${GOLD}14`, border: `1px solid ${GOLD}40` }}
                 >
                   {busy === "pushing" ? <Loader2 className="w-3 h-3 animate-spin" /> : <UploadCloud className="w-3 h-3" />}
-                  {preview && preview.plan.creates + preview.plan.updates > 0
-                    ? `Send ${preview.plan.creates + preview.plan.updates}`
-                    : "Send"}
+                  {previewTotal === 0 ? "Send"
+                    : previewDeletes ? `Apply ${previewTotal}`
+                      : `Send ${previewTotal}`}
                 </button>
               </div>
 
               {preview && (
-                <div className="rounded-lg px-3 py-2.5" style={{ background: "hsl(220 15% 6%)", border: `1px solid ${HAIRLINE}` }}>
-                  <p className="text-[11px] leading-relaxed" style={{ color: "hsl(220 10% 70%)" }}>{preview.summary}</p>
+                <div
+                  className="rounded-lg px-3 py-2.5"
+                  style={{
+                    background: preview.ok ? "hsl(220 15% 6%)" : "hsl(0 35% 9% / 0.6)",
+                    border: `1px solid ${preview.ok ? HAIRLINE : "hsl(0 45% 34% / .5)"}`,
+                  }}
+                >
+                  {/* A preview that failed used to render as "nothing to send —
+                      already up to date", because only `summary` was shown and
+                      every failure path returns an empty plan. Six different
+                      causes, one reassuring sentence, and no way to tell them
+                      apart. The reason comes first now. */}
+                  {!preview.ok
+                    ? preview.problems.map((problem, i) => (
+                        <p key={i} className="text-[11px] leading-relaxed" style={{ color: "hsl(0 55% 74%)" }}>
+                          {problem}
+                        </p>
+                      ))
+                    : <p className="text-[11px] leading-relaxed" style={{ color: "hsl(220 10% 70%)" }}>{preview.summary}</p>}
+
+                  {/* Answers "did it even see my item?" before "what did it
+                      decide about it?" — different questions, different fixes. */}
+                  <p className="text-[9px] font-mono mt-1.5" style={{ color: FAINT }}>
+                    {/* Naming the profile is the point: the engine reads the
+                        ROME API from the main process, and getting this wrong
+                        is invisible in every other way. */}
+                    as {preview.readingAs?.name ?? "unknown profile"} · read{" "}
+                    {(["routine", "assignment", "event", "general"] as const)
+                      .map(k => `${k} ${preview.read?.[k] ?? 0}`).join(" · ")}
+                  </p>
+
+                  {/* Everything that will actually go, named. A confirmation
+                      that only counts things is not a confirmation: the whole
+                      question someone is asking here is "which of my items?",
+                      and Kronos holds items on months they are not looking at. */}
+                  {previewWrites > 0 && (
+                    <ul className="mt-2 space-y-0.5" style={{ maxHeight: 200, overflowY: "auto" }}>
+                      {preview.plan.actions.filter(a => a.op !== "skip").map((a, i) => (
+                        <li key={i} className="flex items-baseline gap-2 text-[10px] font-mono">
+                          <span style={{ color: a.op === "create" ? "hsl(145 45% 58%)" : "hsl(43 60% 60%)", width: 42 }}>
+                            {a.op === "create" ? "new" : "update"}
+                          </span>
+                          <span className="flex-1 min-w-0 truncate" style={{ color: "hsl(220 12% 72%)" }}>
+                            {a.row.title || `#${a.row.id}`}
+                          </span>
+                          <span style={{ color: FAINT }}>{a.kind}</span>
+                          <span style={{ color: FAINT }}>{a.date}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {/* Removals are named for the same reason creates are, and
+                      more so: this is the only list where the item is about to
+                      leave a calendar the person may be looking at. */}
+                  {previewDeletes > 0 && (
+                    <ul className="mt-2 space-y-0.5" style={{ maxHeight: 160, overflowY: "auto" }}>
+                      {preview.deletes.map((d, i) => (
+                        <li key={i} className="flex items-baseline gap-2 text-[10px] font-mono">
+                          <span style={{ color: "hsl(0 50% 66%)", width: 42 }}>remove</span>
+                          <span className="flex-1 min-w-0 truncate" style={{ color: "hsl(220 12% 72%)" }}>
+                            {d.title || `${d.kind} #${d.id}`}
+                          </span>
+                          <span className="truncate" style={{ color: FAINT, maxWidth: 150 }}>{d.reason}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {/* The sweep refusing is not the same as there being nothing
+                      to sweep, and silence would read as the second. */}
+                  {preview.deleteNote && (
+                    <p className="text-[10px] font-mono mt-2" style={{ color: "hsl(43 55% 62%)" }}>
+                      {preview.deleteNote}
+                    </p>
+                  )}
+
                   {preview.plan.skipped > 0 && (
                     <details className="mt-2">
                       <summary className="text-[10px] cursor-pointer" style={{ color: FAINT }}>
@@ -408,12 +493,17 @@ export default function CalendarSyncPanel({ onClose }: { onClose: () => void }) 
                   }}
                 >
                   <p className="text-[11px]" style={{ color: pushed.failed ? "hsl(0 55% 72%)" : "hsl(145 50% 68%)" }}>
-                    Sent {pushed.pushed}{pushed.failed ? `, ${pushed.failed} failed` : ""}.
+                    Sent {pushed.pushed}
+                    {pushed.removed ? `, removed ${pushed.removed}` : ""}
+                    {pushed.failed ? `, ${pushed.failed} failed` : ""}.
                     {!pushed.failed && " Check Apple Calendar."}
                   </p>
                   {pushed.problems.slice(0, 6).map((problem, i) => (
                     <p key={i} className="text-[10px] font-mono mt-1" style={{ color: "hsl(0 45% 68%)" }}>{problem}</p>
                   ))}
+                  {pushed.deleteNote && (
+                    <p className="text-[10px] font-mono mt-1" style={{ color: "hsl(43 55% 62%)" }}>{pushed.deleteNote}</p>
+                  )}
                 </div>
               )}
 

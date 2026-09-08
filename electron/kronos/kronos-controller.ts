@@ -16,7 +16,7 @@ import { safeStorage, shell, type BrowserWindow } from "electron";
 import { DavError, IcloudDav } from "./icloud-dav";
 import { KronosSettingsStore, type KronosPublicConfig } from "./kronos-settings";
 import { KronosSyncEngine, type CycleReport, type SyncStatus } from "./sync-engine";
-import { describePlan } from "./sync-plan";
+import { describeCycle } from "./sync-plan";
 import type { DavCalendar } from "./dav-xml";
 
 /** Where an app-specific password is generated. Hardcoded; never from the UI. */
@@ -52,6 +52,12 @@ export class KronosController {
   private readonly store: KronosSettingsStore;
   private readonly options: KronosControllerOptions;
   private readonly engine: KronosSyncEngine;
+  /**
+   * The renderer's session token. **Memory only** — it is a live credential for
+   * the whole ROME API and has no business in a file. Re-sent by the renderer
+   * on every mount, so a profile switch or a logout corrects it.
+   */
+  private sessionToken: string | null = null;
 
   constructor(options: KronosControllerOptions) {
     this.options = options;
@@ -62,6 +68,7 @@ export class KronosController {
     });
     this.engine = new KronosSyncEngine({
       serverBase: options.serverBase,
+      getSessionToken: () => this.sessionToken,
       getCalendarPath: () => (this.store.get().enabled ? this.store.get().calendarHref : ""),
       // Built per cycle rather than held: the account can be changed or
       // disconnected between syncs, and a cached client would keep using the
@@ -86,6 +93,11 @@ export class KronosController {
     }
   }
 
+  /** Told by the renderer who it is signed in as. Not persisted. */
+  setSessionToken(token: string | null): void {
+    this.sessionToken = token && token.trim() ? token.trim() : null;
+  }
+
   syncStatus(): SyncStatus {
     return this.engine.status();
   }
@@ -101,7 +113,7 @@ export class KronosController {
    */
   async syncNow(dryRun: boolean): Promise<CycleReport & { summary: string }> {
     const report = await this.engine.runCycle({ dryRun });
-    return { ...report, summary: describePlan(report.plan) };
+    return { ...report, summary: describeCycle(report.plan, report.deletes.length) };
   }
 
   /** Same guard as Akira: only the window we own may drive this. */
