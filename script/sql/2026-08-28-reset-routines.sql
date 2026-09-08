@@ -37,10 +37,13 @@ select to_regclass('public.kronos_sync_links') as sync_links_table;   -- null = 
 -- Look at this before running step 3. `saved = true` rows are library
 -- templates; `saved = false` rows are the copies sitting on days.
 
-select
-  id, title, recurrence, days_of_week, saved,
-  coalesce(nullif(start_date, ''), '—') as starts,
-  coalesce(nullif(end_date,   ''), '—') as ends
+-- Deliberately no start_date / end_date here. Those columns only exist AFTER
+-- the v2 migration, so naming them makes this query fail on exactly the
+-- databases step 1 is meant to diagnose — and in the Supabase editor one
+-- failing statement aborts the whole run, so you would never see step 1's
+-- answer either. Learned the hard way, 2026-09-07.
+
+select id, title, recurrence, days_of_week, saved, start_time, duration_minutes
 from public.kronos_routines
 order by saved desc, id;
 

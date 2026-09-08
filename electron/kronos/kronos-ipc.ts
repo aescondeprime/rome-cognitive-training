@@ -35,6 +35,9 @@ export function registerKronosIpc(getController: () => KronosController | null):
   ipcMain.handle("rome:kronos:disconnect", event =>
     withController(event, controller => controller.disconnect()));
 
+  ipcMain.handle("rome:kronos:set-session", (event, token: unknown) =>
+    withController(event, controller => controller.setSessionToken(token == null ? null : String(token))));
+
   ipcMain.handle("rome:kronos:sync-status", event =>
     withController(event, controller => controller.syncStatus()));
 

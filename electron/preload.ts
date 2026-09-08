@@ -114,6 +114,7 @@ contextBridge.exposeInMainWorld("romeDesktop", {
     createCalendar: (name: string) => ipcRenderer.invoke("rome:kronos:create-calendar", name),
     disconnect: () => ipcRenderer.invoke("rome:kronos:disconnect"),
     openAppleIdPage: () => ipcRenderer.invoke("rome:kronos:open-apple-id"),
+    setSession: (token: string | null) => ipcRenderer.invoke("rome:kronos:set-session", token),
     syncStatus: () => ipcRenderer.invoke("rome:kronos:sync-status"),
     syncNow: (dryRun: boolean) => ipcRenderer.invoke("rome:kronos:sync-now", dryRun),
     onSyncStatus: (listener: (status: unknown) => void) => {

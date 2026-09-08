@@ -171,15 +171,42 @@ interface RomeKronosSyncStatus {
 interface RomeKronosPushAction {
   kind: string;
   op: "create" | "update" | "skip";
+  /** The day it will land on. Absent on a skip. */
+  date?: string;
+  href?: string;
   reason?: string;
   row: { id: number; title?: string };
+}
+
+/**
+ * A ROME-authored event on iCloud that ROME no longer places on any day.
+ *
+ * Only resources ROME itself created can appear here — anything made in Apple
+ * Calendar has Apple's own filename and is never a candidate.
+ */
+interface RomeKronosDeleteAction {
+  kind: string;
+  id: number;
+  /** Null when the Kronos row is gone entirely and there is no title left. */
+  title: string | null;
+  reason: string;
+  href: string;
 }
 
 interface RomeKronosCycleReport {
   ok: boolean;
   dryRun: boolean;
+  /** Rows of each kind the engine read. Zero everywhere means it saw nothing. */
+  read: { routine: number; assignment: number; event: number; general: number };
+  /** The profile the engine read as. */
+  readingAs: { id: number; name: string } | null;
   plan: { actions: RomeKronosPushAction[]; creates: number; updates: number; skipped: number };
+  /** Removals this cycle will make, or made. Named, never just counted. */
+  deletes: RomeKronosDeleteAction[];
+  /** Set when the sweep could not run safely; deletions were skipped. */
+  deleteNote: string | null;
   pushed: number;
+  removed: number;
   failed: number;
   /** Already translated for a person. */
   problems: string[];
@@ -200,6 +227,12 @@ interface RomeKronosBridge {
   createCalendar: (name: string) => Promise<RomeKronosVerifyResult>;
   disconnect: () => Promise<RomeKronosConfig>;
   openAppleIdPage: () => Promise<void>;
+  /**
+   * Hand main the session token so the sync engine speaks to the ROME API as
+   * the signed-in profile. Without it the server falls back to whichever
+   * profile happens to be "active" and the engine reads the wrong calendar.
+   */
+  setSession: (token: string | null) => Promise<void>;
   syncStatus: () => Promise<RomeKronosSyncStatus>;
   /** `dryRun` computes the plan and writes nothing. */
   syncNow: (dryRun: boolean) => Promise<RomeKronosCycleReport>;

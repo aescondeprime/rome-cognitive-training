@@ -772,10 +772,10 @@ export function registerWorkspaceRoutes(app: Express, getActiveUser: ResolveActi
   const KRONOS_SYNC_FIELDS = ["ical_uid", "ical_href", "ical_etag", "ical_raw", "synced_at", "sync_state"] as const;
 
   const kronosChildren = [
-    { kind: "routines", table: "kronos_routines", defaults: { color: "hsl(43 88% 60%)", start_time: "09:00", duration_minutes: 60, recurrence: "daily", days_of_week: null, notes: "", saved: false, start_date: "", end_date: "" }, fields: ["title", "color", "start_time", "duration_minutes", "recurrence", "days_of_week", "notes", "saved", "start_date", "end_date", ...KRONOS_SYNC_FIELDS] },
-    { kind: "assignments", table: "kronos_assignments", defaults: { color: "hsl(210 65% 62%)", start_time: "09:00", duration_minutes: 60, due_date: "", instructions: "", saved: false }, fields: ["title", "color", "start_time", "duration_minutes", "due_date", "instructions", "saved", ...KRONOS_SYNC_FIELDS] },
-    { kind: "events", table: "kronos_events", defaults: { color: "hsl(270 60% 72%)", start_time: "09:00", duration_minutes: 60, event_date: "", preparations: "", saved: false }, fields: ["title", "color", "start_time", "duration_minutes", "event_date", "preparations", "saved", ...KRONOS_SYNC_FIELDS] },
-    { kind: "generals", table: "kronos_generals", defaults: { color: "hsl(145 55% 50%)", start_time: "09:00", duration_minutes: 60, item_date: "", notes: "", saved: false }, fields: ["title", "color", "start_time", "duration_minutes", "item_date", "notes", "saved", ...KRONOS_SYNC_FIELDS] },
+    { kind: "routines", table: "kronos_routines", defaults: { color: "hsl(43 88% 60%)", start_time: "09:00", duration_minutes: 60, recurrence: "daily", days_of_week: null, notes: "", saved: false, start_date: "", end_date: "", alerts: "" }, fields: ["title", "color", "start_time", "duration_minutes", "recurrence", "days_of_week", "notes", "saved", "start_date", "end_date", "alerts", ...KRONOS_SYNC_FIELDS] },
+    { kind: "assignments", table: "kronos_assignments", defaults: { color: "hsl(210 65% 62%)", start_time: "09:00", duration_minutes: 60, due_date: "", instructions: "", saved: false, alerts: "" }, fields: ["title", "color", "start_time", "duration_minutes", "due_date", "instructions", "saved", "alerts", ...KRONOS_SYNC_FIELDS] },
+    { kind: "events", table: "kronos_events", defaults: { color: "hsl(270 60% 72%)", start_time: "09:00", duration_minutes: 60, event_date: "", preparations: "", saved: false, alerts: "" }, fields: ["title", "color", "start_time", "duration_minutes", "event_date", "preparations", "saved", "alerts", ...KRONOS_SYNC_FIELDS] },
+    { kind: "generals", table: "kronos_generals", defaults: { color: "hsl(145 55% 50%)", start_time: "09:00", duration_minutes: 60, item_date: "", notes: "", saved: false, alerts: "" }, fields: ["title", "color", "start_time", "duration_minutes", "item_date", "notes", "saved", "alerts", ...KRONOS_SYNC_FIELDS] },
   ] as const;
 
   for (const config of kronosChildren) {

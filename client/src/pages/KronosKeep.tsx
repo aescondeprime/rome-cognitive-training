@@ -45,17 +45,19 @@ import { apiRequest } from "@/lib/queryClient";
 import {
   ChevronLeft, ChevronRight, Plus, X, Check, Loader2,
   RefreshCw, BookOpen, CalendarDays, Clock, Trash2, Circle,
-  CalendarPlus, Bookmark, CloudOff, Cloud,
+  CalendarPlus, Bookmark, CloudOff, Cloud, Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import CalendarSyncPanel from "./kronos/CalendarSyncPanel";
+import { getToken } from "@/lib/auth";
 import {
   KRONOS_TYPES, KRONOS_TYPE, type ItemType,
   GOLD, GREEN, BLUE, VIOLET,
   fmtDate as fmt, parseDate, daysInMonth, todayStr,
   monthWindow, withinWindow, windowLabel, placementBody,
 } from "@/lib/kronosTypes";
+import { ALERT_PRESETS, alertLabel, alertSummary, readAlerts, writeAlerts } from "@/lib/kronosAlerts";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 interface KCalendar { id: number; name: string; }
@@ -116,6 +118,40 @@ function toMins(t: string | undefined) {
   const [h, m] = String(t ?? "00:00").split(":").map(Number);
   return (h || 0) * 60 + (m || 0);
 }
+/** minutes from midnight → "HH:MM", wrapping past midnight. */
+function toClock(mins: number) {
+  const m = ((mins % TOTAL_DAY_MINS) + TOTAL_DAY_MINS) % TOTAL_DAY_MINS;
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Start + end → duration, in minutes.
+ *
+ * An end at or before the start is read as the next day rather than refused:
+ * 22:00–06:00 is a real thing people schedule, and the alternative is telling
+ * someone their night shift is invalid. Storage is still `duration_minutes`,
+ * so nothing downstream — the grid, the timeline, the iCloud push — has to
+ * learn about wrapping.
+ */
+function durationBetween(start: string, end: string) {
+  const raw = toMins(end) - toMins(start);
+  return raw > 0 ? raw : raw + TOTAL_DAY_MINS;
+}
+
+/** "07:00" + 90 → "08:30". */
+function endTimeOf(start: string, minutes: number) {
+  return toClock(toMins(start) + Math.max(1, minutes));
+}
+
+/** "1h 30m", for the hint under the end-time field. */
+function fmtSpan(minutes: number) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
 /** minutes → "H:MM AM/PM" */
 function fmtTime(mins: number) {
   const h = Math.floor(mins / 60) % 24;
@@ -222,6 +258,8 @@ export interface ItemDraft extends Record<string, unknown> {
   start_time: string;
   duration_minutes: number;
   saved: boolean;
+  /** Minutes before the start, comma-separated. `""` is no alert. */
+  alerts: string;
 }
 
 function ItemForm({ type, initial, defaultDate, onSave, onCancel, saving }: {
@@ -244,6 +282,7 @@ function ItemForm({ type, initial, defaultDate, onSave, onCancel, saving }: {
       duration_minutes: initial?.duration_minutes ?? defaults.minutes,
       [meta.detailField]: (initial as any)?.[meta.detailField] ?? "",
       saved: initial?.saved ?? false,
+      alerts: writeAlerts(readAlerts((initial as any)?.alerts)),
     };
     if (type === "routine") {
       const w = monthWindow(anchor);
@@ -285,9 +324,19 @@ function ItemForm({ type, initial, defaultDate, onSave, onCancel, saving }: {
             onChange={e => set({ start_time: e.target.value })} className={inputCls} />
         </div>
         <div>
-          <label className={labelCls}>Duration (min)</label>
-          <input type="number" min={5} step={5} value={f.duration_minutes}
-            onChange={e => set({ duration_minutes: +e.target.value })} className={inputCls} />
+          <label className={labelCls}>End time</label>
+          <input
+            type="time"
+            value={endTimeOf(String(f.start_time), Number(f.duration_minutes))}
+            onChange={e => set({ duration_minutes: durationBetween(String(f.start_time), e.target.value) })}
+            className={inputCls}
+          />
+          <p className="text-[9px] font-mono text-muted-foreground/40 mt-1">
+            {fmtSpan(Number(f.duration_minutes))}
+            {toMins(endTimeOf(String(f.start_time), Number(f.duration_minutes))) <= toMins(String(f.start_time))
+              ? " · ends next day"
+              : ""}
+          </p>
         </div>
       </div>
 
@@ -349,6 +398,36 @@ function ItemForm({ type, initial, defaultDate, onSave, onCancel, saving }: {
         </div>
       )}
 
+      {/* Alerts. Two, like Apple's own form, because that is what the phone
+          will show back and a third would read as "Custom" there. Nothing
+          fires until the item has been sent to iCloud — the notification comes
+          from the calendar, not from ROME. */}
+      <div>
+        <label className={labelCls}>Alerts</label>
+        <div className="grid grid-cols-2 gap-3">
+          {[0, 1].map(slot => (
+            <AlertSelect
+              key={slot}
+              value={readAlerts(f.alerts)[slot]}
+              // The second slot is only useful once the first is set: two
+              // alerts where the first is "None" is one alert wearing a
+              // confusing label.
+              disabled={slot === 1 && readAlerts(f.alerts).length === 0}
+              placeholder={slot === 0 ? "None" : "No second alert"}
+              onChange={minutes => {
+                const next = readAlerts(f.alerts);
+                if (minutes === null) next.splice(slot, 1);
+                else next[slot] = minutes;
+                set({ alerts: writeAlerts(next) });
+              }}
+            />
+          ))}
+        </div>
+        <p className="text-[9px] text-muted-foreground/40 mt-1 font-mono">
+          Fires on your phone once this item is sent to iCloud.
+        </p>
+      </div>
+
       <div>
         <label className={labelCls}>Color</label>
         <ColorPicker value={String(f.color)} onChange={c => set({ color: c })} />
@@ -377,6 +456,34 @@ function ItemForm({ type, initial, defaultDate, onSave, onCancel, saving }: {
 
       <FormActions onCancel={onCancel} onSave={() => onSave(f)} disabled={!canSave} saving={saving} />
     </div>
+  );
+}
+
+/**
+ * One alert slot.
+ *
+ * A plain `<select>` on purpose: it is the control the platform already knows
+ * how to open on a phone and with a keyboard, and this is a nine-item list of
+ * fixed choices — the case native form controls are actually good at.
+ */
+function AlertSelect({ value, onChange, disabled, placeholder }: {
+  value: number | undefined;
+  onChange: (minutes: number | null) => void;
+  disabled?: boolean;
+  placeholder: string;
+}) {
+  return (
+    <select
+      value={value === undefined ? "" : String(value)}
+      disabled={disabled}
+      onChange={e => onChange(e.target.value === "" ? null : Number(e.target.value))}
+      className={cn(inputCls, "disabled:opacity-30")}
+    >
+      <option value="">{placeholder}</option>
+      {ALERT_PRESETS.map(m => (
+        <option key={m} value={m}>{alertLabel(m)}</option>
+      ))}
+    </select>
   );
 }
 
@@ -518,8 +625,14 @@ function DayTimeline({ dateStr, items, all, onClose }: {
                   <div className="flex items-center gap-1.5">
                     <ItemIcon type={item.type} size="sm" color={item.color} />
                     <span className="text-xs font-semibold truncate" style={{ color: item.color }}>{item.title}</span>
+                    {/* Set on the form, invisible everywhere else — and an
+                        alert you cannot see is one you cannot trust. */}
+                    {alertSummary((item as any).alerts) && (
+                      <Bell className="w-2.5 h-2.5 shrink-0 text-muted-foreground/60"
+                        aria-label={alertSummary((item as any).alerts)} />
+                    )}
                     <span className="text-[10px] font-mono text-muted-foreground ml-auto shrink-0">
-                      {fmtTime(toMins(item.start_time))} · {item.duration_minutes}m
+                      {fmtTime(toMins(item.start_time))} – {fmtTime(toMins(item.start_time) + item.duration_minutes)}
                     </span>
                   </div>
                   <AnimatePresence>
@@ -772,7 +885,8 @@ function ItemRow({ type, row, isTemplate, selectedDate, viewEnd, viewLabel, onDe
         <p className="text-xs truncate" style={{ color: row.color }}>{row.title}</p>
         <p className="text-[9px] font-mono text-muted-foreground/50 mt-0.5 truncate">{sub}</p>
         <p className="text-[9px] font-mono text-muted-foreground/40">
-          {fmtTime(toMins(row.start_time))} · {row.duration_minutes}m
+          {fmtTime(toMins(row.start_time))} – {fmtTime(toMins(row.start_time) + row.duration_minutes)}
+          {alertSummary((row as any).alerts) ? ` · ${alertSummary((row as any).alerts)}` : ""}
         </p>
         {expired && (
           <button onClick={onExtend}
@@ -821,6 +935,11 @@ export default function KronosKeep() {
   const kronosBridge = typeof window === "undefined" ? undefined : window.romeDesktop?.kronos;
   const refreshSyncConfig = useCallback(() => {
     if (!kronosBridge) return;
+    // The engine talks to the ROME API from the main process, which carries no
+    // session of its own. Without this it is served whichever profile the
+    // server considers "active" — not necessarily the one this window is
+    // signed in as — and it reads a calendar that is not yours.
+    void kronosBridge.setSession(getToken()).catch(() => undefined);
     void kronosBridge.getConfig().then(setSyncConfig).catch(() => undefined);
   }, [kronosBridge]);
   useEffect(refreshSyncConfig, [refreshSyncConfig]);

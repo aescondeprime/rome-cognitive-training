@@ -174,6 +174,10 @@ export function placementBody(
     start_time: template.start_time,
     duration_minutes: template.duration_minutes,
     [meta.detailField]: template[meta.detailField] ?? "",
+    // Alerts belong to the template, so every copy placed from it is set up
+    // the same way. A reminder you configured once and have to re-pick on
+    // every placement is a reminder you will forget to set.
+    alerts: template.alerts ?? "",
     saved: false,
   };
 
