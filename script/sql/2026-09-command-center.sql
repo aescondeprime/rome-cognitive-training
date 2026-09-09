@@ -142,6 +142,32 @@ create index if not exists command_links_source_idx on public.command_links (sou
 create unique index if not exists command_links_unique_edge
   on public.command_links (user_id, source_kind, source_id, target_kind, target_ref);
 
+-- ── 4 · Retire the first draft's lifecycle ────────────────────────────────
+--
+-- The first version of this feature shaped a directive as an order rather than
+-- a goal: `issued | active | complete | aborted`, defaulting to 'issued'. The
+-- goal rework renamed three of the four, but `create table if not exists`
+-- cannot change a table that already exists, so a database built from that
+-- first draft still holds those values and still defaults to 'issued'.
+--
+-- The renderer no longer trusts this column — it maps anything it does not
+-- recognise — but a value the app can never write again should not stay in the
+-- table, and the default is what quietly re-introduces one on any insert that
+-- omits a status.
+--
+-- Safe on a database that never saw the first draft: every statement matches
+-- nothing.
+
+update public.directives set status = 'planned'  where status = 'issued';
+update public.directives set status = 'achieved' where status = 'complete';
+update public.directives set status = 'shelved'  where status = 'aborted';
+
+alter table public.directives alter column status set default 'planned';
+
+-- Anything still outside the four is a value no build of this app has ever
+-- written. Left alone rather than guessed at: the renderer shows it as Planned,
+-- and a row you cannot interpret is still a row you should be able to see.
+
 -- ── Check ─────────────────────────────────────────────────────────────────
 --
 -- Expect three rows for threats, then the full column list of directives and
@@ -155,3 +181,8 @@ where table_schema = 'public'
     or table_name in ('directives','command_links')
   )
 order by table_name, ordinal_position;
+
+-- And the lifecycle: expect only planned / active / achieved / shelved, and
+-- `directives.status` above to show a default of 'planned'.
+
+select status, count(*) from public.directives group by status order by status;

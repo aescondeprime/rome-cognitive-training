@@ -197,7 +197,16 @@ export class AkiraController {
 
     // Server-side barge-in. The renderer drops queued audio immediately rather
     // than finishing a sentence the user has already spoken over.
+    //
+    // The microphone is now gated while Akira is audible, so an interruption
+    // arriving here means a person really did speak over her rather than her
+    // own voice returning through the speakers. With barge-in switched off, an
+    // interruption can only be leakage, and acting on it is exactly the fault
+    // the setting exists to prevent — so it is dropped. Until this check the
+    // setting was declared, defaulted and toggled in the console, and read
+    // nowhere at all.
     this.realtime.on("interruption", () => {
+      if (!this.settings.get().input.bargeInEnabled) return;
       this.send(AKIRA_CHANNELS.audio, { type: "cancel" });
       this.speechDrainsAt = 0;
       if (this.state.state === "SPEAKING") this.transition("LISTENING", "Akira is listening.");
@@ -463,6 +472,12 @@ export class AkiraController {
       ...this.buildWebSection(),
       "",
       ...(this.buildFocusSection() ? [this.buildFocusSection(), ""] : []),
+      "SLEEP. \"Knock out\", \"crash\", \"get some rest\", \"nap\", \"snooze\", \"catch some z's\", \"turn in\",",
+      "\"wake me at seven\" and \"bedtime at half eleven\" are all rome.sleep.set \u2014 never a focus cycle.",
+      "A wake time goes in endTime; a length goes in durationMinutes; a bedtime goes in startTime. If they",
+      "gave neither a wake time nor a length, ask which \u2014 a period with no end never rings.",
+      "Confirm with the wake time and nothing else. Do not explain the alarm unless asked: they will hear it.",
+      "",
       ...(resumed ? [resumed, ""] : []),
       ...(memory ? [memory, ""] : []),
       catalogue,

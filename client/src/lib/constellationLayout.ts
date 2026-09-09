@@ -1,5 +1,9 @@
 import type { ClockFormat, ClockZone } from "./clockSettings";
 import { DEFAULT_CLOCK_FORMAT } from "./clockSettings";
+import {
+  ALARM_MAX_DB, ALARM_MIN_DB, DEFAULT_ALARM_DB, DEFAULT_ALARM_VOICE, normalizeVoice,
+  type AlarmVoice,
+} from "@shared/sleepClock";
 
 const STORAGE_KEY = "rome_constellation_layout_v2";
 
@@ -61,6 +65,16 @@ export interface ConstellationLayout {
    * `sound.ts` can use it directly without converting on every voice.
    */
   soundPitch: number;       // 0.5–2.2, default 1.122 (+2 semitones)
+  /**
+   * The wake alarm.
+   *
+   * Kept beside the cue settings because the editor is where both are tuned,
+   * and deliberately *not* governed by `soundEnabled`: an alarm a preference
+   * can silence is an alarm that fails on the one morning it mattered.
+   */
+  alarmVoice: AlarmVoice;
+  /** Peak loudness on ROME's own scale, 45–85. See `ALARM_MAX_DB`. */
+  alarmPeakDb: number;
   /**
    * Per-widget uniform scale, keyed by `WidgetKey`. A single map rather than
    * five more sibling fields — the widget list has grown twice already and the
@@ -191,6 +205,8 @@ export const DEFAULT_SOUND_VOLUME  = 0.6;
 // the note above the cue table in `sound.ts`), so this only has to nudge.
 export const DEFAULT_SOUND_PITCH   = 1.122;
 
+export { DEFAULT_ALARM_DB, DEFAULT_ALARM_VOICE };
+
 /**
  * A pristine layout. Exported so the editor's Reset uses exactly the same
  * object the loader falls back to — in V2 these were two separate literals and
@@ -220,6 +236,8 @@ export function defaultLayout(): ConstellationLayout {
     soundEnabled: DEFAULT_SOUND_ENABLED,
     soundVolume: DEFAULT_SOUND_VOLUME,
     soundPitch: DEFAULT_SOUND_PITCH,
+    alarmVoice: DEFAULT_ALARM_VOICE,
+    alarmPeakDb: DEFAULT_ALARM_DB,
     widgetScales: {},
     widgetPinned: {},
     clockFormat: DEFAULT_CLOCK_FORMAT,
@@ -272,6 +290,13 @@ export function loadLayout(): ConstellationLayout {
     if (!("soundEnabled" in parsed)) (parsed as any).soundEnabled = DEFAULT_SOUND_ENABLED;
     if (!("soundVolume"  in parsed)) (parsed as any).soundVolume  = DEFAULT_SOUND_VOLUME;
     if (!("soundPitch"   in parsed)) (parsed as any).soundPitch   = DEFAULT_SOUND_PITCH;
+    // Backfill the wake alarm (added with sleep periods). `normalizeVoice`
+    // rather than a presence check: a layout carrying a voice this build has
+    // since renamed would otherwise schedule `undefined` and ring silently.
+    (parsed as any).alarmVoice = normalizeVoice((parsed as any).alarmVoice);
+    (parsed as any).alarmPeakDb = Number.isFinite(Number((parsed as any).alarmPeakDb))
+      ? Math.max(ALARM_MIN_DB, Math.min(ALARM_MAX_DB, Math.round(Number((parsed as any).alarmPeakDb))))
+      : DEFAULT_ALARM_DB;
     // Backfill widget sizing (added with the editor's resize handles)
     if (!("widgetScales"   in parsed) || typeof parsed.widgetScales !== "object" || parsed.widgetScales === null) {
       (parsed as any).widgetScales = {};

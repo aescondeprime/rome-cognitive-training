@@ -374,6 +374,7 @@ export class AkiraCapabilityRegistry {
     this.registerTrainingCapabilities();
     this.registerThreatCapabilities();
     this.registerFocusCapabilities();
+    this.registerSleepCapabilities();
     this.registerWebCapabilities();
 
     this.add(this.descriptor("rome.undo", "Undo an Akira action", "Applies a still-valid compensating action from the Akira activity log.", "write", "background", [["/api/boards"], ["/api/notes"], ["/api/memory"], ["/kronos"]], ["task-stabilizer", "finance"], false,
@@ -782,6 +783,57 @@ export class AkiraCapabilityRegistry {
             : {}),
         };
       });
+  }
+
+  /**
+   * The sleep period.
+   *
+   * Same shape as the focus cycle and for the same reason — the period lives in
+   * the renderer's storage — but it is a different kind of thing, and the
+   * descriptions have to say so, because the model will otherwise reach for
+   * `rome.focus.start` when someone says "give me twenty minutes". A focus
+   * cycle is time spent working and it is watched; a sleep period is time spent
+   * not working, it is not watched, and it ends with a siren.
+   *
+   * The vocabulary is listed out longhand in the description on purpose. People
+   * do not say "initiate a sleep period" — they say knock out, crash, nap, rest,
+   * get some z's — and a model reading a description written in one register
+   * will not match a request phrased in another.
+   */
+  private registerSleepCapabilities(): void {
+    const SLEEP_KEYS = [["kronos-today"], ["/kronos"]];
+
+    this.add(this.descriptor("rome.sleep.set", "Set a sleep period", "Sets or starts a sleep period — bedtime, a nap, a rest, knocking out, crashing, catching some z's, snoozing, turning in. With no start time it begins immediately; with one it is armed and begins on its own at that time. Give either endTime (when to wake) or durationMinutes. While the period runs the wake word is switched off, so the user cannot be woken by mistake, and the period is drawn on the Kronos calendar. The alarm starts quietly five minutes before the end, climbs to full volume, and does not stop until the user presses Tab.", "write", "background", SLEEP_KEYS, ["sleep"], true,
+      objectSchema({
+        startTime: string("When the period begins, 24-hour \"HH:MM\". Leave out to begin now."),
+        endTime: string("When to wake, 24-hour \"HH:MM\". Use this whenever the user names a wake time."),
+        durationMinutes: number("Length in minutes, if the user said how long rather than when to wake."),
+        label: string("What to call it: \"Sleep\" or \"Nap\". Defaults to Sleep."),
+      })),
+      async args => {
+        const value = await this.dependencies.renderer.command("sleep.set", pick(args, ["startTime", "endTime", "durationMinutes", "label"]));
+        return { value, undo: { rendererAction: "sleep.cancel" } };
+      });
+
+    this.add(this.descriptor("rome.sleep.status", "Check the sleep period", "Returns whether a sleep period is set or running and when it wakes, phrased for speech. Use this for any question about bedtime, the alarm, or when the user is being woken.", "read", "background", [], [], false, objectSchema({})),
+      async () => ({ value: await this.dependencies.renderer.command("sleep.status") }));
+
+    this.add(this.descriptor("rome.sleep.cancel", "Cancel the sleep period", "Calls off a sleep period, whether it has begun or not, and takes it off the calendar. This is the answer to \"forget the alarm\" or \"I'm not going to bed after all\".", "write", "background", SLEEP_KEYS, ["sleep"], false,
+      objectSchema({})),
+      async () => ({ value: await this.dependencies.renderer.command("sleep.cancel") }));
+
+    this.add(this.descriptor("rome.sleep.extend", "Move the wake time", "Adds minutes to a sleep period that is already set — \"another twenty minutes\", \"let me sleep in\". Negative minutes bring the wake time forward.", "write", "background", SLEEP_KEYS, ["sleep"], true,
+      objectSchema({ minutes: number("Minutes to add. Negative to wake earlier.") }, ["minutes"])),
+      async args => {
+        const minutes = Math.round(Number(args.minutes) || 0);
+        if (!minutes) throw new Error("Say how many minutes to add.");
+        const value = await this.dependencies.renderer.command("sleep.extend", { minutes });
+        return { value, undo: { rendererAction: "sleep.extend", rendererArgs: { minutes: -minutes } } };
+      });
+
+    this.add(this.descriptor("rome.sleep.wake", "End the sleep period now", "Ends a running period immediately and silences the alarm if it is going. Tab is the normal way to do this; use it only when the user says out loud that they are up.", "write", "background", SLEEP_KEYS, ["sleep"], false,
+      objectSchema({})),
+      async () => ({ value: await this.dependencies.renderer.command("sleep.wake") }));
   }
 
   /**

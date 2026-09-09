@@ -34,6 +34,8 @@ import {
 } from "./lightRayState";
 import { setAkiraAmbience } from "./akiraAmbienceState";
 import { setSoundEnabled, setSoundPitch, setSoundVolume } from "./sound";
+import { setAlarmPeakDb, setAlarmVoice } from "./wakeAlarm";
+import { DEFAULT_ALARM_DB } from "@shared/sleepClock";
 
 /**
  * Is the ray source drifting rather than pinned?
@@ -83,4 +85,7 @@ export function applyLayout(layout: ConstellationLayout): void {
   setSoundEnabled(layout.soundEnabled ?? DEFAULT_SOUND_ENABLED);
   setSoundVolume(layout.soundVolume ?? DEFAULT_SOUND_VOLUME);
   setSoundPitch(layout.soundPitch ?? DEFAULT_SOUND_PITCH);
+  // Not gated on `soundEnabled`: the alarm is the one sound that is not a cue.
+  setAlarmVoice(layout.alarmVoice);
+  setAlarmPeakDb(layout.alarmPeakDb ?? DEFAULT_ALARM_DB);
 }

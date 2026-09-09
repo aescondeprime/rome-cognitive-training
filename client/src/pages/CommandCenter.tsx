@@ -60,6 +60,7 @@ import {
   ChevronRight, Radar, GitBranch, Loader2, Check,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { playCue } from "@/lib/sound";
 import { loadGarden } from "@/lib/gardenStore";
 
@@ -228,10 +229,47 @@ function buildProgress(directives: Directive[]): (id: number) => Progress {
   return (id: number) => walk(id, new Set());
 }
 
+/**
+ * The first version of this page shaped a directive as an order rather than a
+ * goal, and its lifecycle was `issued | active | complete | aborted`. Rows
+ * written then are still in the table.
+ */
+const LEGACY_STATUS: Record<string, Status> = {
+  issued:   "planned",
+  complete: "achieved",
+  aborted:  "shelved",
+};
+
+/**
+ * A row's status, mapped into the set this page actually knows.
+ *
+ * **Nothing may index `STATUS_META` with a raw column value.** Doing so is what
+ * blanked the whole app: a legacy `issued` row returned `undefined` from the
+ * map, the dossier read `.color` off it, and the throw during render took the
+ * entire tree down the moment such an objective was selected — with no error
+ * on screen to say why. A status is data, and data from a table is never
+ * guaranteed to be one of today's four strings.
+ *
+ * An unrecognised value falls back to `planned` rather than being hidden. A row
+ * you cannot interpret is still a row you should be able to see and fix.
+ */
+function statusOf(directive: Directive): Status {
+  const raw = String(directive.status);
+  if (raw in STATUS_META) return raw as Status;
+  return LEGACY_STATUS[raw] ?? "planned";
+}
+
+/** Same reasoning for priority: a column is an integer, not a 1 | 2 | 3. */
+function priorityOf(record: { priority: number }): Priority {
+  const value = Math.round(Number(record.priority));
+  return (value === 2 || value === 3 ? value : 1) as Priority;
+}
+
 /** True for a goal whose horizon has passed and which is still open. */
 function overdue(directive: Directive): boolean {
   if (!directive.target_date) return false;
-  if (directive.status === "achieved" || directive.status === "shelved") return false;
+  const status = statusOf(directive);
+  if (status === "achieved" || status === "shelved") return false;
   return directive.target_date < new Date().toISOString().slice(0, 10);
 }
 
@@ -270,6 +308,7 @@ interface BoardRow { id: number; type: string; title: string }
 
 export default function CommandCenter() {
   const qc = useQueryClient();
+  const { toast } = useToast();
   // Wouter's own hook, not `useHashLocation`: split screen renders this route
   // table inside a per-pane Router whose location hook is that pane's, and
   // going straight to the window hash would move the wrong surface.
@@ -322,11 +361,27 @@ export default function CommandCenter() {
     for (const key of keys) qc.invalidateQueries({ queryKey: [key] });
   }, [qc]);
 
+  /**
+   * Every write here used to fail silently. With the tables missing that reads
+   * as "the button does nothing" — no row, no error, no clue — which is a far
+   * worse failure than a red toast naming the problem.
+   */
+  const reportFailure = useCallback((what: string) => (error: Error) => {
+    toast({
+      title: `Could not ${what}`,
+      description: /relation .* does not exist|column .* does not exist/i.test(error.message)
+        ? "The Command Center tables are missing. Run script/sql/2026-09-command-center.sql in the Supabase SQL editor."
+        : error.message || "The write did not reach the server.",
+      variant: "destructive",
+    });
+  }, [toast]);
+
   // ── Mutations ───────────────────────────────────────────────────────────
 
   const addThreat = useMutation({
     mutationFn: (body: Partial<Threat>) => apiRequest("POST", "/api/threats", body).then(r => r.json()),
     onSuccess: (row: Threat) => { invalidate("threats"); if (row?.id) setSelected({ kind: "threat", id: row.id }); },
+    onError: reportFailure("place that threat"),
   });
 
   const patchThreat = useMutation({
@@ -339,7 +394,10 @@ export default function CommandCenter() {
       qc.setQueryData<Threat[]>(["threats"], old => old?.map(t => t.id === id ? { ...t, ...patch } : t) ?? []);
       return { previous };
     },
-    onError: (_e, _v, ctx) => { if (ctx?.previous) qc.setQueryData(["threats"], ctx.previous); },
+    onError: (error, _v, ctx) => {
+      if (ctx?.previous) qc.setQueryData(["threats"], ctx.previous);
+      reportFailure("update that threat")(error as Error);
+    },
     onSettled: () => invalidate("threats"),
   });
 
@@ -351,6 +409,7 @@ export default function CommandCenter() {
   const addDirective = useMutation({
     mutationFn: (body: Partial<Directive>) => apiRequest("POST", "/api/directives", body).then(r => r.json()),
     onSuccess: (row: Directive) => { invalidate("directives"); if (row?.id) setSelected({ kind: "directive", id: row.id }); },
+    onError: reportFailure("add that objective"),
   });
 
   const patchDirective = useMutation({
@@ -362,7 +421,10 @@ export default function CommandCenter() {
       qc.setQueryData<Directive[]>(["directives"], old => old?.map(d => d.id === id ? { ...d, ...patch } : d) ?? []);
       return { previous };
     },
-    onError: (_e, _v, ctx) => { if (ctx?.previous) qc.setQueryData(["directives"], ctx.previous); },
+    onError: (error, _v, ctx) => {
+      if (ctx?.previous) qc.setQueryData(["directives"], ctx.previous);
+      reportFailure("update that objective")(error as Error);
+    },
     onSettled: () => invalidate("directives"),
   });
 
@@ -374,6 +436,7 @@ export default function CommandCenter() {
   const addLink = useMutation({
     mutationFn: (body: Partial<CommandLink>) => apiRequest("POST", "/api/command-links", body).then(r => r.json()),
     onSuccess: () => invalidate("command-links"),
+    onError: reportFailure("attach that asset"),
   });
 
   const removeLink = useMutation({
@@ -455,8 +518,8 @@ export default function CommandCenter() {
   }, [picking, selected]);
 
   const active   = threats.filter(t => !t.resolved);
-  const highest  = active.reduce<Priority>((m, t) => (t.priority > m ? t.priority : m), 1 as Priority);
-  const inMotion = directives.filter(d => d.status === "active").length;
+  const highest  = active.reduce<Priority>((m, t) => (priorityOf(t) > m ? priorityOf(t) : m), 1 as Priority);
+  const inMotion = directives.filter(d => statusOf(d) === "active").length;
   const overdueCount = directives.filter(overdue).length;
   // Top-level objectives only. Averaging every node would count a sub-goal
   // twice — once on its own and once inside its parent's derived reading.
@@ -466,6 +529,26 @@ export default function CommandCenter() {
     : 0;
 
   const schemaMissing = directivesQuery.isError;
+
+  // Filed under the selected objective when there is one: "break this goal
+  // down" is the common case, and the dossier's parent select is where you
+  // undo it. Shared by the header rail and the empty surface's button.
+  const newObjective = useCallback(() => {
+    playCue("nodeSelect");
+    addDirective.mutate({
+      title: "New objective",
+      status: "planned",
+      priority: 2,
+      parent_id: selectedDirective?.id ?? null,
+    });
+    setView("chain");
+  }, [addDirective, selectedDirective]);
+
+  const newThreat = useCallback(() => {
+    playCue("nodeSelect");
+    const spot = scatter(threats.length);
+    addThreat.mutate({ title: "New threat", priority: 2, pos_x: spot.x, pos_y: spot.y });
+  }, [addThreat, threats.length]);
 
   return (
     <div className="flex h-full min-h-[calc(100vh-120px)] flex-col" style={{ fontFamily: mono }}>
@@ -478,24 +561,8 @@ export default function CommandCenter() {
         inMotion={inMotion}
         overdueCount={overdueCount}
         completion={completion}
-        onNewThreat={() => {
-          playCue("nodeSelect");
-          const spot = scatter(threats.length);
-          addThreat.mutate({ title: "New threat", priority: 2, pos_x: spot.x, pos_y: spot.y });
-        }}
-        onNewDirective={() => {
-          playCue("nodeSelect");
-          // Filed under the selected objective when there is one: "break this
-          // goal down" is the common case, and the dossier's parent select is
-          // where you undo it.
-          addDirective.mutate({
-            title: "New objective",
-            status: "planned",
-            priority: 2,
-            parent_id: selectedDirective?.id ?? null,
-          });
-          setView("chain");
-        }}
+        onNewThreat={newThreat}
+        onNewDirective={newObjective}
         showAllLinks={showAllLinks}
         onShowAllLinks={setShow}
         busy={addThreat.isPending || addDirective.isPending}
@@ -526,6 +593,7 @@ export default function CommandCenter() {
               designationOf={id => designation("D", directiveIndex.get(id) ?? 0)}
               linkCountOf={id => linksOf("directive", id).length}
               progressOf={progressOf}
+              onCreate={newObjective}
             />
           )}
         </div>
@@ -995,17 +1063,56 @@ function ThreatGrid({
       ))}
 
       {threats.length === 0 && (
-        <div
-          className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none"
-          style={{ fontFamily: mono, fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase", color: "hsl(214 12% 26%)" }}
-        >
-          <Crosshair className="h-6 w-6" style={{ opacity: 0.35 }} />
-          Grid clear
-          <span style={{ fontSize: 8, letterSpacing: "0.1em", textTransform: "none", fontStyle: "italic" }}>
-            Double-click anywhere to place a threat
-          </span>
-        </div>
+        <EmptySurface
+          icon={<Crosshair className="h-6 w-6" />}
+          title="Grid clear"
+          hint="Nothing is threatening anything right now. Place a marker to start tracking one — or double-click anywhere on the grid."
+          actionLabel="Place threat"
+          onAction={() => onCreateAt(50, 50)}
+        />
       )}
+    </div>
+  );
+}
+
+/**
+ * The empty state for either surface.
+ *
+ * Its own component because the first version of both was a stack of 9px text
+ * at 26% lightness on a near-black ground, with the only way to act on it a
+ * button in the far corner of the header rail. An empty board read as a broken
+ * one. The copy here is legible, and the action that fills the surface is on
+ * the surface.
+ */
+function EmptySurface({ icon, title, hint, actionLabel, onAction }: {
+  icon: React.ReactNode;
+  title: string;
+  hint: string;
+  actionLabel: string;
+  onAction: () => void;
+}) {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6">
+      <span style={{ color: "hsl(var(--accent-h) 40% 45%)", opacity: 0.7 }}>{icon}</span>
+      <span style={{ fontFamily: serif, fontSize: 11, letterSpacing: "0.22em", textTransform: "uppercase", color: "hsl(var(--accent-h) 55% 58%)" }}>
+        {title}
+      </span>
+      <span style={{ fontFamily: mono, fontSize: 9, lineHeight: 1.8, letterSpacing: "0.04em", color: "hsl(214 14% 48%)", maxWidth: 340, textAlign: "center" }}>
+        {hint}
+      </span>
+      <button
+        onClick={e => { e.stopPropagation(); playCue("nodeSelect"); onAction(); }}
+        className="mt-1 flex items-center gap-1.5 px-4 py-2 transition-all hover:brightness-125"
+        style={{
+          fontFamily: mono, fontSize: 8, letterSpacing: "0.18em", textTransform: "uppercase",
+          borderRadius: 3,
+          background: "hsl(var(--accent-h) 28% 12% / 0.9)",
+          border: "1px solid hsl(var(--accent-h) 35% 28% / 0.8)",
+          color: "hsl(var(--accent-h) 75% 66%)",
+        }}
+      >
+        <Plus className="h-3 w-3" />{actionLabel}
+      </button>
     </div>
   );
 }
@@ -1058,7 +1165,7 @@ function ThreatMarker({
   onPointerDown: (e: React.PointerEvent) => void;
   onSelect: () => void;
 }) {
-  const color = threat.resolved ? "hsl(214 10% 34%)" : PRIORITY_COLOR[threat.priority];
+  const color = threat.resolved ? "hsl(214 10% 34%)" : PRIORITY_COLOR[priorityOf(threat)];
 
   return (
     <div
@@ -1096,7 +1203,7 @@ function ThreatMarker({
             {designation}
           </span>
           <span style={{ fontFamily: mono, fontSize: 6.5, letterSpacing: "0.14em", color: "hsl(214 10% 34%)" }}>
-            {threat.resolved ? "NEUTRALISED" : PRIORITY_LABEL[threat.priority]}
+            {threat.resolved ? "NEUTRALISED" : PRIORITY_LABEL[priorityOf(threat)]}
           </span>
           {linkCount > 0 && (
             <span className="ml-auto flex items-center gap-0.5" style={{ fontFamily: mono, fontSize: 6.5, color: "hsl(214 12% 42%)" }}>
@@ -1198,7 +1305,7 @@ function layoutChain(directives: Directive[]) {
 }
 
 function DirectiveChain({
-  directives, selected, onSelect, designationOf, linkCountOf, progressOf,
+  directives, selected, onSelect, designationOf, linkCountOf, progressOf, onCreate,
 }: {
   directives: Directive[];
   selected: Selection;
@@ -1206,6 +1313,7 @@ function DirectiveChain({
   designationOf: (id: number) => string;
   linkCountOf: (id: number) => number;
   progressOf: (id: number) => Progress;
+  onCreate: () => void;
 }) {
   const [zoom, setZoom] = useState(1);
   const { list, parentOf, width, height } = useMemo(() => layoutChain(directives), [directives]);
@@ -1242,16 +1350,13 @@ function DirectiveChain({
       </div>
 
       {list.length === 0 ? (
-        <div
-          className="flex h-full flex-col items-center justify-center gap-2"
-          style={{ fontFamily: mono, fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase", color: "hsl(214 12% 26%)" }}
-        >
-          <GitBranch className="h-6 w-6" style={{ opacity: 0.35 }} />
-          No objectives set
-          <span style={{ fontSize: 8, letterSpacing: "0.1em", textTransform: "none", fontStyle: "italic" }}>
-            Add one, then break it down — a selected objective becomes the next one&apos;s parent
-          </span>
-        </div>
+        <EmptySurface
+          icon={<GitBranch className="h-6 w-6" />}
+          title="No objectives yet"
+          hint="Add a goal, then break it down — whichever objective is selected becomes the next one's parent, and the tree draws itself from there."
+          actionLabel="Add objective"
+          onAction={onCreate}
+        />
       ) : (
         <div style={{ transform: `scale(${zoom})`, transformOrigin: "top left", width, height, position: "relative" }}>
           <svg className="absolute inset-0 pointer-events-none" width={width} height={height}>
@@ -1308,8 +1413,9 @@ function ObjectiveNode({
   y: number;
   onSelect: () => void;
 }) {
-  const status = STATUS_META[directive.status] ?? STATUS_META.planned;
-  const late = overdue(directive);
+  const kind   = statusOf(directive);
+  const status = STATUS_META[kind];
+  const late   = overdue(directive);
 
   return (
     <button
@@ -1321,7 +1427,7 @@ function ObjectiveNode({
         border: `1px solid ${alpha(late ? "hsl(0 70% 55%)" : status.color, selected ? 0.85 : 0.3)}`,
         borderLeft: `2px solid ${status.color}`,
         boxShadow: selected ? `0 0 20px ${alpha(status.color, 0.2)}` : "none",
-        opacity: directive.status === "shelved" ? 0.55 : 1,
+        opacity: kind === "shelved" ? 0.55 : 1,
       }}
     >
       <div className="flex w-full items-center gap-1.5">
@@ -1335,7 +1441,7 @@ function ObjectiveNode({
               <Link2 className="h-2 w-2" />{linkCount}
             </span>
           )}
-          <PriorityPips value={directive.priority} />
+          <PriorityPips value={priorityOf(directive)} />
         </span>
       </div>
 
@@ -1343,7 +1449,7 @@ function ObjectiveNode({
         className="mt-1.5 w-full truncate"
         style={{
           fontFamily: mono, fontSize: 9.5, color: "hsl(214 14% 80%)",
-          textDecoration: directive.status === "achieved" ? "line-through" : "none",
+          textDecoration: kind === "achieved" ? "line-through" : "none",
         }}
       >
         {directive.title}
@@ -1354,7 +1460,7 @@ function ObjectiveNode({
           value={progress.value}
           width="100%"
           derived={progress.derived}
-          color={directive.status === "achieved" ? "hsl(145 55% 50%)" : status.color}
+          color={kind === "achieved" ? "hsl(145 55% 50%)" : status.color}
         />
         <span style={{ fontFamily: mono, fontSize: 6.5, color: "hsl(214 12% 44%)", flexShrink: 0 }}>
           {progress.value}%
@@ -1530,8 +1636,8 @@ function EntityForm({
   const [confirming, setConfirming] = useState(false);
 
   const accent = threat
-    ? (threat.resolved ? "hsl(214 10% 40%)" : PRIORITY_COLOR[threat.priority])
-    : STATUS_META[directive!.status].color;
+    ? (threat.resolved ? "hsl(214 10% 40%)" : PRIORITY_COLOR[priorityOf(threat)])
+    : STATUS_META[statusOf(directive!)].color;
 
   // Descendants cannot be offered as a parent: the API refuses the cycle
   // anyway, and a select that silently does nothing is worse than one that
@@ -1596,12 +1702,12 @@ function EntityForm({
               className="flex items-center gap-1 px-2 py-1 transition-all"
               style={{
                 fontFamily: mono, fontSize: 7, letterSpacing: "0.16em", borderRadius: 2,
-                background: record.priority === p ? alpha(PRIORITY_COLOR[p], 0.14) : "transparent",
-                border: `1px solid ${record.priority === p ? alpha(PRIORITY_COLOR[p], 0.5) : "hsl(214 10% 16%)"}`,
-                color: record.priority === p ? PRIORITY_COLOR[p] : "hsl(214 10% 38%)",
+                background: priorityOf(record) === p ? alpha(PRIORITY_COLOR[p], 0.14) : "transparent",
+                border: `1px solid ${priorityOf(record) === p ? alpha(PRIORITY_COLOR[p], 0.5) : "hsl(214 10% 16%)"}`,
+                color: priorityOf(record) === p ? PRIORITY_COLOR[p] : "hsl(214 10% 38%)",
               }}
             >
-              <WarnMark color={record.priority === p ? PRIORITY_COLOR[p] : "hsl(214 10% 30%)"} size={9} />
+              <WarnMark color={priorityOf(record) === p ? PRIORITY_COLOR[p] : "hsl(214 10% 30%)"} size={9} />
               {PRIORITY_LABEL[p]}
             </button>
           ))}
@@ -1648,9 +1754,9 @@ function EntityForm({
                   className="px-2 py-1.5 transition-all"
                   style={{
                     fontFamily: mono, fontSize: 7.5, letterSpacing: "0.16em", textTransform: "uppercase", borderRadius: 2,
-                    background: directive.status === status ? alpha(STATUS_META[status].color, 0.14) : "transparent",
-                    border: `1px solid ${directive.status === status ? alpha(STATUS_META[status].color, 0.5) : "hsl(214 10% 16%)"}`,
-                    color: directive.status === status ? STATUS_META[status].color : "hsl(214 10% 38%)",
+                    background: statusOf(directive) === status ? alpha(STATUS_META[status].color, 0.14) : "transparent",
+                    border: `1px solid ${statusOf(directive) === status ? alpha(STATUS_META[status].color, 0.5) : "hsl(214 10% 16%)"}`,
+                    color: statusOf(directive) === status ? STATUS_META[status].color : "hsl(214 10% 38%)",
                   }}
                 >{STATUS_META[status].label}</button>
               ))}

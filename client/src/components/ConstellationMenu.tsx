@@ -28,6 +28,11 @@ import { getRayState, pinRaySource, setRayDirection, setRayColor, setRayBrightne
 import { setAkiraAmbience } from "@/lib/akiraAmbienceState";
 import { applyLayout, isRayFloating } from "@/lib/applyLayout";
 import { playCue, setSoundEnabled, setSoundVolume, setSoundPitch, CUE_NAMES, CUE_LABELS } from "@/lib/sound";
+import { previewAlarm, setAlarmPeakDb, setAlarmVoice, stopAlarmPreview } from "@/lib/wakeAlarm";
+import {
+  ALARM_MAX_DB, ALARM_MIN_DB, ALARM_VOICES, ALARM_VOICE_HINTS, ALARM_VOICE_LABELS,
+  DEFAULT_ALARM_DB, DEFAULT_ALARM_VOICE, type AlarmVoice,
+} from "@shared/sleepClock";
 import ConstellationNode from "./ConstellationNode";
 import ParticleCanvas from "./ParticleCanvas";
 import NodeBranchMenu from "./NodeBranchMenu";
@@ -396,6 +401,7 @@ export default function ConstellationMenu({ onClose }: Props) {
     layout.ray.rayBrightness, layout.ray.rayFloat,
     layout.accentColor, layout.akiraGradientA, layout.akiraGradientB, layout.akiraIntensity,
     layout.soundEnabled, layout.soundVolume, layout.soundPitch,
+    layout.alarmVoice, layout.alarmPeakDb,
   ]);
 
   // Dims
@@ -633,6 +639,27 @@ export default function ConstellationMenu({ onClose }: Props) {
     setLayout(prev => ({ ...prev, soundPitch: v }));
     setSoundPitch(v);
   }, []);
+
+  /**
+   * The wake alarm's two settings.
+   *
+   * Both preview on change, for the reason the colours do: the only way to
+   * judge a siren is to hear it at the setting you just chose, and this one you
+   * will next hear at six in the morning with no chance to adjust it.
+   */
+  const handleAlarmVoice = useCallback((voice: AlarmVoice, db: number) => {
+    setLayout(prev => ({ ...prev, alarmVoice: voice }));
+    setAlarmVoice(voice);
+    previewAlarm(voice, db);
+  }, []);
+
+  const handleAlarmDb = useCallback((db: number) => {
+    setLayout(prev => ({ ...prev, alarmPeakDb: db }));
+    setAlarmPeakDb(db);
+  }, []);
+
+  // Nothing should still be sounding once the editor is gone.
+  useEffect(() => () => stopAlarmPreview(), []);
 
   const handleReset = useCallback(() => {
     resetLayout();
@@ -914,6 +941,8 @@ export default function ConstellationMenu({ onClose }: Props) {
         // The stored value is a multiplier; the slider works in semitones,
         // which is the scale the ear actually hears a transposition on.
         const soundSemitones     = Math.round(12 * Math.log2(soundPitch));
+        const alarmVoice         = (layout.alarmVoice ?? DEFAULT_ALARM_VOICE) as AlarmVoice;
+        const alarmPeakDb        = layout.alarmPeakDb ?? DEFAULT_ALARM_DB;
 
         const ACCENT_PRESETS: { label: string; hsl: string }[] = [
           { label: "Gold", hsl: "43 100% 58%"  },
@@ -1374,6 +1403,109 @@ export default function ConstellationMenu({ onClose }: Props) {
                   >{CUE_LABELS[name]}</button>
                 ))}
               </div>
+
+              {/* Divider */}
+              <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />
+
+              {/* Wake alarm.
+                  Deliberately its own section rather than a row under Sound:
+                  it is not a cue, it does not obey the Sound toggle, and
+                  putting it beside things that do would suggest otherwise.
+
+                  The dB figure is ROME's own scale — 85 is full output, and
+                  every step below it is a true relative decibel. There is no
+                  calibrated path from a gain value to sound pressure at a pair
+                  of ears, so the note under the slider says what the number is
+                  rather than implying a measurement nothing here can make. */}
+              <p style={{
+                fontFamily: "DM Mono, monospace",
+                fontSize: 8,
+                color: "hsl(var(--accent-h) var(--accent-s) var(--accent-l))",
+                letterSpacing: "0.18em",
+                textTransform: "uppercase",
+                margin: "0 0 6px",
+              }}>Wake alarm</p>
+
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+                {ALARM_VOICES.map(voice => {
+                  const active = voice === alarmVoice;
+                  return (
+                    <button
+                      key={voice}
+                      title={ALARM_VOICE_HINTS[voice]}
+                      onClick={() => handleAlarmVoice(voice, alarmPeakDb)}
+                      style={{
+                        fontFamily: "DM Mono, monospace",
+                        fontSize: 7,
+                        letterSpacing: "0.12em",
+                        textTransform: "uppercase",
+                        padding: "3px 7px",
+                        borderRadius: 3,
+                        cursor: "pointer",
+                        color: active ? "hsl(12 75% 70%)" : "hsl(var(--accent-h) 45% 55%)",
+                        background: active ? "hsl(12 60% 50% / 0.16)" : "hsl(222 18% 11% / 0.9)",
+                        border: active ? "1px solid hsl(12 55% 45%)" : "1px solid hsl(var(--accent-h) 20% 20%)",
+                      }}
+                    >{ALARM_VOICE_LABELS[voice]}</button>
+                  );
+                })}
+              </div>
+
+              <p style={{
+                fontFamily: "DM Mono, monospace", fontSize: 7, lineHeight: 1.5,
+                color: "hsl(var(--accent-h) 22% 42%)", margin: "0 0 8px",
+              }}>{ALARM_VOICE_HINTS[alarmVoice]}</p>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 7, color: "hsl(var(--accent-h) 30% 35%)", letterSpacing: "0.14em", textTransform: "uppercase", margin: 0 }}>Peak</p>
+                <p style={{ fontFamily: "DM Mono, monospace", fontSize: 8, color: "hsl(12 70% 66%)", margin: 0 }}>{alarmPeakDb} dB</p>
+              </div>
+              {/* Live while dragging, unlike the cue sliders: this one is being
+                  held *while* the test is playing, and the whole point is to
+                  hear the level change under your hand. */}
+              <input
+                type="range" min={ALARM_MIN_DB} max={ALARM_MAX_DB} step={1}
+                value={alarmPeakDb}
+                onChange={e => handleAlarmDb(Number(e.target.value))}
+                style={{ width: "100%", accentColor: "hsl(12 70% 58%)", cursor: "pointer", marginBottom: 5 }}
+              />
+
+              <div style={{ display: "flex", gap: 4, marginBottom: 5 }}>
+                <button
+                  onClick={() => previewAlarm(alarmVoice, alarmPeakDb)}
+                  style={{
+                    flex: 1,
+                    fontFamily: "DM Mono, monospace", fontSize: 7,
+                    letterSpacing: "0.14em", textTransform: "uppercase",
+                    padding: "4px 6px", borderRadius: 3, cursor: "pointer",
+                    color: "hsl(12 75% 70%)",
+                    background: "hsl(12 60% 50% / 0.16)",
+                    border: "1px solid hsl(12 55% 45%)",
+                  }}
+                >Test</button>
+                <button
+                  onClick={() => stopAlarmPreview()}
+                  style={{
+                    flex: 1,
+                    fontFamily: "DM Mono, monospace", fontSize: 7,
+                    letterSpacing: "0.14em", textTransform: "uppercase",
+                    padding: "4px 6px", borderRadius: 3, cursor: "pointer",
+                    color: "hsl(var(--accent-h) 45% 55%)",
+                    background: "hsl(222 18% 11% / 0.9)",
+                    border: "1px solid hsl(var(--accent-h) 20% 20%)",
+                  }}
+                >Stop</button>
+              </div>
+
+              <p style={{
+                fontFamily: "DM Mono, monospace", fontSize: 7, lineHeight: 1.5,
+                color: "hsl(var(--accent-h) 20% 36%)", margin: 0,
+              }}>
+                85 dB is full output. Steps below it are true relative decibels;
+                what reaches your ears also depends on system volume, so set that
+                first and test at the level you will actually sleep at. The test
+                stops itself after six seconds.
+              </p>
 
               {/* Divider */}
               <div style={{ height: 1, background: "hsl(var(--accent-h) 15% 18%)", margin: "10px 0" }} />

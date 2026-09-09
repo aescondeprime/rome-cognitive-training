@@ -23,6 +23,28 @@ const CHUNK_SAMPLES = 4_000;         // 250ms at 16kHz
 const RING_SECONDS = 3;
 const RING_SAMPLES = TARGET_SAMPLE_RATE * RING_SECONDS;
 
+/**
+ * How long the room keeps ringing after Akira's last scheduled sample.
+ *
+ * Covers the output device's own latency as well as reflection: the moment the
+ * renderer stops scheduling audio is not the moment the microphone stops
+ * hearing it.
+ */
+const ECHO_TAIL_MS = 320;
+/**
+ * The opening of her sentence is the cleanest measurement of the echo we will
+ * ever get — the user cannot yet be reacting to words they have not heard. No
+ * barge-in is recognised inside it; the level is what everything after is
+ * measured against.
+ */
+const ECHO_CALIBRATION_MS = 400;
+/** Sustained speech required before it counts as interrupting rather than noise. */
+const BARGE_IN_MS = 260;
+/** Absolute floor, so a silent room cannot make the threshold meaninglessly small. */
+const BARGE_IN_FLOOR = 0.02;
+/** Handed back when a barge-in fires, so its opening syllables survive. */
+const BARGE_IN_PRE_ROLL_MS = 600;
+
 /** Emitted so the ambience can breathe even before the server reports VAD. */
 export type LevelListener = (rms: number) => void;
 
@@ -37,7 +59,26 @@ export interface AkiraMicOptions {
    * than opening its own — the contention that broke V2's wake word.
    */
   onPcm?: (pcm: Int16Array) => void;
+  /**
+   * Sustained speech heard while Akira herself is audible.
+   *
+   * Barge-in is decided here rather than by the agent's own voice activity
+   * detector, because the server cannot tell her voice from the user's — it
+   * only ever receives one stream — whereas this class knows exactly when she
+   * is playing and how loud she comes back.
+   */
+  onBargeIn?: () => void;
+  /** Whether barge-in is recognised at all. Mirrors the setting of the same name. */
+  bargeInEnabled?: boolean;
   onError?: (error: Error) => void;
+  /**
+   * Injectable clock.
+   *
+   * The echo guard is entirely a statement about time — how long ago she
+   * stopped, how far into her sentence we are — and a test that has to sleep
+   * through those windows in real time is a test nobody runs.
+   */
+  now?: () => number;
 }
 
 const CAPTURE_WORKLET = `
@@ -68,7 +109,32 @@ export class AkiraMic {
   private streaming = false;
   private resampleCursor = 0;
 
-  constructor(private readonly options: AkiraMicOptions) {}
+  /**
+   * Echo guard.
+   *
+   * Akira plays through the speakers this microphone is listening to. Left
+   * ungated, her own voice arrives back as user audio, the agent's turn
+   * detector reads it as someone talking over her, and she cuts herself off
+   * mid-sentence — an interruption with no interrupter.
+   */
+  private selfSpeaking = false;
+  private selfSpeechStartedAt = 0;
+  private selfSpeechEndedAt = 0;
+  /** Loudest the echo of her own voice measured this sentence. */
+  private echoLevel = 0;
+  /** Slow-moving estimate of the quiet room, used when she is not speaking. */
+  private noiseFloor = 0.004;
+  /** Milliseconds of above-threshold audio accumulated during her speech. */
+  private speechMs = 0;
+  private bargeInArmed = true;
+  private bargeInEnabled: boolean;
+
+  private readonly now: () => number;
+
+  constructor(private readonly options: AkiraMicOptions) {
+    this.bargeInEnabled = options.bargeInEnabled ?? true;
+    this.now = options.now ?? (() => Date.now());
+  }
 
   get open(): boolean {
     return Boolean(this.stream);
@@ -76,6 +142,38 @@ export class AkiraMic {
 
   get isStreaming(): boolean {
     return this.streaming;
+  }
+
+  /** True while Akira's own voice could still be reaching the microphone. */
+  get guarded(): boolean {
+    return this.selfSpeaking || this.now() - this.selfSpeechEndedAt < ECHO_TAIL_MS;
+  }
+
+  setBargeInEnabled(enabled: boolean): void {
+    this.bargeInEnabled = enabled;
+  }
+
+  /**
+   * Akira is, or is no longer, audible.
+   *
+   * Driven by the renderer's playback schedule rather than by conversation
+   * state, because the two do not agree: the acknowledgement plays while the
+   * state machine is LISTENING, and a focus warning plays while it is dormant.
+   * What matters is whether sound is coming out of the speakers, and only the
+   * thing scheduling that sound knows.
+   */
+  setSelfSpeaking(active: boolean): void {
+    if (active === this.selfSpeaking) return;
+    this.selfSpeaking = active;
+    if (active) {
+      this.selfSpeechStartedAt = this.now();
+      this.echoLevel = 0;
+      this.speechMs = 0;
+      this.bargeInArmed = true;
+    } else {
+      this.selfSpeechEndedAt = this.now();
+      this.speechMs = 0;
+    }
   }
 
   async start(): Promise<void> {
@@ -136,7 +234,22 @@ export class AkiraMic {
     this.pending = [];
     this.streaming = true;
     if (!flushPreRoll) return;
-    const wanted = Math.min(this.ringFilled, Math.floor((preRollMs / 1_000) * TARGET_SAMPLE_RATE));
+    this.flushPreRoll(preRollMs);
+  }
+
+  /**
+   * Replay recent history upstream, stopping short of anything Akira said.
+   *
+   * The ring keeps recording while she speaks, so a conversation opened moments
+   * after a spoken warning would otherwise begin by uploading the warning — and
+   * she would answer herself before the user had said a word. This is the one
+   * self-hearing path the streaming guard cannot catch, because the audio was
+   * captured before the guard was asked about it.
+   */
+  private flushPreRoll(preRollMs: number): void {
+    const sinceEcho = this.guarded ? 0 : this.now() - this.selfSpeechEndedAt - ECHO_TAIL_MS;
+    const usable = Math.max(0, Math.min(preRollMs, sinceEcho));
+    const wanted = Math.min(this.ringFilled, Math.floor((usable / 1_000) * TARGET_SAMPLE_RATE));
     if (wanted <= 0) return;
     const preRoll = new Int16Array(wanted);
     const start = (this.ringWrite - wanted + RING_SAMPLES) % RING_SAMPLES;
@@ -161,6 +274,10 @@ export class AkiraMic {
     this.sink = null;
     this.ringWrite = 0;
     this.ringFilled = 0;
+    this.selfSpeaking = false;
+    this.selfSpeechEndedAt = 0;
+    this.speechMs = 0;
+    this.echoLevel = 0;
     if (node) {
       node.port.onmessage = null;
       try { node.disconnect(); } catch { /* already disconnected */ }
@@ -206,14 +323,72 @@ export class AkiraMic {
     }
 
     this.writeRing(pcm);
-    this.options.onLevel?.(Math.sqrt(sum / out.length));
-    this.options.onPcm?.(pcm);
+    const rms = Math.sqrt(sum / out.length);
+    this.options.onLevel?.(rms);
+
+    const guarded = this.guarded;
+    if (guarded) {
+      // Her own voice is not a wake word either: without this she can summon
+      // herself by saying her own name.
+      this.watchForBargeIn(rms, (out.length / TARGET_SAMPLE_RATE) * 1_000);
+    } else {
+      this.trackNoiseFloor(rms);
+      this.speechMs = 0;
+      this.options.onPcm?.(pcm);
+    }
 
     if (!this.streaming) return;
-    for (let index = 0; index < pcm.length; index += 1) this.pending.push(pcm[index]);
+    // The stream keeps its cadence while she speaks, carrying silence rather
+    // than stopping. A gap would leave the agent's turn detector guessing;
+    // silence tells it plainly that nobody is talking.
+    // If a barge-in fired on this very frame it has already gone upstream in the
+    // pre-roll, so the frame itself is still muted here rather than sent twice.
+    for (let index = 0; index < pcm.length; index += 1) this.pending.push(guarded ? 0 : pcm[index]);
     while (this.pending.length >= CHUNK_SAMPLES) {
       this.emit(Int16Array.from(this.pending.splice(0, CHUNK_SAMPLES)));
     }
+  }
+
+  /**
+   * Decide whether someone is talking over Akira.
+   *
+   * The threshold is calibrated against her own echo at the start of each
+   * sentence, so it adapts to the thing that actually varies: speaker volume,
+   * the room, and whether headphones are in. On headphones the echo is nil, the
+   * threshold falls to the noise floor, and interrupting stays as easy as it
+   * should be.
+   */
+  private watchForBargeIn(rms: number, frameMs: number): void {
+    if (this.now() - this.selfSpeechStartedAt < ECHO_CALIBRATION_MS) {
+      this.echoLevel = Math.max(this.echoLevel, rms);
+      return;
+    }
+    if (!this.bargeInEnabled || !this.bargeInArmed || !this.options.onBargeIn) return;
+    const threshold = Math.max(this.echoLevel * 2.2, this.noiseFloor * 8, BARGE_IN_FLOOR);
+    // Decays twice as fast as it builds, so a single loud consonant bleeding
+    // through does not accumulate into an interruption across a whole sentence.
+    this.speechMs = rms > threshold ? this.speechMs + frameMs : Math.max(0, this.speechMs - frameMs * 2);
+    if (this.speechMs < BARGE_IN_MS) return;
+
+    this.bargeInArmed = false;
+    this.speechMs = 0;
+    // Drop the guard here rather than waiting for the round trip through the
+    // main process, and hand back the moment they started speaking — losing the
+    // first half-second is the usual price of interrupting, and it need not be.
+    this.selfSpeaking = false;
+    this.selfSpeechEndedAt = 0;
+    if (this.streaming) this.flushPreRoll(BARGE_IN_PRE_ROLL_MS);
+    this.options.onBargeIn();
+  }
+
+  /**
+   * Minimum statistics: fall to a new quiet quickly, climb out of it slowly, so
+   * a passing sentence cannot raise the floor above the next one.
+   */
+  private trackNoiseFloor(rms: number): void {
+    this.noiseFloor = rms < this.noiseFloor
+      ? this.noiseFloor * 0.9 + rms * 0.1
+      : Math.min(this.noiseFloor * 1.0008, 0.05);
   }
 
   private writeRing(pcm: Int16Array): void {
