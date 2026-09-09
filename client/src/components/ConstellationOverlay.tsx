@@ -11,6 +11,7 @@ import { motion } from "framer-motion";
 import ConstellationMenu from "./ConstellationMenu";
 import NanoTransition from "./NanoTransition";
 import { playCue } from "@/lib/sound";
+import { alarmRinging } from "@/lib/wakeAlarm";
 import { setConstellationUi, resetConstellationUi } from "@/lib/constellationUiState";
 
 /**
@@ -134,6 +135,12 @@ export function ConstellationPortal() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Tab" && !e.shiftKey) {
+        // Tab is the one key the user has been told will stop the wake alarm,
+        // so while one is going it cannot also be the key that navigates. This
+        // guard is what actually keeps the map shut: `SleepController` stops
+        // propagation in the capture phase too, but two window-capture
+        // listeners fire in registration order and this one is mounted first.
+        if (alarmRinging()) { e.preventDefault(); return; }
         // Don't steal Tab from focused form inputs
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
@@ -158,7 +165,12 @@ export function ConstellationPortal() {
   // When a remote page has focus its key events never reach this renderer.
   // Electron main intercepts ROME's Tab shortcut and forwards only this toggle.
   useEffect(() => {
-    return window.romeDesktop?.browser.onConstellationToggle(toggleMap);
+    return window.romeDesktop?.browser.onConstellationToggle(() => {
+      // The one path where the key event never reaches this renderer at all,
+      // so the capture-phase guard above cannot help: dismiss from here.
+      if (alarmRinging()) { (window as any).__romeDismissAlarm?.(); return; }
+      toggleMap();
+    });
   }, [toggleMap]);
 
   // Expose openMap so the trigger button inside AppShell can call it, and

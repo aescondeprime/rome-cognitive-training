@@ -26,6 +26,10 @@ import {
 } from "@shared/akira";
 import { queryClient } from "@/lib/queryClient";
 import { getToken } from "@/lib/auth";
+import {
+  cancelSleep, describePeriod, extendSleep, readPeriod, setSleep, sleepStatus, wakeNow,
+  wakeWordSuppressed,
+} from "@/lib/sleepSession";
 import { AkiraMic } from "./AkiraMic";
 import { OpenWakeWord } from "./wake/OpenWakeWord";
 import { loadFinancialState, saveFinancialState } from "@/lib/financialStore";
@@ -129,6 +133,15 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const [transcripts, setTranscripts] = useState<AkiraTranscriptEvent[]>([]);
   const [approval, setApproval] = useState<AkiraApprovalRequest | null>(null);
   const [microphoneArmed, setMicrophoneArmed] = useState(false);
+  /**
+   * Is a sleep period actually running?
+   *
+   * Polled rather than ticked, and held as a boolean rather than as a status,
+   * because this provider wraps the entire app: a value that changed every
+   * second here would re-render everything once a second all night. `setState`
+   * with an unchanged boolean bails out, so this costs two renders per period.
+   */
+  const [sleeping, setSleeping] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [notice, setNotice] = useState<AkiraNotice | null>(null);
   const statusRef = useRef<AkiraStatus | null>(null);
@@ -139,12 +152,36 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   const playbackSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const playbackGenerationRef = useRef(0);
   const continueTimerRef = useRef<number | null>(null);
+  /** Clears the microphone's echo guard when Akira's scheduled audio runs out. */
+  const selfSpeechTimerRef = useRef<number | null>(null);
   const lastVadLevelRef = useRef(0);
   /** Raw microphone RMS, used to tell a bare summons from an instruction. */
   const localLevelRef = useRef(0);
   const noticeTimerRef = useRef<number | null>(null);
 
   useEffect(() => { statusRef.current = status; }, [status]);
+
+  /**
+   * The wake word goes quiet for the length of a sleep period.
+   *
+   * Not by writing the setting off — a period interrupted by a crash or a quit
+   * would leave the wake word disabled with no explanation and nothing to
+   * blame. The setting is untouched; only the detector stops, and it comes back
+   * on its own when the period ends.
+   */
+  useEffect(() => {
+    const read = () => {
+      const profile = queryClient.getQueryData<{ id?: number }>(["/api/active-profile"]);
+      setSleeping(wakeWordSuppressed(sleepStatus(profile?.id)));
+    };
+    read();
+    const id = window.setInterval(read, 15_000);
+    window.addEventListener("rome:sleep:refresh", read);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("rome:sleep:refresh", read);
+    };
+  }, []);
 
   /**
    * Transient, self-clearing feedback. Akira has no persistent interface, so
@@ -160,14 +197,46 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     }, kind === "error" ? 6_000 : 3_200);
   }, []);
 
+  /**
+   * Tell the microphone Akira is audible, and for how long.
+   *
+   * Everything she says reaches the speakers this microphone is listening to:
+   * the acknowledgement, a focus warning, a whole conversational turn. Ungated,
+   * her voice arrives back as user audio and the agent's turn detector reads it
+   * as someone talking over her — so she interrupts herself, mid-sentence, with
+   * nobody in the room having said anything.
+   *
+   * The renderer is the only place that can answer "is she audible right now",
+   * because it is the thing scheduling the audio. Conversation state cannot:
+   * the acknowledgement plays while the machine is LISTENING and a focus
+   * warning plays while it is dormant.
+   */
+  const holdSelfSpeech = useCallback((durationMs: number) => {
+    micRef.current?.setSelfSpeaking(true);
+    if (selfSpeechTimerRef.current) window.clearTimeout(selfSpeechTimerRef.current);
+    selfSpeechTimerRef.current = window.setTimeout(() => {
+      selfSpeechTimerRef.current = null;
+      micRef.current?.setSelfSpeaking(false);
+    }, Math.max(0, durationMs));
+  }, []);
+
+  const releaseSelfSpeech = useCallback(() => {
+    if (selfSpeechTimerRef.current) window.clearTimeout(selfSpeechTimerRef.current);
+    selfSpeechTimerRef.current = null;
+    micRef.current?.setSelfSpeaking(false);
+  }, []);
+
   const cancelPlayback = useCallback(() => {
+    // Queued audio is thrown away, so nothing is coming out of the speakers and
+    // the microphone should stop pretending otherwise.
+    releaseSelfSpeech();
     playbackGenerationRef.current += 1;
     playbackSourcesRef.current.forEach(source => {
       try { source.stop(); } catch { /* already stopped */ }
     });
     playbackSourcesRef.current.clear();
     playbackTimeRef.current = 0;
-  }, []);
+  }, [releaseSelfSpeech]);
 
   /**
    * Playback context, created on demand.
@@ -201,6 +270,11 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
       try {
         const utterance = new SpeechSynthesisUtterance(line);
         utterance.volume = Math.max(0, Math.min(1, statusRef.current?.settings.voice.volume ?? 0.85));
+        // The system voice hands back no schedule, so the guard is held on a
+        // generous estimate and released early by the event when it arrives.
+        utterance.onend = () => releaseSelfSpeech();
+        utterance.onerror = () => releaseSelfSpeech();
+        holdSelfSpeech(Math.max(1_500, line.length * 90));
         window.speechSynthesis.speak(utterance);
       } catch { /* no speech synthesis here; the console line still explains why */ }
       return;
@@ -233,7 +307,11 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     playbackSourcesRef.current.add(source);
     source.onended = () => playbackSourcesRef.current.delete(source);
     source.start(startAt);
-  }, [cancelPlayback, ensurePlaybackContext]);
+    // Chunks queue rather than overlap, so the guard is extended to whichever
+    // sample is scheduled last — not to the arrival of the last chunk, which
+    // happens seconds before she has finished being heard.
+    holdSelfSpeech((playbackTimeRef.current - context.currentTime) * 1_000);
+  }, [cancelPlayback, ensurePlaybackContext, holdSelfSpeech, releaseSelfSpeech]);
 
   /**
    * The always-open microphone.
@@ -263,12 +341,21 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
         document.documentElement.style.setProperty("--akira-vad", level.toFixed(2));
       },
       onPcm: pcm => wakeRef.current?.process(pcm),
+      bargeInEnabled: statusRef.current?.settings.input.bargeInEnabled ?? true,
+      // Sustained speech over Akira, measured against her own echo. The server
+      // cannot make this call — it receives one stream and cannot tell her
+      // voice from anyone else's — so the decision is made here and the turn is
+      // cancelled explicitly.
+      onBargeIn: () => {
+        cancelPlayback();
+        void bridge?.interrupt().then(setStatus).catch(() => undefined);
+      },
       onError: error => showNotice(error.message, "error"),
     });
     micRef.current = mic;
     await mic.start();
     setMicrophoneArmed(true);
-  }, [bridge, showNotice]);
+  }, [bridge, cancelPlayback, showNotice]);
 
   const disarmMicrophone = useCallback(async () => {
     const mic = micRef.current;
@@ -521,6 +608,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const mic = micRef.current;
     if (!mic?.open || !status) return;
+    mic.setBargeInEnabled(status.settings.input.bargeInEnabled);
     const conversing = !["DORMANT", "DEACTIVATING", "UNAVAILABLE", "ERROR"].includes(status.state);
     if (conversing && !mic.isStreaming) mic.beginStreaming(true);
     else if (!conversing && mic.isStreaming) mic.endStreaming();
@@ -538,7 +626,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!bridge || !status) return;
     const settings = status.settings;
-    const wanted = settings.input.wakeWordEnabled && status.available;
+    const wanted = settings.input.wakeWordEnabled && status.available && !sleeping;
 
     if (!wanted) {
       if (wakeRef.current) {
@@ -566,6 +654,12 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
         threshold: settings.input.wakeThreshold,
         onDetected: () => {
           if (statusRef.current?.state !== "DORMANT") return;
+          // Belt and braces with the `wanted` gate above: the detector is torn
+          // down on the poll, and a detection that beat the poll is dropped
+          // here. Being woken by your own bedroom at 3am is not recoverable by
+          // apologising for it afterwards.
+          const profile = queryClient.getQueryData<{ id?: number }>(["/api/active-profile"]);
+          if (wakeWordSuppressed(sleepStatus(profile?.id))) return;
           void activate(true).catch(error => showNotice(
             error instanceof Error ? error.message : String(error),
             "error",
@@ -580,7 +674,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
     })();
 
     return () => { cancelled = true; };
-  }, [activate, armMicrophone, bridge, showNotice, status?.available, status?.settings.input.wakeWordEnabled]);
+  }, [activate, armMicrophone, bridge, showNotice, sleeping, status?.available, status?.settings.input.wakeWordEnabled]);
 
   /**
    * The focus cycle's voice.
@@ -691,6 +785,7 @@ export function AkiraProvider({ children }: { children: ReactNode }) {
   useEffect(() => () => {
     if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
     if (continueTimerRef.current) window.clearTimeout(continueTimerRef.current);
+    if (selfSpeechTimerRef.current) window.clearTimeout(selfSpeechTimerRef.current);
     cancelPlayback();
     void wakeRef.current?.stop();
     void disarmMicrophone();
@@ -741,6 +836,71 @@ function mergeTranscript(values: AkiraTranscriptEvent[], next: AkiraTranscriptEv
  * is the shared one, so a name resolves the same way here as it does for every
  * other capability.
  */
+/**
+ * The sleep period, from Akira's side.
+ *
+ * Thin wrappers over `sleepSession`, for the same reason the focus commands are
+ * thin wrappers: the period lives in the renderer's storage, the main process
+ * cannot read localStorage, and a second copy of the clock is a second answer
+ * to "when am I being woken up?".
+ *
+ * Every result carries a spoken sentence rather than a pair of timestamps,
+ * because every one of these is said back out loud, and 1789432000000 is not.
+ */
+async function runSleepCommand(
+  action: string,
+  args: Record<string, unknown>,
+  profileId: number | undefined,
+): Promise<unknown> {
+  if (action === "sleep.set") {
+    const period = setSleep(profileId, {
+      startTime: typeof args.startTime === "string" ? args.startTime : null,
+      endTime: typeof args.endTime === "string" ? args.endTime : null,
+      durationMinutes: Number.isFinite(Number(args.durationMinutes)) ? Number(args.durationMinutes) : null,
+      label: typeof args.label === "string" ? args.label : null,
+    });
+    return {
+      set: describePeriod(period),
+      started: period.startsAt <= Date.now(),
+      wakeAt: new Date(period.endsAt).toISOString(),
+      note: "The wake word is off for the length of the period, and the alarm only stops when the user presses Tab.",
+    };
+  }
+
+  if (action === "sleep.status") {
+    const period = readPeriod(profileId);
+    return period
+      ? { active: true, summary: describePeriod(period), phase: sleepStatus(profileId).phase }
+      : { active: false, summary: "No sleep period is set." };
+  }
+
+  if (action === "sleep.cancel") {
+    const result = cancelSleep(profileId);
+    if (!result.cancelled) throw new Error("No sleep period is set.");
+    return { cancelled: result.label, summary: `${result.label} is cancelled and off the calendar.` };
+  }
+
+  if (action === "sleep.extend") {
+    const minutes = Math.round(Number(args.minutes) || 0);
+    if (!minutes) throw new Error("Say how many minutes to add.");
+    const period = extendSleep(profileId, Math.max(-720, Math.min(720, minutes)));
+    return { summary: describePeriod(period) };
+  }
+
+  if (action === "sleep.wake") {
+    // Routed through the controller when it is on screen, so that waking by
+    // voice does the same three things as waking by Tab — silence, calendar,
+    // debrief — rather than only the middle one.
+    const dismiss = (window as any).__romeDismissAlarm;
+    if (typeof dismiss === "function") { void dismiss(); return { summary: "Alarm off." }; }
+    const result = wakeNow(profileId);
+    if (!result.woke) throw new Error("No sleep period is set.");
+    return { summary: `${result.label} ended.` };
+  }
+
+  throw new Error(`Unsupported sleep command: ${action}`);
+}
+
 async function runFocusCommand(
   action: string,
   args: Record<string, unknown>,
@@ -887,6 +1047,7 @@ async function runRendererCommand(action: string, args: Record<string, unknown>)
     return { deletedId: id };
   }
   if (action.startsWith("focus.")) return runFocusCommand(action, args, profileId === "default" ? undefined : profileId as number);
+  if (action.startsWith("sleep.")) return runSleepCommand(action, args, profileId === "default" ? undefined : profileId as number);
   if (action === "finance.summary") {
     const state = loadFinancialState(profileId);
     const projection = projectFinancials(state);

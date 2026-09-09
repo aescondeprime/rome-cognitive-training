@@ -15,6 +15,8 @@ import { ConstellationTrigger } from "./ConstellationOverlay";
 import ForgeJobBar from "./ForgeJobBar";
 import RecallStatusBar from "./RecallStatusBar";
 import FocusTimerBar from "./FocusTimerBar";
+import SleepBar from "./SleepBar";
+import SleepController from "./SleepController";
 import DueCardOverlay from "./DueCardOverlay";
 import TopBarNav from "./TopBarNav";
 import PaneHost from "./PaneHost";
@@ -57,6 +59,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {/* A card whose interval has elapsed, over whatever node is open. It
           renders nothing when nothing is due. */}
       <DueCardOverlay />
+      {/* The sleep period's clock, siren and Tab key. Renders nothing unless a
+          period exists, and the alarm outlives whatever page you fell asleep on. */}
+      <SleepController />
       {/* ── Compact utility rail ───────────────────────────────────── */}
       <header
         className="shrink-0 flex items-center gap-4 px-6 py-1.5"
@@ -80,6 +85,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <RecallStatusBar />
           {/* The focus clock. Silent unless a cycle is running. */}
           <FocusTimerBar />
+          {/* The moon. A state and a wake time, deliberately not a countdown. */}
+          <SleepBar />
         </div>
 
         <TopBarNav />
